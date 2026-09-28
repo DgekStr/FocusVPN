@@ -1,0 +1,9 @@
+[Unit]
+Description=Update Russian IP direct-routing set for sing-box gateway
+Wants=network-online.target
+After=network-online.target sing-box-gateway.service
+Requires=sing-box-gateway.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/update-ru-zone.py

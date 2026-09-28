@@ -1,0 +1,12 @@
+[Unit]
+Description=WireGuard to sing-box TPROXY routing
+Wants=network-online.target
+After=network-online.target
+Before=sing-box.service
+PartOf=sing-box.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/sing-box-gateway start
+ExecStop=/usr/local/libexec/sing-box-gateway stop

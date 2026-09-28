@@ -1,0 +1,10 @@
+{
+  "server": "<public-ip-or-domain>",
+  "port": 9445,
+  "sni": "www.cloudflare.com",
+  "public_key": "RdxTFX2k5g5lG_DIu_VPEp7q4ckd-yk734_7XkYQUVY",
+  "short_id": "4c0b8df95143bac5",
+  "uuid": "da5193f6-afe5-4138-9ada-bb6f5ed7bc5e",
+  "link": "vless://<uuid>@<host>:<port>?type=tcp&security=reality&sni=<sni>&pbk=<public-key>&sid=<short-id>&flow=xtls-rprx-vision#FOCUSVPN",
+  "local_link": "vless://<uuid>@<host>:<port>?type=tcp&security=reality&sni=<sni>&pbk=<public-key>&sid=<short-id>&flow=xtls-rprx-vision#FOCUSVPN"
+}

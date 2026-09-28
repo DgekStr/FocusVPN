@@ -1,0 +1,217 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "tproxy",
+      "tag": "wg-vless-tproxy",
+      "listen": "0.0.0.0",
+      "listen_port": 12345
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "auto-1",
+      "server": "<provider-host>",
+      "server_port": 443,
+      "uuid": "<vless-uuid>",
+      "tls": {
+        "enabled": true,
+        "server_name": "<reality-sni>",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<reality-public-key>",
+          "short_id": "<reality-short-id>"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "grpc"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "auto-2",
+      "server": "<provider-host>",
+      "server_port": 443,
+      "uuid": "<vless-uuid>",
+      "tls": {
+        "enabled": true,
+        "server_name": "<reality-sni>",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "edge"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<reality-public-key>",
+          "short_id": "<reality-short-id>"
+        }
+      },
+      "flow": "xtls-rprx-vision"
+    },
+    {
+      "type": "vless",
+      "tag": "auto-3",
+      "server": "<provider-host>",
+      "server_port": 443,
+      "uuid": "<vless-uuid>",
+      "tls": {
+        "enabled": true,
+        "server_name": "<reality-sni>",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<reality-public-key>",
+          "short_id": "<reality-short-id>"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "grpc"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "auto-4",
+      "server": "<provider-host>",
+      "server_port": 443,
+      "uuid": "<vless-uuid>",
+      "tls": {
+        "enabled": true,
+        "server_name": "<reality-sni>",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "edge"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<reality-public-key>",
+          "short_id": "<reality-short-id>"
+        }
+      },
+      "flow": "xtls-rprx-vision"
+    },
+    {
+      "type": "vless",
+      "tag": "auto-5",
+      "server": "<provider-host>",
+      "server_port": 443,
+      "uuid": "<vless-uuid>",
+      "tls": {
+        "enabled": true,
+        "server_name": "<reality-sni>",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<reality-public-key>",
+          "short_id": "<reality-short-id>"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "grpc"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "auto-6",
+      "server": "<provider-host>",
+      "server_port": 443,
+      "uuid": "<vless-uuid>",
+      "tls": {
+        "enabled": true,
+        "server_name": "<reality-sni>",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "ios"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<reality-public-key>",
+          "short_id": "<reality-short-id>"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "grpc"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "auto-7",
+      "server": "<provider-host>",
+      "server_port": 443,
+      "uuid": "<vless-uuid>",
+      "tls": {
+        "enabled": true,
+        "server_name": "<reality-sni>",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "edge"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<reality-public-key>",
+          "short_id": "<reality-short-id>"
+        }
+      },
+      "flow": "xtls-rprx-vision"
+    },
+    {
+      "type": "vless",
+      "tag": "auto-8",
+      "server": "<provider-host>",
+      "server_port": 443,
+      "uuid": "<vless-uuid>",
+      "tls": {
+        "enabled": true,
+        "server_name": "<reality-sni>",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<reality-public-key>",
+          "short_id": "<reality-short-id>"
+        }
+      },
+      "flow": "xtls-rprx-vision"
+    },
+    {
+      "type": "urltest",
+      "tag": "vless-auto",
+      "outbounds": [
+        "auto-1",
+        "auto-2",
+        "auto-3",
+        "auto-4",
+        "auto-5",
+        "auto-6",
+        "auto-7",
+        "auto-8"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "30s",
+      "tolerance": 200,
+      "idle_timeout": "30m"
+    }
+  ],
+  "route": {
+    "final": "auto-4"
+  }
+}

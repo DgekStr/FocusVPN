@@ -1,0 +1,15 @@
+table inet wg_easy_private_ui {
+  chain wg_lan_deny { }
+
+  chain input {
+    type filter hook input priority filter - 10; policy accept;
+    jump wg_lan_deny
+    iifname != "lo" ip daddr 192.168.0.39 tcp dport 51821 counter drop
+    iifname != "lo" ip daddr 192.168.0.39 tcp dport 9443 ip saddr != 10.8.0.0/24 ip saddr != 192.168.0.0/24 ip saddr != 10.1.17.0/24 counter drop
+  }
+
+  chain forward {
+    type filter hook forward priority filter - 10; policy accept;
+    jump wg_lan_deny
+  }
+}

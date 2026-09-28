@@ -1,0 +1,33 @@
+[Unit]
+Description=VPN-only sing-box VLESS administration panel
+Wants=network-online.target
+After=network-online.target sing-box.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+Environment=SING_BOX_ADMIN_HOST=0.0.0.0
+Environment=SING_BOX_ADMIN_PORT=9443
+ExecStart=/usr/bin/python3 /opt/sing-box-admin/app.py
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+ReadWritePaths=/etc/sing-box /etc/sing-box-admin
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+AmbientCapabilities=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+
+[Install]
+WantedBy=multi-user.target

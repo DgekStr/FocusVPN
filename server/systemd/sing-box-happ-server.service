@@ -1,0 +1,15 @@
+[Unit]
+Description=HAPP-compatible VLESS Reality server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=sing-box
+Group=sing-box
+ExecStart=/usr/bin/sing-box -D /var/lib/sing-box-happ-server -C /etc/sing-box-happ-server run
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=infinity
+
+[Install]
+WantedBy=multi-user.target

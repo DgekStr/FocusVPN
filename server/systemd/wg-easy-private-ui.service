@@ -1,0 +1,14 @@
+[Unit]
+Description=Restrict direct wg-easy web UI to localhost
+Wants=network-online.target
+After=network-online.target docker.service
+Before=sing-box-admin.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/wg-easy-private-ui start
+ExecStop=/usr/local/libexec/wg-easy-private-ui stop
+
+[Install]
+WantedBy=multi-user.target

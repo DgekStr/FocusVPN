@@ -1,0 +1,103 @@
+:root {
+  --panel-bg: #050816;
+  --panel-surface: rgba(17, 27, 52, .9);
+  --panel-surface-soft: rgba(11, 18, 38, .86);
+  --panel-text: #f5f7ff;
+  --panel-muted: #8ea0be;
+  --panel-accent: #7c3aed;
+  --panel-accent-2: #22d3ee;
+  --panel-border: rgba(255, 255, 255, .12);
+  --panel-shadow: 0 20px 50px rgba(0, 0, 0, .28);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at 0 0, rgba(34, 211, 238, .16), transparent 26%), radial-gradient(circle at 88% 8%, rgba(124, 58, 237, .17), transparent 30%), var(--panel-bg);
+  color: var(--panel-text);
+  font-family: Inter, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+
+a { color: inherit; }
+
+.standalone-shell {
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.standalone-sidebar {
+  background: rgba(5, 8, 22, .86);
+  border-right: 1px solid var(--panel-border);
+  padding: 26px 18px;
+}
+
+.side-brand {
+  align-items: center;
+  display: flex;
+  gap: 11px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  margin-bottom: 32px;
+  text-decoration: none;
+}
+
+.side-brand img { height: 40px; width: 40px; }
+.side-brand small { color: var(--panel-accent-2); display: block; font-size: 10px; letter-spacing: .12em; margin-top: 3px; }
+
+.standalone-menu { display: grid; gap: 6px; }
+.standalone-menu a { border-left: 3px solid transparent; color: var(--panel-muted); padding: 10px 11px; text-decoration: none; }
+.standalone-menu a:hover, .standalone-menu a.active { background: linear-gradient(90deg, rgba(124, 58, 237, .24), rgba(34, 211, 238, .08)); border-color: var(--panel-accent-2); color: var(--panel-text); }
+.standalone-content { min-width: 0; padding: 32px; }
+.standalone-content main { margin: auto; max-width: 980px; }
+.main { max-width: 1480px; padding: 34px clamp(20px, 4vw, 62px) 52px; width: 100%; }
+.standalone-content > main.main { max-width: 980px; padding: 0; width: auto; }
+
+.panel {
+  background: var(--panel-surface);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+  padding: 24px;
+}
+
+.panel h1, .panel h2 { margin-top: 0; }
+.panel p, .panel small { color: var(--panel-muted); }
+
+.button, a.button, button.button {
+  background: linear-gradient(135deg, var(--panel-accent), var(--panel-accent-2));
+  border: 0;
+  border-radius: 4px;
+  box-shadow: 0 10px 22px rgba(124, 58, 237, .22);
+  color: #fff;
+  cursor: pointer;
+  display: inline-block;
+  font: 700 15px/1.2 Inter, "Segoe UI", sans-serif;
+  margin: 0 8px 8px 0;
+  padding: 12px 16px;
+  text-decoration: none;
+}
+
+.button:hover, a.button:hover, button.button:hover { filter: brightness(1.08); }
+.button.secondary, a.button.secondary, button.button.secondary { background: transparent; border: 1px solid var(--panel-border); box-shadow: none; color: #dce8ff; }
+
+pre { background: rgba(5, 8, 22, .72); border: 1px solid var(--panel-border); overflow-wrap: anywhere; padding: 16px; white-space: pre-wrap; }
+.meta { color: var(--panel-muted); display: flex; flex-wrap: wrap; gap: 16px; }
+
+.qr-modal { align-items: center; background: rgba(5, 8, 22, .86); display: flex; inset: 0; justify-content: center; padding: 20px; position: fixed; z-index: 20; }
+.qr-modal[hidden] { display: none; }
+.qr-dialog { background: #111b34; border: 1px solid rgba(255, 255, 255, .18); box-shadow: 0 24px 80px rgba(0, 0, 0, .7); max-width: 420px; padding: 24px; position: relative; text-align: center; width: 100%; }
+.qr-dialog h2 { margin: 0 0 6px; }
+.qr-dialog p { margin: 0; }
+.qr-image { background: #fff; display: block; height: auto; margin: 20px auto; max-width: 300px; padding: 12px; width: 100%; }
+.qr-close { background: transparent; border: 1px solid var(--panel-border); color: #dce8ff; cursor: pointer; font-size: 20px; line-height: 1; position: absolute; right: 12px; top: 12px; }
+
+@media (max-width: 760px) {
+  .standalone-shell { display: block; }
+  .standalone-sidebar { border-bottom: 1px solid var(--panel-border); border-right: 0; }
+  .standalone-content { padding: 20px 14px; }
+  .panel { padding: 18px; }
+}

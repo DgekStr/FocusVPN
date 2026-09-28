@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+  start)
+    /usr/sbin/nft delete table inet wg_easy_private_ui 2>/dev/null || true
+    /usr/sbin/nft -f /etc/sing-box-admin/wg-easy-private-ui.nft
+    /usr/bin/python3 /usr/local/libexec/load-wg-lan-deny.py
+    ;;
+  stop)
+    /usr/sbin/nft delete table inet wg_easy_private_ui 2>/dev/null || true
+    ;;
+  *)
+    echo "usage: $0 {start|stop}" >&2
+    exit 2
+    ;;
+esac

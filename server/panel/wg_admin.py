@@ -247,15 +247,6 @@ def notice(message, kind):
     return f'<div class="notice {css_class}" role="status">{esc(message)}</div>'
 
 
-def nav(active):
-    vless_class = 'active' if active == 'vless' else ''
-    wireguard_class = 'active' if active == 'wireguard' else ''
-    return f'''<header class="site-header">
-  <a class="brand" href="/"><img src="/favicon.png" alt=""><span>FOCUSLENS.DEV<small>VPN CONTROL</small></span></a>
-    <nav class="nav-links"><a data-panel-nav="vless" class="{vless_class}" href="/">VLESS</a><a data-panel-nav="wireguard" class="{wireguard_class}" href="/wireguard">WireGuard</a></nav>
-</header>'''
-
-
 def page_shell(title, body, active='wireguard'):
     return f'''<!doctype html>
 <html lang="ru">
@@ -291,13 +282,6 @@ a {{ color: inherit; }}
 .standalone-menu a {{ border-left: 3px solid transparent; color: var(--muted); padding: 10px 11px; text-decoration: none; }}
 .standalone-menu a:hover, .standalone-menu a.active {{ background: linear-gradient(90deg, rgba(124,58,237,.24), rgba(34,211,238,.08)); border-color: var(--accent-2); color: var(--text); }}
 .standalone-content {{ min-width: 0; }}
-.site-header {{ align-items: center; backdrop-filter: blur(14px); background: rgba(5,8,22,.86); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; min-height: 76px; padding: 12px clamp(18px,4vw,60px); position: sticky; top: 0; z-index: 10; }}
-.brand {{ align-items: center; display: flex; gap: 11px; font-size: 15px; font-weight: 700; letter-spacing: .05em; text-decoration: none; }}
-.brand img {{ box-shadow: 0 0 0 1px var(--border), 0 12px 24px rgba(0,0,0,.32); height: 40px; object-fit: contain; width: 40px; }}
-.brand small {{ color: var(--accent-2); display: block; font-size: 10px; letter-spacing: .12em; margin-top: 3px; }}
-.nav-links {{ align-items: center; display: flex; gap: 8px; }}
-.nav-links a {{ border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; font-weight: 700; letter-spacing: .05em; padding: 10px 8px 8px; text-decoration: none; }}
-.nav-links a:hover, .nav-links a.active {{ border-color: var(--accent-2); color: var(--text); }}
 .main {{ margin: 0 auto; max-width: 1440px; padding: 32px clamp(18px,4vw,60px) 52px; }}
 .topline {{ align-items: start; border-bottom: 1px solid var(--border); display: flex; gap: 20px; justify-content: space-between; margin-bottom: 26px; padding-bottom: 22px; }}
 .eyebrow {{ color: var(--accent-2); font-size: 11px; font-weight: 800; letter-spacing: .13em; margin: 0 0 7px; text-transform: uppercase; }}
@@ -365,13 +349,12 @@ input:focus, textarea:focus {{ border-color: var(--accent-2); box-shadow: 0 0 0 
 .detail-head {{ align-items: center; display: flex; gap: 10px; justify-content: space-between; margin-bottom: 18px; }}
 @media (max-width: 1100px) {{ .layout {{ grid-template-columns: minmax(0,1fr); }} .status-metrics {{ grid-template-columns: repeat(3, minmax(0,1fr)); }} }}
 @media (max-width: 880px) {{ .topline {{ display: grid; }} }}
-@media (max-width: 560px) {{ .site-header {{ padding: 12px 16px; }} .brand {{ font-size: 12px; }} .brand img {{ height: 34px; width: 34px; }} .main {{ padding: 24px 14px 36px; }} .form-grid {{ grid-template-columns: 1fr; }} .field.full {{ grid-column: auto; }} .actions {{ align-items: stretch; flex-direction: column; }} .button, button {{ text-align: center; width: 100%; }} .inline-actions {{ align-items: stretch; flex-direction: column; }} .status-metrics {{ grid-template-columns: repeat(2, minmax(0,1fr)); }} }}
+@media (max-width: 560px) {{ .main {{ padding: 24px 14px 36px; }} .form-grid {{ grid-template-columns: 1fr; }} .field.full {{ grid-column: auto; }} .actions {{ align-items: stretch; flex-direction: column; }} .button, button {{ text-align: center; width: 100%; }} .inline-actions {{ align-items: stretch; flex-direction: column; }} .status-metrics {{ grid-template-columns: repeat(2, minmax(0,1fr)); }} }}
 @media (max-width: 380px) {{ .status-metrics {{ grid-template-columns: 1fr; }} }}
 </style>
 </head>
 <body>
 <div class="standalone-shell"><aside class="standalone-sidebar"><a class="side-brand" href="/"><img src="/favicon.png" alt=""><span>FOCUSLENS.DEV<small>VPN CONTROL</small></span></a><nav class="standalone-menu"><a data-panel-nav="vless" href="/">VLESS</a><a data-panel-nav="wireguard" href="/wireguard">WireGuard</a><a data-panel-nav="happ-routing" href="/happ-routing">HAPP Direct</a><a data-panel-nav="happ-server" href="/happ-server">HAPP Server</a></nav></aside><div class="standalone-content">
-{nav(active)}
 <main class="main">{body}</main>
 </div></div>
 <script src="/panel.js" defer></script>

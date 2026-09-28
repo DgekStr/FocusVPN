@@ -50,6 +50,11 @@
     if (navigating) return;
     const target = new URL(url, window.location.href);
     if (target.origin !== window.location.origin || !views.has(target.pathname)) return;
+    const current = new URL(window.location.href);
+    if (target.pathname === current.pathname && target.search === current.search && target.hash === current.hash) {
+      updateMenu(target.pathname);
+      return;
+    }
     navigating = true;
     try {
       const response = await fetch(target.href, {

@@ -69,14 +69,3 @@ flowchart LR
 
 Реальные UUID, Reality public/private keys, Basic Auth hash, wg-easy API secret, VLESS-ссылки и SQLite базы намеренно не включены в git. В `server/config/` лежат только шаблоны с placeholders. Перед deploy нужно создать secret-файлы отдельно на сервере.
 
-## Проверка перед публикацией
-
-```powershell
-Set-Location E:\_Project\VPN
-python -m compileall server\panel
-node --check server\panel\static\panel.js
-node --check server\panel\static\happ-actions.js
-git status --short
-```
-
-Публикация: [GitHub FocusVPN](https://github.com/DgekStr/FocusVPN), ветка `master`.

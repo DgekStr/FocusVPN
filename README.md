@@ -8,9 +8,9 @@
 
 - sing-box 1.14.2 установлен на Ubuntu 22.04 LTS.
 - Исходящий VLESS Reality с автоматическим выбором профилей и ручным selector в панели.
-- TPROXY применяется только к клиентам WireGuard из `10.8.0.0/24`.
+- TPROXY применяется только к клиентам WireGuard из `<wireguard-client-network>`.
 - Российские IPv4 из агрегированного `ru.zone` обходят VLESS напрямую через LAN-маршрут.
-- Частные сети и `192.168.0.0/24` остаются direct.
+- Частные сети и `<lan-network>` остаются direct.
 - Добавлен ежедневный updater RU-сетей через systemd timer.
 - WireGuard/wg-easy объединён с VLESS в одной FocusLens-панели и одной Basic Auth.
 - Управление клиентами WireGuard: создание, включение, удаление, `.conf`, QR, live-активность и per-client запрет LAN.
@@ -24,19 +24,19 @@
 
 | Назначение | Адрес |
 |---|---|
-| Админ-панель | `http://192.168.0.39:9443` |
-| WireGuard UI | `http://192.168.0.39:9443/wireguard` |
-| HAPP Direct | `http://192.168.0.39:9443/happ-routing` |
-| HAPP Server | `http://192.168.0.39:9443/happ-server` |
-| HAPP VLESS inbound | `37.208.69.6:9445` |
+| Админ-панель | `http://<gateway-host>:9443` |
+| WireGuard UI | `http://<gateway-host>:9443/wireguard` |
+| HAPP Direct | `http://<gateway-host>:9443/happ-routing` |
+| HAPP Server | `http://<gateway-host>:9443/happ-server` |
+| HAPP VLESS inbound | `<public-ip-or-domain>:9445` |
 
-Панель разрешена из `10.8.0.0/24`, `192.168.0.0/24` и `10.1.17.0/24`. Порт `9445` требует внешнего TCP-проброса на `192.168.0.39:9445`, если сервер находится за NAT.
+Панель разрешена из `<wireguard-client-network>`, `<lan-network>` и `<management-network>`. Порт `9445` требует внешнего TCP-проброса на `<gateway-host>:9445`, если сервер находится за NAT.
 
 ## Архитектура
 
 ```mermaid
 flowchart LR
-    WG[WireGuard clients\n10.8.0.0/24] --> FW[nftables + policy routing]
+    WG[WireGuard clients\n<wireguard-client-network>] --> FW[nftables + policy routing]
     FW --> RU[RU CIDR direct\nLAN gateway]
     FW --> TP[sing-box TPROXY]
     TP --> VLESS[provider VLESS Reality]

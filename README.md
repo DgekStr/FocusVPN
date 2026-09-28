@@ -79,4 +79,4 @@ node --check server\panel\static\happ-actions.js
 git status --short
 ```
 
-Push в GitHub в этой сессии **не выполнялся**.
+Публикация: [GitHub FocusVPN](https://github.com/DgekStr/FocusVPN), ветка `master`.

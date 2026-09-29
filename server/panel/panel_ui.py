@@ -39,7 +39,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)} | FOCUSLENS.DEV</title>
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=13">
+<link rel="stylesheet" href="/panel.css?v=15">
 </head>
 <body>
 <div class="app-shell">
@@ -54,6 +54,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
         <a class="nav-link{wireguard_active}" data-panel-nav="wireguard" href="/wireguard"><span class="nav-dot"></span>WireGuard</a>
         <a class="nav-link{happ_active}" data-panel-nav="happ-server" href="/happ-server"><span class="nav-dot"></span>HAPP Server</a>
         <a class="nav-link{settings_active}" data-panel-nav="settings" href="/settings"><span class="nav-dot"></span>Настройки</a>
+        <a class="nav-link nav-logout" href="/logout"><span class="nav-dot"></span>Выход</a>
       </section>
     </nav>
     <div class="sidebar-foot"><span>Private VPN control</span><small>FocusVPN @focuslens.dev v1.1</small></div>

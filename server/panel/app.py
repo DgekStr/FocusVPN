@@ -16,6 +16,7 @@ import tempfile
 import threading
 import uuid
 from http import HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlsplit, urlunsplit
@@ -62,11 +63,15 @@ ACCESS_NETWORKS = (VPN_NETWORK, LAN_NETWORK, MANAGEMENT_NETWORK)
 HOST = os.environ.get('SING_BOX_ADMIN_HOST', '0.0.0.0')
 PORT = int(os.environ.get('SING_BOX_ADMIN_PORT', '9443'))
 MAX_BODY_SIZE = 65536
+SESSION_COOKIE_NAME = 'focusvpn_session'
+SESSION_TTL_SECONDS = 12 * 60 * 60
 CSRF_TOKEN = secrets.token_urlsafe(32)
 CONFIG_LOCK = threading.Lock()
 HAPP_LOCK = threading.Lock()
 WG_LOCK = threading.Lock()
 SERVICE_CONTROL_LOCK = threading.Lock()
+SESSION_LOCK = threading.Lock()
+SESSIONS = {}
 WG_ADMIN = WgAdmin(WgEasyApi(WG_EASY_SECRET_PATH, os.environ.get('FOCUSVPN_WG_EASY_API_URL', 'http://127.0.0.1:51821')), CSRF_TOKEN)
 HOSTNAME_PATTERN = re.compile(r'(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?\Z')
 PUBLIC_KEY_PATTERN = re.compile(r'[A-Za-z0-9_-]{43}\Z')
@@ -181,6 +186,39 @@ def set_password(password):
     temporary.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
     os.chmod(temporary, 0o600)
     os.replace(temporary, AUTH_PATH)
+    with SESSION_LOCK:
+        SESSIONS.clear()
+
+
+def issue_session(client_ip):
+    now = dt.datetime.now(dt.timezone.utc)
+    token = secrets.token_urlsafe(32)
+    with SESSION_LOCK:
+        expired = [value for value, (expires_at, _) in SESSIONS.items() if expires_at <= now]
+        for value in expired:
+            del SESSIONS[value]
+        SESSIONS[token] = (now + dt.timedelta(seconds=SESSION_TTL_SECONDS), client_ip)
+    return token
+
+
+def valid_session(token, client_ip):
+    if not token:
+        return False
+    now = dt.datetime.now(dt.timezone.utc)
+    with SESSION_LOCK:
+        record = SESSIONS.get(token)
+        if record is None:
+            return False
+        expires_at, expected_client_ip = record
+        if expires_at <= now:
+            del SESSIONS[token]
+            return False
+        return hmac.compare_digest(expected_client_ip, client_ip)
+
+
+def revoke_session(token):
+    with SESSION_LOCK:
+        SESSIONS.pop(token, None)
 
 
 def validate_server(value, label):
@@ -862,8 +900,6 @@ def render_settings_page(config, query, message='', kind='success'):
         <div class="service-control-item"><h3>HAPP Server</h3><p class="service-status">Состояние: <span class="badge {status_class(service_states['happ'])}">{esc(service_states['happ'])}</span></p><form method="post" action="/settings/service/happ"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="inline-actions"><button class="secondary" name="operation" value="start" type="submit">Запустить</button><button class="secondary" name="operation" value="restart" type="submit">Перезапустить</button><button class="danger" name="operation" value="stop" type="submit">Остановить</button></div></form></div>
         <div class="service-control-item"><h3>Сервер</h3><p class="service-status">Перезагрузка отключит панель и сервисы на короткое время.</p><form method="post" action="/settings/system/reboot" autocomplete="off"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="reboot_confirmation">Введите REBOOT для подтверждения</label><input id="reboot_confirmation" name="reboot_confirmation" pattern="REBOOT" required></div><div class="actions"><button class="danger" type="submit">Перезагрузить сервер</button></div></form></div>
     </div></section>
-    <section class="panel"><h2>VLESS</h2><form method="get" action="/settings"><div class="form-grid"><div class="field"><label for="settings_profile">Редактируемый профиль</label><select id="settings_profile" name="profile">{profile_options}</select></div></div><div class="actions"><button class="secondary" type="submit">Открыть профиль</button></div></form>{render_vless_profile_form(config, selected_tag, '/settings/vless', 'Применить VLESS профиль')}</section>
-    <section class="panel"><h2>Исходящий VLESS маршрут</h2><form method="post" action="/settings/vless-route"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="settings_route_final">Маршрут по умолчанию</label><select id="settings_route_final" name="route_final">{''.join(route_options)}</select></div><div class="actions"><button type="submit">Применить маршрут</button></div></form><form method="post" action="/settings/vless-restart"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit">Перезапустить sing-box</button></div></form></section>
     <section class="panel"><h2>WireGuard</h2><div class="settings-grid"><form method="post" action="/settings/wireguard/general"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="general_json">General JSON</label><textarea id="general_json" name="general_json" spellcheck="false">{esc(wg_general)}</textarea></div><div class="actions"><button type="submit">Сохранить General</button></div></form><form method="post" action="/settings/wireguard/interface"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="interface_json">Interface JSON</label><textarea id="interface_json" name="interface_json" spellcheck="false">{esc(wg_interface)}</textarea></div><div class="actions"><button type="submit">Сохранить Interface</button></div></form></div><form method="post" action="/settings/wireguard/restart"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit">Перезапустить интерфейс WireGuard</button></div></form></section>
     <section class="panel"><h2>HAPP Server</h2><div class="settings-grid"><form method="post" action="/settings/happ/state"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_state_json">Public link JSON</label><textarea id="happ_state_json" name="happ_state_json" spellcheck="false">{esc(happ_state)}</textarea></div><div class="actions"><button type="submit">Сохранить Public link</button></div></form><form method="post" action="/settings/happ/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_config_json">sing-box HAPP Server JSON</label><textarea id="happ_config_json" name="happ_config_json" spellcheck="false">{esc(happ_config)}</textarea></div><div class="actions"><button class="danger" type="submit">Проверить и применить HAPP config</button></div></form></div><form method="post" action="/settings/happ/restart"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit">Перезапустить HAPP Server</button></div></form></section>
     <section class="panel"><h2>Доступ к панели</h2><form method="post" action="/settings/password" autocomplete="new-password"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="new_password">Новый пароль</label><input id="new_password" name="new_password" type="password" minlength="12" required></div><div class="field"><label for="confirm_password">Повторите пароль</label><input id="confirm_password" name="confirm_password" type="password" minlength="12" required></div></div><div class="actions"><button class="danger" type="submit">Обновить пароль</button></div></form></section>
@@ -1021,18 +1057,62 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError, OSError, json.JSONDecodeError):
             return False
 
+    def session_token(self):
+        try:
+            cookies = SimpleCookie()
+            cookies.load(self.headers.get('Cookie', ''))
+            morsel = cookies.get(SESSION_COOKIE_NAME)
+            return morsel.value if morsel else ''
+        except CookieError:
+            return ''
+
+    def session_authenticated(self):
+        return valid_session(self.session_token(), self.client_address[0])
+
+    def session_cookie(self, token, max_age):
+        return f'{SESSION_COOKIE_NAME}={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict'
+
+    def send_login_challenge(self):
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_common_headers()
+        self.send_header('WWW-Authenticate', f'Basic realm="{auth_realm()}", charset="UTF-8"')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def login(self):
+        if not self.vpn_client_allowed():
+            self.send_empty(HTTPStatus.FORBIDDEN)
+            return
+        if not self.authenticated():
+            self.send_login_challenge()
+            return
+        FIRST_LOGIN_PATH.unlink(missing_ok=True)
+        token = issue_session(self.client_address[0])
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_common_headers()
+        self.send_header('Set-Cookie', self.session_cookie(token, SESSION_TTL_SECONDS))
+        self.send_header('Location', '/wireguard')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def logout(self):
+        revoke_session(self.session_token())
+        self.send_response(HTTPStatus.OK)
+        self.send_common_headers()
+        self.send_header('Set-Cookie', self.session_cookie('', 0))
+        content = '<!doctype html><meta charset="utf-8"><title>FocusVPN</title><p>Сессия завершена.</p><p><a href="/login">Войти</a></p>'.encode('utf-8')
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
     def require_access(self):
         if not self.vpn_client_allowed():
             self.send_empty(HTTPStatus.FORBIDDEN)
             return False
-        if not self.authenticated():
-            self.send_response(HTTPStatus.UNAUTHORIZED)
-            self.send_common_headers()
-            self.send_header('WWW-Authenticate', f'Basic realm="{auth_realm()}", charset="UTF-8"')
-            self.send_header('Content-Length', '0')
-            self.end_headers()
+        if not self.session_authenticated():
+            self.redirect_to('/login')
             return False
-        FIRST_LOGIN_PATH.unlink(missing_ok=True)
         return True
 
     def parse_form(self):
@@ -1114,6 +1194,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == '/login':
+            self.login()
+            return
+        if parsed.path == '/logout':
+            self.logout()
+            return
         if parsed.path == '/favicon.png':
             self.send_favicon()
             return

@@ -43,7 +43,8 @@ a { color: inherit; }
 .nav-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #52657f; box-shadow: 0 0 0 3px rgba(82, 101, 127, .15); }
 .nav-link.active .nav-dot, .profile-link.active .nav-dot { background: var(--accent-2); box-shadow: 0 0 0 3px rgba(34, 211, 238, .14); }
 .nav-empty { color: var(--muted); font-size: 12px; padding: 8px 11px; }
-.sidebar-foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.sidebar-foot { display: grid; gap: 4px; margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.sidebar-foot small { color: #7084a3; font-size: 10px; }
 
 .app-content { min-width: 0; }
 .main { width: 100%; max-width: 1480px; margin: 0 auto; padding: 34px clamp(20px, 4vw, 62px) 52px; }

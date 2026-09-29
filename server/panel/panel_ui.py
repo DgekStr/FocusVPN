@@ -39,7 +39,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)} | FOCUSLENS.DEV</title>
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=12">
+<link rel="stylesheet" href="/panel.css?v=13">
 </head>
 <body>
 <div class="app-shell">
@@ -56,7 +56,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
         <a class="nav-link{settings_active}" data-panel-nav="settings" href="/settings"><span class="nav-dot"></span>Настройки</a>
       </section>
     </nav>
-    <div class="sidebar-foot">Private VPN control</div>
+    <div class="sidebar-foot"><span>Private VPN control</span><small>FocusVPN @focuslens.dev v1.1</small></div>
   </aside>
   <div class="app-content"><main class="main">{body}</main></div>
 </div>

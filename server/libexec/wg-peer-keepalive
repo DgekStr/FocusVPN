@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+WG_INTERFACE="${FOCUSVPN_WG_INTERFACE:-wg0}"
+KEEPALIVE_SECONDS="${FOCUSVPN_WG_SERVER_KEEPALIVE:-10}"
+WG_BIN="/usr/bin/wg"
+
+case "$WG_INTERFACE" in
+  ''|*[!A-Za-z0-9_.-]*) exit 2 ;;
+esac
+
+case "$KEEPALIVE_SECONDS" in
+  ''|*[!0-9]*) exit 2 ;;
+esac
+
+[ "$KEEPALIVE_SECONDS" -ge 1 ] && [ "$KEEPALIVE_SECONDS" -le 65535 ] || exit 2
+"$WG_BIN" show "$WG_INTERFACE" peers >/dev/null 2>&1 || exit 0
+
+"$WG_BIN" show "$WG_INTERFACE" peers | while IFS= read -r peer; do
+  [ -n "$peer" ] || continue
+  "$WG_BIN" set "$WG_INTERFACE" peer "$peer" persistent-keepalive "$KEEPALIVE_SECONDS"
+done

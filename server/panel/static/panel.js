@@ -171,6 +171,40 @@
     happLiveTimer = window.setInterval(refresh, 1000);
   }
 
+  function closeWireGuardQr() {
+    const modal = document.querySelector('[data-wg-qr-modal]');
+    const image = modal?.querySelector('[data-wg-qr-image]');
+    if (!modal) return;
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    if (image) image.removeAttribute('src');
+    document.body.style.removeProperty('overflow');
+  }
+
+  document.addEventListener('click', (event) => {
+    const opener = event.target.closest('[data-wg-qr-url]');
+    const modal = document.querySelector('[data-wg-qr-modal]');
+    const image = modal?.querySelector('[data-wg-qr-image]');
+    if (opener && modal && image) {
+      image.src = opener.dataset.wgQrUrl;
+      image.alt = `QR-конфигурация WireGuard: ${opener.dataset.wgQrLabel || ''}`;
+      const title = modal.querySelector('[data-wg-qr-title]');
+      const caption = modal.querySelector('[data-wg-qr-caption]');
+      if (title) title.textContent = opener.dataset.wgQrLabel || 'QR WireGuard';
+      if (caption) caption.textContent = 'Отсканируйте код в приложении WireGuard.';
+      modal.hidden = false;
+      modal.setAttribute('aria-hidden', 'false');
+      document.body.style.overflow = 'hidden';
+      modal.querySelector('[data-wg-qr-close]')?.focus();
+      return;
+    }
+    if (event.target.closest('[data-wg-qr-close]') || event.target === modal) closeWireGuardQr();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeWireGuardQr();
+  });
+
   async function navigate(url, pushState) {
     if (navigating) return;
     const target = new URL(url, window.location.href);

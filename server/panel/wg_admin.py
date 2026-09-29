@@ -226,6 +226,10 @@ def keepalive_interval(client):
     return f'{seconds} сек.' if seconds > 0 else '—'
 
 
+def wireguard_qr_modal():
+    return '''<div class="qr-modal" data-wg-qr-modal hidden aria-hidden="true"><div class="qr-dialog" role="dialog" aria-modal="true" aria-labelledby="wg-qr-title"><button class="qr-close" type="button" data-wg-qr-close aria-label="Закрыть">×</button><h2 id="wg-qr-title" data-wg-qr-title>QR WireGuard</h2><p data-wg-qr-caption>Отсканируйте код в приложении WireGuard.</p><img class="qr-image" data-wg-qr-image alt="QR-конфигурация WireGuard"></div></div>'''
+
+
 def load_lan_denies():
     try:
         payload = json.loads(open(LAN_DENY_PATH, encoding='utf-8').read())
@@ -490,7 +494,7 @@ class WgAdmin:
   <td><div class="inline-actions">
     <a class="button secondary" href="/wireguard?client={esc(identifier)}">Настроить</a>
     <a class="button secondary" href="/wireguard/client/{esc(identifier)}/configuration">.conf</a>
-    <a class="button secondary" href="/wireguard/client/{esc(identifier)}/qr">QR</a>
+    <button class="secondary" type="button" data-wg-qr-url="/wireguard/client/{esc(identifier)}/qr" data-wg-qr-label="{esc(client_name(client))}">QR</button>
     <form method="post" action="/wireguard/client/action">{self._csrf()}<input type="hidden" name="client_id" value="{esc(identifier)}"><input type="hidden" name="action" value="{toggle}"><button class="secondary" type="submit">{toggle_text}</button></form>
     <form method="post" action="/wireguard/client/action">{self._csrf()}<input type="hidden" name="client_id" value="{esc(identifier)}"><input type="hidden" name="action" value="{lan_action}"><button class="{lan_class}" type="submit">{lan_label}</button></form>
   </div></td>
@@ -525,7 +529,8 @@ class WgAdmin:
         <form method="post" action="/wireguard/interface"><input type="hidden" name="csrf" value="{esc(self.csrf_token)}"><div class="field"><label for="interface_json">Interface</label><textarea id="interface_json" name="interface_json" spellcheck="false">{esc(json_text(field_subset(interface, INTERFACE_UPDATE_FIELDS)))}</textarea></div><div class="actions"><button type="submit">Сохранить интерфейс</button></div></form>
         <form method="post" action="/wireguard/interface/restart">{self._csrf()}<div class="actions"><button class="secondary" type="submit">Перезапустить интерфейс</button></div></form>
     </section>
-</div>'''
+</div>
+{wireguard_qr_modal()}'''
         return page_shell('WireGuard', body)
 
     def render_client(self, selected_client, message='', kind='success'):
@@ -556,9 +561,10 @@ class WgAdmin:
   <aside class="stack">
     <section class="panel"><h2>Подключение</h2><div class="metrics"><div class="metric"><span>Статус</span><strong>{esc(client_status(client))}</strong></div><div class="metric"><span>Активность</span><strong class="badge {activity_class}">{esc(activity_label)}</strong></div><div class="metric"><span>Последний handshake</span><strong>{esc(activity_age)}</strong></div><div class="metric"><span>Трафик</span><strong>{esc(transfer_summary(client))}</strong></div><div class="metric"><span>Срок</span><strong>{esc(format_date(client.get('expiresAt')))}</strong></div></div><div class="actions"><a class="button secondary" href="/wireguard/client/{esc(identifier)}/configuration">Скачать .conf</a></div></section>
     <section class="panel"><h2>Доступ к LAN</h2><p class="subtitle">Интернет остаётся доступен; ограничивается только сеть 192.168.0.0/24.</p><form method="post" action="/wireguard/client/action">{self._csrf()}<input type="hidden" name="client_id" value="{esc(identifier)}"><input type="hidden" name="action" value="{lan_action}"><div class="actions"><button class="{lan_class}" type="submit">{lan_label}</button></div></form></section>
-    <section class="panel"><h2>QR</h2><img class="qr" src="/wireguard/client/{esc(identifier)}/qr" alt="QR-конфигурация WireGuard"></section>
+        <section class="panel"><h2>QR</h2><div class="actions"><button class="secondary" type="button" data-wg-qr-url="/wireguard/client/{esc(identifier)}/qr" data-wg-qr-label="{esc(client_name(client))}">Показать QR</button></div></section>
   </aside>
-</div>'''
+</div>
+{wireguard_qr_modal()}'''
         return page_shell(client_name(client), body)
 
     @staticmethod

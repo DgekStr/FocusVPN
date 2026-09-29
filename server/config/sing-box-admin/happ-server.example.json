@@ -1,10 +1,9 @@
 {
   "server": "<public-ip-or-domain>",
   "port": 9445,
-  "sni": "www.cloudflare.com",
-  "public_key": "RdxTFX2k5g5lG_DIu_VPEp7q4ckd-yk734_7XkYQUVY",
-  "short_id": "4c0b8df95143bac5",
-  "uuid": "da5193f6-afe5-4138-9ada-bb6f5ed7bc5e",
-  "link": "vless://<uuid>@<host>:<port>?type=tcp&security=reality&sni=<sni>&pbk=<public-key>&sid=<short-id>&flow=xtls-rprx-vision#FOCUSVPN",
-  "local_link": "vless://<uuid>@<host>:<port>?type=tcp&security=reality&sni=<sni>&pbk=<public-key>&sid=<short-id>&flow=xtls-rprx-vision#FOCUSVPN"
+  "sni": "<reality-server-name>",
+  "public_key": "<happ-reality-public-key>",
+  "short_id": "<happ-reality-short-id>",
+  "uuid": "<happ-client-uuid>",
+  "link": "vless://<happ-client-uuid>@<public-ip-or-domain>:9445?type=tcp&security=reality&sni=<reality-server-name>&pbk=<happ-reality-public-key>&sid=<happ-reality-short-id>&flow=xtls-rprx-vision#FOCUSVPN"
 }

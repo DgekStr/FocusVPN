@@ -10,7 +10,7 @@ class WgEasyApiError(RuntimeError):
 
 
 class WgEasyApi:
-    def __init__(self, secret_path, base_url='http://192.168.0.39:51821'):
+    def __init__(self, secret_path, base_url='http://127.0.0.1:51821'):
         self.secret_path = Path(secret_path)
         self.base_url = base_url.rstrip('/')
 

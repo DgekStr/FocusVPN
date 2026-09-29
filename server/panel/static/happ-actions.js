@@ -70,9 +70,8 @@
     const caption = modal?.querySelector('[data-qr-caption]');
     if (opener && modal && image) {
       event.preventDefault();
-      const kind = opener.dataset.qrOpen;
-      const label = kind === 'lan' ? 'LAN-ссылка' : 'Public-ссылка';
-      image.src = `/happ-qr?kind=${encodeURIComponent(kind)}`;
+      const label = 'Public-ссылка';
+      image.src = '/happ-qr';
       image.alt = `QR-код HAPP: ${label}`;
       if (caption) caption.textContent = `Отсканируйте ${label} в приложении HAPP.`;
       modal.hidden = false;

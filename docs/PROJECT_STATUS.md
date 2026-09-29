@@ -12,10 +12,10 @@
 | M4. Server-side split | Done | RU aggregated CIDR direct, LAN/private direct, daily updater |
 | M5. Unified admin | Done | одна FocusLens Basic Auth для VLESS и WireGuard |
 | M6. WireGuard operations | Done | CRUD, config/QR, activity, per-client LAN deny |
-| M7. HAPP Direct | Done | routing deeplink с direct Russian services |
+| M7. HAPP Direct | Retired | удалён из UI; server-side split-routing остаётся источником direct-маршрутизации |
 | M8. HAPP Server | Done | VLESS Reality inbound `9445`, outbound через provider VLESS |
-| M9. UI consistency | Done | SPA shell, shared CSS, CSP, QR modal, responsive WireGuard dashboard |
-| M10. Publication package | Done (local) | код, units, docs и sanitized previews перенесены; remote настроен, push не выполнялся |
+| M9. UI consistency | Done | единый main-page shell, Settings, public-only HAPP QR и responsive WireGuard dashboard |
+| M10. Publication package | Done | код, units, docs и sanitized previews перенесены; repository опубликован, новые UI-изменения ожидают отдельного review/commit |
 
 ## Проверенные runtime-факты
 

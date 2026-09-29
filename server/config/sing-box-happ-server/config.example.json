@@ -1,0 +1,61 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "vless",
+      "tag": "happ-vless-in",
+      "listen": "::",
+      "listen_port": 9445,
+      "users": [
+        {
+          "uuid": "<happ-client-uuid>",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "<reality-server-name>",
+        "reality": {
+          "enabled": true,
+          "handshake": {
+            "server": "www.cloudflare.com",
+            "server_port": 443
+          },
+          "private_key": "<happ-reality-private-key>",
+          "short_id": [
+            "<happ-reality-short-id>"
+          ]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "provider-vless",
+      "server": "<provider-host>",
+      "server_port": 443,
+      "uuid": "<provider-vless-uuid>",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "<provider-reality-sni>",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<provider-reality-public-key>",
+          "short_id": "<provider-reality-short-id>"
+        }
+      }
+    }
+  ],
+  "route": {
+    "final": "provider-vless"
+  }
+}

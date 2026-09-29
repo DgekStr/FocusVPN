@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 import ipaddress
 import json
+import os
 import subprocess
 from pathlib import Path
 
 STATE_PATH = Path('/etc/sing-box-admin/wg-lan-deny.json')
 NFT = '/usr/sbin/nft'
 TABLE = 'wg_easy_private_ui'
+WG_INTERFACE = os.environ.get('FOCUSVPN_WG_INTERFACE', 'wg0')
+LAN_NETWORK = ipaddress.ip_network(os.environ.get('FOCUSVPN_LAN_NETWORK', '192.168.0.0/24'), strict=False)
 
 
 def run(args):
@@ -36,8 +39,8 @@ def main():
     for address in denied_addresses():
         run([
             NFT, 'add', 'rule', 'inet', TABLE, 'wg_lan_deny',
-            'iifname', 'wg0', 'ip', 'saddr', address,
-            'ip', 'daddr', '192.168.0.0/24', 'counter', 'drop',
+            'iifname', WG_INTERFACE, 'ip', 'saddr', address,
+            'ip', 'daddr', str(LAN_NETWORK), 'counter', 'drop',
         ])
     print(f'LAN deny rules loaded: {len(denied_addresses())} clients')
 

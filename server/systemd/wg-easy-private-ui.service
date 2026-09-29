@@ -7,6 +7,7 @@ Before=sing-box-admin.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+EnvironmentFile=-/etc/focusvpn/focusvpn.env
 ExecStart=/usr/local/libexec/wg-easy-private-ui start
 ExecStop=/usr/local/libexec/wg-easy-private-ui stop
 

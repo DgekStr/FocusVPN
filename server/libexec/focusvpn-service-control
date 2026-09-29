@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+import ipaddress
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+CONTROL_PATH = Path('/etc/sing-box-admin/service-control.json')
+DEFAULT_GATEWAY = os.environ.get('FOCUSVPN_WG_FALLBACK_GATEWAY', '192.168.0.6')
+DOCKER = '/usr/bin/docker'
+IP = '/usr/sbin/ip'
+SYSTEMCTL = '/usr/bin/systemctl'
+
+
+def run(args, timeout=90):
+    result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, check=False)
+    if result.returncode:
+        raise SystemExit(result.stdout.strip() or 'service control command failed')
+    return result.stdout
+
+
+def fallback_gateway():
+    if not CONTROL_PATH.is_file():
+        return DEFAULT_GATEWAY
+    try:
+        payload = json.loads(CONTROL_PATH.read_text(encoding='utf-8'))
+        gateway = str(payload['wireguard_fallback_gateway'])
+        address = ipaddress.IPv4Address(gateway)
+    except (KeyError, OSError, ValueError, json.JSONDecodeError) as error:
+        raise SystemExit('invalid WireGuard fallback gateway configuration') from error
+    if address.is_unspecified or address.is_loopback or address.is_multicast:
+        raise SystemExit('invalid WireGuard fallback gateway configuration')
+    return str(address)
+
+
+def route_through_gateway(gateway):
+    try:
+        routes = json.loads(run([IP, '-j', '-4', 'route', 'get', gateway], timeout=20))
+        route = routes[0]
+    except (IndexError, json.JSONDecodeError) as error:
+        raise SystemExit('could not resolve WireGuard fallback gateway route') from error
+    device = route.get('dev')
+    if not device or route.get('gateway'):
+        raise SystemExit('WireGuard fallback gateway must be directly reachable')
+    run([IP, 'route', 'replace', 'default', 'via', gateway, 'dev', device], timeout=20)
+    defaults = json.loads(run([IP, '-j', '-4', 'route', 'show', 'default'], timeout=20))
+    if not any(item.get('gateway') == gateway and item.get('dev') == device for item in defaults):
+        raise SystemExit('failed to apply WireGuard fallback gateway')
+
+
+def wireguard(action):
+    if action == 'stop':
+        route_through_gateway(fallback_gateway())
+        run([DOCKER, 'stop', '--time', '20', 'wg-easy'], timeout=45)
+        return
+    if action == 'start':
+        run([DOCKER, 'start', 'wg-easy'], timeout=45)
+        return
+    if action == 'restart':
+        run([DOCKER, 'restart', '--time', '20', 'wg-easy'], timeout=60)
+        return
+    raise SystemExit('unknown WireGuard action')
+
+
+def main():
+    actions = {'wireguard-start', 'wireguard-restart', 'wireguard-stop', 'reboot'}
+    if len(sys.argv) != 2 or sys.argv[1] not in actions:
+        raise SystemExit('usage: focusvpn-service-control {wireguard-start|wireguard-restart|wireguard-stop|reboot}')
+    action = sys.argv[1]
+    if action == 'reboot':
+        time.sleep(2)
+        run([SYSTEMCTL, 'reboot'], timeout=30)
+        return
+    wireguard(action.removeprefix('wireguard-'))
+
+
+if __name__ == '__main__':
+    main()

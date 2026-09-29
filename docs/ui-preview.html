@@ -27,9 +27,9 @@
   </style>
 </head>
 <body>
-  <div class="standalone-shell">
-    <aside class="standalone-sidebar"><a class="side-brand" href="#"><img src="../server/panel/static/favicon.png" alt=""><span>FOCUSVPN<small>UI PREVIEW</small></span></a><nav class="standalone-menu"><a class="active" href="#wireguard">WireGuard</a><a href="#happ">HAPP Server</a></nav></aside>
-    <div class="standalone-content">
+  <div class="app-shell">
+    <aside class="app-sidebar"><a class="app-brand" href="#"><img src="../server/panel/static/favicon.png" alt=""><span>FOCUSVPN<small>UI PREVIEW</small></span></a><nav class="app-nav"><section class="nav-section nav-vless"><a class="nav-link" href="#vless"><span class="nav-dot"></span>VLESS</a><div class="profile-list"><a class="profile-link active" href="#vless"><span class="nav-dot"></span>auto-1</a><a class="profile-link" href="#vless"><span class="nav-dot"></span>auto-2</a></div></section><section class="nav-section"><a class="nav-link active" href="#wireguard"><span class="nav-dot"></span>WireGuard</a><a class="nav-link" href="#happ"><span class="nav-dot"></span>HAPP Server</a><a class="nav-link" href="#settings"><span class="nav-dot"></span>Настройки</a></section></nav></aside>
+    <div class="app-content">
       <main class="main">
         <section id="wireguard" class="preview-page">
           <section class="topline"><div><p class="eyebrow">Private network</p><h1>WireGuard</h1><p class="subtitle">Клиенты, конфигурации и параметры интерфейса</p></div><div class="status"><span class="status-dot ok"></span>интерфейс: active</div></section>
@@ -42,7 +42,8 @@
           </div>
           <section class="panel" style="margin-top:18px"><div class="detail-head"><h2>Клиенты</h2><span class="badge ok">1 онлайн · 4 включено</span></div><div class="preview-table"><table><thead><tr><th>Клиент</th><th>IPv4</th><th>Статус</th><th>Активность</th><th>Срок</th><th>Действия</th></tr></thead><tbody><tr><td>demo-phone<br><small>IDX 04</small></td><td>10.8.0.4</td><td><span class="badge ok">Включён</span></td><td><span class="badge online">Онлайн</span><br><small>только что</small></td><td>Без срока</td><td><button class="button secondary">Настроить</button> <button class="button secondary">QR</button></td></tr><tr><td>demo-laptop<br><small>IDX 05</small></td><td>10.8.0.5</td><td><span class="badge ok">Включён</span></td><td><span class="badge stale">Был на связи</span><br><small>2 ч. назад</small></td><td>Без срока</td><td><button class="button secondary">Настроить</button> <button class="button secondary">QR</button></td></tr></tbody></table></div></section>
         </section>
-        <section id="happ" class="preview-page"><section class="panel"><p>FOCUSVPN / HAPP SERVER</p><h1>VLESS Reality endpoint</h1><p>Отдельный HAPP-compatible сервер с импортом LAN/Public и QR-модальными окнами.</p><div class="meta"><span>Public: 203.0.113.10:9445</span><span>LAN: 192.168.0.39:9445</span><span>Flow: xtls-rprx-vision</span></div><p><button class="button">Открыть в HAPP (LAN)</button><button class="button secondary">Показать QR LAN</button></p><p><button class="button">Открыть в HAPP (Public)</button><button class="button secondary">Показать QR Public</button></p><pre class="preview-code">happ://add/&lt;sanitized-payload&gt;</pre></section></section>
+        <section id="happ" class="preview-page"><section class="panel"><p>FOCUSVPN / HAPP SERVER</p><h1>Public VLESS Reality endpoint</h1><p>Отдельный HAPP-compatible сервер с публичной VLESS-ссылкой и QR-кодом.</p><div class="meta"><span>Public: &lt;public-ip-or-domain&gt;:9445</span><span>Flow: xtls-rprx-vision</span></div><p><button class="button">Открыть в HAPP</button><button class="button secondary">Показать QR</button></p><pre class="preview-code">vless://&lt;public-link&gt;</pre></section></section>
+        <section id="settings" class="preview-page"><section class="panel"><p>FOCUSVPN / SETTINGS</p><h1>Настройки сервисов</h1><p>VLESS, WireGuard, HAPP Server и доступ к панели в общем main-page shell.</p><div class="settings-grid"><div class="panel"><h2>VLESS</h2><button class="button">Применить профиль</button></div><div class="panel"><h2>HAPP Server</h2><button class="button secondary">Проверить config</button></div></div></section></section>
       </main>
     </div>
   </div>

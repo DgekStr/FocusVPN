@@ -9,8 +9,9 @@
 - [x] Добавить RU direct routing и автообновление CIDR.
 - [x] Объединить VLESS и WireGuard в одной панели.
 - [x] Добавить live WireGuard activity и per-client LAN policy.
-- [x] Добавить HAPP Direct и HAPP Server.
-- [x] Выдержать единый shell, CSS, SPA-навигацию и QR flows.
+- [x] Добавить HAPP Server с public VLESS/QR.
+- [x] Убрать HAPP Direct из UI; direct-маршрутизация остаётся server-side.
+- [x] Выдержать единый shell главной страницы, CSS, SPA-навигацию, Settings и QR flows.
 - [x] Подготовить публикационный пакет без секретов.
 
 ## Следующие вехи

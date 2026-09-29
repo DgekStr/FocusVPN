@@ -1,7 +1,8 @@
 (() => {
-  const views = new Set(['/', '/wireguard', '/happ-routing', '/happ-server']);
+  const views = new Set(['/', '/vless', '/wireguard', '/happ-server', '/settings']);
   let navigating = false;
-  const routeStyleCache = new Map();
+  let wireGuardLiveTimer = null;
+  let wireGuardLiveLoading = false;
 
   function isViewLink(anchor) {
     if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download')) {
@@ -11,39 +12,66 @@
     return url.origin === window.location.origin && views.has(url.pathname);
   }
 
-  function setRouteStyles(documentFragment, path) {
-    const existing = document.getElementById('panel-route-style');
-    if (path === '/') {
-      existing?.remove();
-      return;
-    }
-    let styles = routeStyleCache.get(path);
-    if (styles === undefined) {
-      styles = Array.from(documentFragment.head.querySelectorAll('style'))
-        .map((style) => style.textContent || '')
-        .join('\n');
-      routeStyleCache.set(path, styles);
-    }
-    if (!styles) {
-      existing?.remove();
-      return;
-    }
-    if (existing?.dataset.routePath === path) return;
-    const routeStyle = existing || document.createElement('style');
-    routeStyle.id = 'panel-route-style';
-    routeStyle.dataset.routePath = path;
-    routeStyle.textContent = styles;
-    if (!existing) {
-      document.head.appendChild(routeStyle);
-    }
-  }
-
   function updateMenu(pathname) {
     document.querySelectorAll('[data-panel-nav]').forEach((link) => {
-      const active = link.dataset.panelNav === 'vless' ? pathname === '/' : pathname.startsWith(`/${link.dataset.panelNav}`);
+      const active = link.dataset.panelNav === 'vless'
+        ? pathname === '/' || pathname.startsWith('/vless')
+        : pathname.startsWith(`/${link.dataset.panelNav}`);
       link.classList.toggle('active', active);
       link.setAttribute('aria-current', active ? 'page' : 'false');
     });
+  }
+
+  function renderWireGuardLive(payload) {
+    const download = document.querySelector('[data-wg-download]');
+    const upload = document.querySelector('[data-wg-upload]');
+    const onlineCount = document.querySelector('[data-wg-online-count]');
+    if (download && upload && typeof payload.download_mb === 'string' && typeof payload.upload_mb === 'string') {
+      download.textContent = payload.download_mb;
+      upload.textContent = payload.upload_mb;
+    }
+    if (onlineCount && Number.isInteger(payload.online_count)) {
+      onlineCount.textContent = String(payload.online_count);
+    }
+    const clientStates = new Map((Array.isArray(payload.clients) ? payload.clients : []).map((client) => [String(client.id), client]));
+    document.querySelectorAll('[data-wg-client-id]').forEach((row) => {
+      const client = clientStates.get(row.dataset.wgClientId);
+      if (!client || !['online', 'stale', 'never'].includes(client.state)) return;
+      const badge = row.querySelector('[data-wg-activity-badge]');
+      const age = row.querySelector('[data-wg-activity-age]');
+      if (badge) {
+        badge.className = `badge ${client.state}`;
+        badge.textContent = client.label || '';
+      }
+      if (age) age.textContent = client.age || '';
+    });
+  }
+
+  function syncWireGuardLive() {
+    if (wireGuardLiveTimer) {
+      window.clearInterval(wireGuardLiveTimer);
+      wireGuardLiveTimer = null;
+    }
+    if (!document.querySelector('[data-wg-live]')) return;
+    const refresh = async () => {
+      if (wireGuardLiveLoading || document.hidden) return;
+      wireGuardLiveLoading = true;
+      try {
+        const response = await fetch('/wireguard/live', { credentials: 'same-origin', cache: 'no-store' });
+        if (response.status === 401) {
+          window.location.reload();
+          return;
+        }
+        if (!response.ok) return;
+        renderWireGuardLive(await response.json());
+      } catch (_) {
+        // The next polling interval retries transient wg-easy failures.
+      } finally {
+        wireGuardLiveLoading = false;
+      }
+    };
+    refresh();
+    wireGuardLiveTimer = window.setInterval(refresh, 1000);
   }
 
   async function navigate(url, pushState) {
@@ -74,10 +102,10 @@
         window.location.href = target.href;
         return;
       }
-      setRouteStyles(nextDocument, target.pathname);
       currentMain.replaceWith(nextMain);
       document.title = nextDocument.title;
       updateMenu(target.pathname);
+      syncWireGuardLive();
       if (pushState) window.history.pushState({}, '', target.href);
       window.scrollTo({ top: 0, behavior: 'instant' });
     } catch (error) {
@@ -97,4 +125,5 @@
 
   window.addEventListener('popstate', () => navigate(window.location.href, false));
   updateMenu(window.location.pathname);
+  syncWireGuardLive();
 })();

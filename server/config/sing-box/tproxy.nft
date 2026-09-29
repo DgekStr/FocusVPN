@@ -6,7 +6,6 @@ table inet singbox_vless {
 
   chain prerouting {
     type filter hook prerouting priority mangle; policy accept;
-    iifname "wg0" ip saddr 10.8.0.0/24 ip daddr @ru_direct counter accept
     iifname "wg0" ip saddr 10.8.0.0/24 ip daddr != { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 255.255.255.255 } meta l4proto { tcp, udp } meta mark set 0x1 tproxy ip to :12345 accept
   }
 }

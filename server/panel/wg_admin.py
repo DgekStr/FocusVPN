@@ -29,7 +29,7 @@ INTERFACE_UPDATE_FIELDS = (
 GENERAL_UPDATE_FIELDS = (
     'sessionTimeout', 'metricsPrometheus', 'metricsJson', 'metricsPassword',
 )
-ACTIVE_HANDSHAKE_SECONDS = 180
+ACTIVE_HANDSHAKE_SECONDS = 60
 LAN_DENY_PATH = '/etc/sing-box-admin/wg-lan-deny.json'
 WAN_IP_FALLBACK = '37.208.69.6'
 _wan_ip_cache = ('', 0.0)
@@ -65,6 +65,22 @@ def client_status(client):
 
 def client_address(client):
     return client.get('ipv4Address') or client.get('address') or '—'
+
+
+def client_wan_ip(client):
+    endpoint = str(client.get('endpoint') or '').strip()
+    if not endpoint:
+        return '—'
+    if endpoint.startswith('['):
+        host = endpoint[1:].partition(']')[0]
+    else:
+        host, separator, _ = endpoint.rpartition(':')
+        if not separator:
+            host = endpoint
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return '—'
 
 
 def format_date(value):
@@ -200,6 +216,14 @@ def activity(client):
 
 def transfer_summary(client):
     return f'RX {format_bytes(client.get("transferRx"))} · TX {format_bytes(client.get("transferTx"))}'
+
+
+def keepalive_interval(client):
+    try:
+        seconds = int(client.get('persistentKeepalive') or 0)
+    except (TypeError, ValueError):
+        seconds = 0
+    return f'{seconds} сек.' if seconds > 0 else '—'
 
 
 def load_lan_denies():
@@ -394,6 +418,7 @@ class WgAdmin:
         clients = self.api.clients()
         download_bytes, upload_bytes = total_transfer(clients)
         client_states = []
+        connections = []
         for client in clients:
             state, label, age = activity(client)
             client_states.append({
@@ -402,11 +427,23 @@ class WgAdmin:
                 'label': label,
                 'age': age,
             })
+            if state == 'online':
+                connections.append({
+                    'id': str(client_id(client)),
+                    'name': client_name(client),
+                    'ip': client_address(client),
+                    'wan_ip': client_wan_ip(client),
+                    'handshake': age,
+                    'download': format_bytes(client.get('transferRx')),
+                    'upload': format_bytes(client.get('transferTx')),
+                    'keepalive': keepalive_interval(client),
+                })
         return {
             'download_mb': format_megabytes(download_bytes),
             'upload_mb': format_megabytes(upload_bytes),
             'online_count': sum(1 for item in client_states if item['state'] == 'online'),
             'clients': client_states,
+            'connections': connections,
         }
 
     def render_dashboard(self, message='', kind='success'):
@@ -423,6 +460,7 @@ class WgAdmin:
         interface_state = 'active' if interface.get('enabled') else 'inactive'
         lan_denies = load_lan_denies()
         rows = []
+        live_rows = []
         for client in clients:
             identifier = client_id(client)
             state_class = 'ok' if client.get('enabled') else ''
@@ -434,6 +472,15 @@ class WgAdmin:
             lan_action = 'allow-lan' if lan_denied else 'deny-lan'
             lan_label = 'Разрешить LAN' if lan_denied else 'Запретить LAN'
             lan_class = 'secondary' if lan_denied else 'danger'
+            if activity_class == 'online':
+                live_rows.append(f'''<tr>
+    <td><div class="client-name">{esc(client_name(client))}<small>ID {esc(identifier)}</small></div></td>
+    <td>{esc(address)}</td>
+    <td>{esc(client_wan_ip(client))}</td>
+    <td>{esc(activity_age)}</td>
+    <td>{esc(format_bytes(client.get('transferRx')))} / {esc(format_bytes(client.get('transferTx')))}</td>
+    <td>{esc(keepalive_interval(client))}</td>
+</tr>''')
             rows.append(f'''<tr data-wg-client-id="{esc(identifier)}">
   <td><div class="client-name">{esc(client_name(client))}<small>ID {esc(identifier)}</small></div></td>
   <td>{esc(client_address(client))}</td>
@@ -449,6 +496,7 @@ class WgAdmin:
   </div></td>
 </tr>''')
         client_rows = ''.join(rows) or '<tr><td colspan="6" class="empty">Клиенты пока не созданы.</td></tr>'
+        live_client_rows = ''.join(live_rows) or '<tr><td colspan="6" class="empty">Нет активных подключений.</td></tr>'
         body = f'''<section class="topline">
   <div><p class="eyebrow">Private network</p><h1>WireGuard</h1><p class="subtitle">Клиенты, конфигурации и параметры интерфейса</p></div>
   <div class="status"><span class="status-dot {'ok' if interface_state == 'active' else ''}"></span>интерфейс: {esc(interface_state)}</div>
@@ -457,8 +505,12 @@ class WgAdmin:
 <div class="stack wireguard-dashboard" data-wg-live>
     <section class="status-metrics" aria-label="Состояние WireGuard"><div class="status-card cyan"><span>Онлайн</span><strong data-wg-online-count>{online_count}</strong><small>WireGuard</small></div><div class="status-card violet"><span>Всего</span><strong>{len(clients)}</strong><small>WireGuard</small></div><div class="status-card teal"><span>DL / UL</span><strong data-wg-transfer><span class="wg-transfer-download" data-wg-download>{download_mb}</span><span> / </span><span data-wg-upload>{upload_mb}</span><span> Мб</span></strong><small>скачано / отправлено</small></div><div class="status-card orange"><span>WAN IP</span><strong>{esc(wan_ip)}</strong><small>внешний адрес</small></div><div class="status-card pink"><span>Сервис онлайн</span><strong>{esc(uptime)}</strong><small>wg-easy</small></div></section>
     <section class="panel">
-        <div class="detail-head"><h2>Клиенты</h2><span class="badge ok">{online_count} онлайн · {active_count} включено</span></div>
-        <div class="table-wrap"><table><thead><tr><th>Клиент</th><th>IPv4</th><th>Статус</th><th>Активность</th><th>Срок</th><th>Действия</th></tr></thead><tbody>{client_rows}</tbody></table></div>
+        <div class="detail-head"><h2>Клиенты</h2><span class="badge {'online' if online_count else ''}" data-wg-dashboard-online data-wg-enabled-count="{active_count}">{online_count} онлайн · {active_count} включено</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Клиент</th><th>IPv4</th><th>Профиль</th><th>Активность</th><th>Срок</th><th>Действия</th></tr></thead><tbody>{client_rows}</tbody></table></div>
+    </section>
+    <section class="panel" data-wg-live-connections>
+        <div class="detail-head"><div><h2>Подключения WireGuard</h2><p class="subtitle">Живые данные wg-easy по последнему handshake.</p></div><span class="badge online" data-wg-online-summary>{online_count} онлайн</span></div>
+        <div class="table-wrap"><table class="wg-live-connections"><thead><tr><th>Клиент</th><th>VPN IP</th><th>WAN IP</th><th>Handshake</th><th>DL / UL</th><th>Keepalive</th></tr></thead><tbody data-wg-connections>{live_client_rows}</tbody></table></div>
     </section>
     <section class="panel">
         <h2>Новый клиент</h2>

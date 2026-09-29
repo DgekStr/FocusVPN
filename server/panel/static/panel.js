@@ -3,6 +3,8 @@
   let navigating = false;
   let wireGuardLiveTimer = null;
   let wireGuardLiveLoading = false;
+  let happLiveTimer = null;
+  let happLiveLoading = false;
 
   function isViewLink(anchor) {
     if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download')) {
@@ -23,6 +25,7 @@
   }
 
   function renderWireGuardLive(payload) {
+    const online = Number.isInteger(payload.online_count) ? payload.online_count : 0;
     const download = document.querySelector('[data-wg-download]');
     const upload = document.querySelector('[data-wg-upload]');
     const onlineCount = document.querySelector('[data-wg-online-count]');
@@ -30,8 +33,8 @@
       download.textContent = payload.download_mb;
       upload.textContent = payload.upload_mb;
     }
-    if (onlineCount && Number.isInteger(payload.online_count)) {
-      onlineCount.textContent = String(payload.online_count);
+    if (onlineCount) {
+      onlineCount.textContent = String(online);
     }
     const clientStates = new Map((Array.isArray(payload.clients) ? payload.clients : []).map((client) => [String(client.id), client]));
     document.querySelectorAll('[data-wg-client-id]').forEach((row) => {
@@ -44,6 +47,34 @@
         badge.textContent = client.label || '';
       }
       if (age) age.textContent = client.age || '';
+    });
+    const dashboardOnline = document.querySelector('[data-wg-dashboard-online]');
+    if (dashboardOnline) {
+      dashboardOnline.className = `badge${online ? ' online' : ''}`;
+      dashboardOnline.textContent = `${online} онлайн · ${dashboardOnline.dataset.wgEnabledCount || 0} включено`;
+    }
+    const onlineSummary = document.querySelector('[data-wg-online-summary]');
+    if (onlineSummary) onlineSummary.textContent = `${online} онлайн`;
+    const body = document.querySelector('[data-wg-connections]');
+    if (!body) return;
+    body.replaceChildren();
+    const connections = Array.isArray(payload.connections) ? payload.connections : [];
+    if (!connections.length) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 6;
+      cell.className = 'empty';
+      cell.textContent = 'Нет активных подключений.';
+      row.append(cell);
+      body.append(row);
+      return;
+    }
+    connections.forEach((connection) => {
+      const row = document.createElement('tr');
+      const name = happCell(connection.name);
+      name.className = 'client-name';
+      row.append(name, happCell(connection.ip), happCell(connection.wan_ip), happCell(connection.handshake), happCell(`${connection.download || '0 B'} / ${connection.upload || '0 B'}`), happCell(connection.keepalive));
+      body.append(row);
     });
   }
 
@@ -72,6 +103,72 @@
     };
     refresh();
     wireGuardLiveTimer = window.setInterval(refresh, 1000);
+  }
+
+  function happCell(value) {
+    const cell = document.createElement('td');
+    cell.textContent = value || '—';
+    return cell;
+  }
+
+  function renderHappLive(payload) {
+    const online = Number.isInteger(payload.online_count) ? payload.online_count : 0;
+    const count = document.querySelector('[data-happ-online-count]');
+    const onlineMetric = document.querySelector('[data-happ-online]');
+    const download = document.querySelector('[data-happ-download]');
+    const upload = document.querySelector('[data-happ-upload]');
+    if (count) count.textContent = `${online} онлайн`;
+    if (onlineMetric) onlineMetric.textContent = String(online);
+    if (download) download.textContent = payload.download || '0 B';
+    if (upload) upload.textContent = payload.upload || '0 B';
+    const body = document.querySelector('[data-happ-connections]');
+    if (!body) return;
+    body.replaceChildren();
+    const connections = Array.isArray(payload.connections) ? payload.connections : [];
+    if (!connections.length) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 5;
+      cell.className = 'empty';
+      cell.textContent = 'Нет активных подключений.';
+      row.append(cell);
+      body.append(row);
+      return;
+    }
+    connections.forEach((connection) => {
+      const row = document.createElement('tr');
+      const ip = happCell(connection.ip);
+      ip.className = 'client-name';
+      row.append(ip, happCell(connection.duration), happCell(`${connection.download || '0 B'} / ${connection.upload || '0 B'}`), happCell(connection.network), happCell(connection.destination));
+      body.append(row);
+    });
+  }
+
+  function syncHappLive() {
+    if (happLiveTimer) {
+      window.clearInterval(happLiveTimer);
+      happLiveTimer = null;
+    }
+    if (!document.querySelector('[data-happ-live]')) return;
+    const refresh = async () => {
+      if (happLiveLoading || document.hidden) return;
+      happLiveLoading = true;
+      try {
+        const response = await fetch('/happ-server/live', { credentials: 'same-origin', cache: 'no-store' });
+        if (response.status === 401) {
+          window.location.reload();
+          return;
+        }
+        if (!response.ok) return;
+        renderHappLive(await response.json());
+      } catch (_) {
+        // The next polling interval retries temporary sing-box API failures.
+      } finally {
+        happLiveLoading = false;
+      }
+    };
+    refresh();
+    happLiveTimer = window.setInterval(refresh, 1000);
   }
 
   async function navigate(url, pushState) {
@@ -106,6 +203,7 @@
       document.title = nextDocument.title;
       updateMenu(target.pathname);
       syncWireGuardLive();
+      syncHappLive();
       if (pushState) window.history.pushState({}, '', target.href);
       window.scrollTo({ top: 0, behavior: 'instant' });
     } catch (error) {
@@ -126,4 +224,5 @@
   window.addEventListener('popstate', () => navigate(window.location.href, false));
   updateMenu(window.location.pathname);
   syncWireGuardLive();
+  syncHappLive();
 })();

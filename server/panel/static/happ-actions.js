@@ -71,7 +71,7 @@
     if (opener && modal && image) {
       event.preventDefault();
       const label = 'Public-ссылка';
-      image.src = '/happ-qr';
+      image.src = '/happ-qr?v=2';
       image.alt = `QR-код HAPP: ${label}`;
       if (caption) caption.textContent = `Отсканируйте ${label} в приложении HAPP.`;
       modal.hidden = false;

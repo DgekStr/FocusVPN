@@ -126,6 +126,9 @@ th:last-child, td:last-child { padding-right: 0; }
 .qr { width: 100%; max-width: 260px; padding: 12px; background: #fff; }
 
 .status-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.happ-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 18px 0; }
+.happ-connections { min-width: 840px; }
+.wg-live-connections { min-width: 960px; }
 .status-card { min-width: 0; padding: 16px; border: 1px solid var(--line); box-shadow: var(--shadow); }
 .status-card.cyan { background: linear-gradient(145deg, rgba(34, 211, 238, .22), rgba(17, 27, 52, .9)); border-color: rgba(34, 211, 238, .42); }
 .status-card.violet { background: linear-gradient(145deg, rgba(124, 58, 237, .25), rgba(17, 27, 52, .9)); border-color: rgba(124, 58, 237, .45); }

@@ -24,8 +24,9 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlspl
 from wg_admin import WgAdmin
 from wg_easy_api import WgEasyApi, WgEasyApiError
 from happ_server import load_state as load_happ_state
-from happ_server import public_happ_link
+from happ_server import public_vless_link
 from happ_server_ui import page as happ_server_page
+from happ_stats import HappStatsError, live_connections as happ_live_connections
 from panel_ui import render_shell
 
 APP_DIR = Path('/etc/sing-box-admin')
@@ -1017,7 +1018,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_happ_qr(self):
         try:
-            link = public_happ_link()
+            link = public_vless_link()
         except (OSError, ValueError, json.JSONDecodeError):
             self.send_empty(HTTPStatus.NOT_FOUND)
             return
@@ -1222,6 +1223,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.OK, WG_ADMIN.live_state())
             except WgEasyApiError:
                 self.send_json(HTTPStatus.BAD_GATEWAY, {'error': 'WireGuard временно недоступен.'})
+            return
+        if parsed.path == '/happ-server/live':
+            try:
+                self.send_json(HTTPStatus.OK, happ_live_connections())
+            except HappStatsError as error:
+                self.send_json(HTTPStatus.BAD_GATEWAY, {'error': str(error)})
             return
         if parsed.path.startswith('/wireguard/client/'):
             self.serve_wireguard_file(parsed.path)

@@ -57,5 +57,10 @@
   ],
   "route": {
     "final": "provider-vless"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090"
+    }
   }
 }

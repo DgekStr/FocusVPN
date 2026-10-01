@@ -1,0 +1,15 @@
+[Unit]
+Description=Restore FocusVPN gateway mode
+Wants=network-online.target sing-box.service
+After=network-online.target sing-box.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+EnvironmentFile=-/etc/focusvpn/focusvpn.env
+ExecStart=/usr/bin/python3 /usr/local/libexec/focusvpn-gateway-mode restore
+
+[Install]
+WantedBy=multi-user.target

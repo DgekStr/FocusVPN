@@ -24,7 +24,7 @@ RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
-ReadWritePaths=/etc/sing-box /etc/sing-box-admin /etc/sing-box-happ-server
+ReadWritePaths=/etc/focusvpn /etc/sing-box /etc/sing-box-admin /etc/sing-box-happ-server /etc/wireguard
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
 AmbientCapabilities=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
 

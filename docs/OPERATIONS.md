@@ -7,6 +7,8 @@
 /etc/sing-box/config.json
 /etc/sing-box-happ-server/config.json
 /etc/sing-box-admin/
+/etc/wireguard/wg-client.conf
+/etc/focusvpn/gateway-mode.json
 /usr/local/libexec/
 /etc/systemd/system/
 ```
@@ -42,7 +44,9 @@ systemd-analyze verify /etc/systemd/system/sing-box-admin.service
 
 ## Firewall deployment
 
-The libexec scripts are paired with units in `server/systemd/`. Apply nft rules only after `nft --check`; keep the current ruleset backup for rollback.
+The libexec scripts are paired with units in `server/systemd/`. `focusvpn-gateway-mode@.service` switches between VLESS/TProxy and the external `wg-client` interface. Routes are source-policy scoped to `FOCUSVPN_WG_NETWORK`; `FOCUSVPN_LAN_NETWORK` uses the main route table. Apply nft rules only after validation; keep the current ruleset backup for rollback.
+
+The external peer configuration is entered in the authenticated Settings page and stored root-only at `/etc/wireguard/wg-client.conf`. Use a single peer with IPv4 `AllowedIPs = 0.0.0.0/0`; do not add `PostUp`, `PreUp`, or other shell hooks. The selected mode is restored by `focusvpn-gateway-mode.service` after reboot. Do not switch to WireGuard until the external peer is provisioned and reachable.
 
 ## Rollback
 

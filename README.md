@@ -18,6 +18,8 @@
 - HAPP Server использует provider VLESS outbound, а не прямой выход.
 - Единый shell главной VLESS-страницы для VLESS, WireGuard, HAPP Server и Settings.
 - Settings управляет VLESS, WireGuard, HAPP Server и паролем панели; HAPP config проходит validation и rollback.
+- Режим шлюза переключается между VLESS и внешним WireGuard-клиентом; при WireGuard VLESS/TProxy приостановлен, трафик VPN-клиентов идёт через туннель, LAN остаётся напрямую.
+- Конфигурация внешнего WireGuard принимается в Settings, хранится root-only и не отображается повторно; выбранный режим восстанавливается после перезагрузки.
 - Public-only HAPP `vless://` и QR-модальное окно.
 - Панель WireGuard показывает пять статусных карточек: онлайн, всего, DL/UL, WAN IP и uptime сервиса.
 
@@ -83,6 +85,8 @@
     ```
 
 6. Откройте панель из разрешённой LAN, management или WireGuard сети: `http://<server-address>:9443`. Для внешнего HAPP откройте/пробросьте только TCP `9445`; для WireGuard нужен UDP `51820`.
+
+В Settings можно добавить клиентский конфиг внешнего WireGuard peer с `AllowedIPs = 0.0.0.0/0`, затем переключать режимы шлюза. Для переключения показывается предупреждение; LAN-подсеть исключается из внешнего туннеля. Приватный ключ сохраняется в `/etc/wireguard/wg-client.conf` с правами `0600`. Без сохранённого peer-конфига режим WireGuard недоступен.
 
 ### Обновление и проверка
 

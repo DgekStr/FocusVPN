@@ -69,7 +69,7 @@ esac
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y --no-install-recommends ca-certificates curl docker.io nftables python3 qrencode tar
+  apt-get install -y --no-install-recommends ca-certificates curl docker.io nftables python3 qrencode tar wireguard-tools
   systemctl enable --now docker
 }
 
@@ -111,7 +111,7 @@ ensure_sing_box_account() {
 install_tree() {
   install -d -m 0755 "$APP_ROOT/static" /usr/local/libexec /etc/systemd/system/sing-box.service.d
   install -d -m 0750 "$CONFIG_ROOT" "$SING_BOX_ROOT" "$HAPP_ROOT" "$ADMIN_ROOT"
-  install -d -m 0700 "$ADMIN_ROOT/backups" /etc/wg-easy
+  install -d -m 0700 "$ADMIN_ROOT/backups" /etc/wg-easy /etc/wireguard
 
   find "$REPO_ROOT/server/panel" -maxdepth 1 -type f -name '*.py' -exec install -m 0644 {} "$APP_ROOT/" \;
   find "$REPO_ROOT/server/panel/static" -maxdepth 1 -type f -exec install -m 0644 {} "$APP_ROOT/static/" \;
@@ -241,9 +241,9 @@ enable_services() {
   sing-box check -C "$SING_BOX_ROOT"
   sing-box check -C "$HAPP_ROOT"
   nft --check -f "$SING_BOX_ROOT/tproxy.nft"
-  systemd-analyze verify /etc/systemd/system/sing-box.service /etc/systemd/system/sing-box-admin.service /etc/systemd/system/sing-box-happ-server.service
+  systemd-analyze verify /etc/systemd/system/sing-box.service /etc/systemd/system/sing-box-admin.service /etc/systemd/system/sing-box-happ-server.service /etc/systemd/system/focusvpn-gateway-mode.service /etc/systemd/system/focusvpn-gateway-mode@.service
   systemctl daemon-reload
-  systemctl enable --now sing-box sing-box-happ-server sing-box-admin wg-easy-private-ui sing-box-ru-zone-update.timer wg-peer-keepalive.timer
+  systemctl enable --now sing-box sing-box-happ-server sing-box-admin wg-easy-private-ui sing-box-ru-zone-update.timer wg-peer-keepalive.timer focusvpn-gateway-mode.service
   systemctl is-active --quiet sing-box sing-box-happ-server sing-box-admin wg-easy-private-ui wg-peer-keepalive.timer
   log "FocusVPN services are active"
 }

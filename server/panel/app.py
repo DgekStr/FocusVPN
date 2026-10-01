@@ -38,6 +38,8 @@ CONFIG_PATH = Path('/etc/sing-box/config.json')
 HAPP_CONFIG_PATH = Path('/etc/sing-box-happ-server/config.json')
 HAPP_STATE_PATH = APP_DIR / 'happ-server.json'
 SERVICE_CONTROL_PATH = APP_DIR / 'service-control.json'
+GATEWAY_MODE_PATH = Path('/etc/focusvpn/gateway-mode.json')
+WIREGUARD_CLIENT_CONFIG_PATH = Path('/etc/wireguard/wg-client.conf')
 FAVICON_PATH = Path('/opt/sing-box-admin/static/favicon.png')
 PANEL_CSS_PATH = Path('/opt/sing-box-admin/static/panel.css')
 PANEL_JS_PATH = Path('/opt/sing-box-admin/static/panel.js')
@@ -132,9 +134,133 @@ def save_wireguard_fallback_gateway(value):
     return gateway
 
 
+def validate_wireguard_client_config(value):
+    sections = {}
+    current = None
+    for raw_line in value.splitlines():
+        line = raw_line.split('#', 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith('[') and line.endswith(']'):
+            current = line[1:-1]
+            if current in sections or current not in ('Interface', 'Peer'):
+                raise ValueError('Конфигурация должна содержать секции [Interface] и один [Peer].')
+            sections[current] = {}
+            continue
+        if current is None or '=' not in line:
+            raise ValueError('Некорректная строка в конфигурации WireGuard.')
+        key, item = (part.strip() for part in line.split('=', 1))
+        if key in sections[current] or not item:
+            raise ValueError('В конфигурации WireGuard есть пустое или повторяющееся поле.')
+        sections[current][key] = item
+
+    if set(sections) != {'Interface', 'Peer'}:
+        raise ValueError('Конфигурация должна содержать секции [Interface] и один [Peer].')
+    interface, peer = sections['Interface'], sections['Peer']
+    if set(interface) - {'PrivateKey', 'Address', 'DNS', 'MTU'}:
+        raise ValueError('В [Interface] разрешены только PrivateKey, Address, DNS и MTU.')
+    if set(peer) - {'PublicKey', 'PresharedKey', 'Endpoint', 'AllowedIPs', 'PersistentKeepalive'}:
+        raise ValueError('В [Peer] найдены неподдерживаемые параметры.')
+    if not {'PrivateKey', 'Address'} <= set(interface) or not {'PublicKey', 'Endpoint', 'AllowedIPs'} <= set(peer):
+        raise ValueError('Не заданы обязательные ключ, адрес, peer, endpoint или AllowedIPs.')
+
+    def validate_key(name, secret=False):
+        encoded = interface[name] if secret else peer[name]
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (ValueError, base64.binascii.Error) as error:
+            raise ValueError(f'{name}: ключ WireGuard должен быть base64-строкой.') from error
+        if len(decoded) != 32:
+            raise ValueError(f'{name}: ключ WireGuard должен содержать 32 байта.')
+
+    validate_key('PrivateKey', secret=True)
+    validate_key('PublicKey')
+    if 'PresharedKey' in peer:
+        validate_key('PresharedKey')
+    try:
+        addresses = [ipaddress.ip_interface(item.strip()) for item in interface['Address'].split(',')]
+        allowed_networks = [ipaddress.ip_network(item.strip(), strict=False) for item in peer['AllowedIPs'].split(',')]
+    except ValueError as error:
+        raise ValueError('Address или AllowedIPs содержит некорректную сеть.') from error
+    if not addresses or any(item.version != 4 for item in addresses):
+        raise ValueError('Для клиентского шлюза требуется IPv4 Address.')
+    if not allowed_networks or any(item.version != 4 for item in allowed_networks) or ipaddress.ip_network('0.0.0.0/0') not in allowed_networks:
+        raise ValueError('AllowedIPs должен включать IPv4-маршрут 0.0.0.0/0.')
+    endpoint = peer['Endpoint']
+    if endpoint.startswith('[') and ']:' in endpoint:
+        host, port = endpoint[1:].rsplit(']:', 1)
+        try:
+            if ipaddress.ip_address(host).version != 6:
+                raise ValueError
+        except ValueError as error:
+            raise ValueError('Endpoint содержит некорректный IPv6-адрес.') from error
+    else:
+        host, separator, port = endpoint.rpartition(':')
+        if not separator:
+            raise ValueError('Endpoint должен иметь формат host:port.')
+        try:
+            validate_server(host, 'Endpoint')
+        except ValueError as error:
+            raise ValueError('Endpoint содержит некорректный адрес сервера.') from error
+    require_port(port)
+    if 'DNS' in interface:
+        try:
+            for address in interface['DNS'].split(','):
+                ipaddress.ip_address(address.strip())
+        except ValueError as error:
+            raise ValueError('DNS должен содержать IP-адреса.') from error
+    try:
+        if 'MTU' in interface and not 576 <= int(interface['MTU']) <= 9000:
+            raise ValueError('MTU должен быть в диапазоне 576-9000.')
+        if 'PersistentKeepalive' in peer and not 0 <= int(peer['PersistentKeepalive']) <= 65535:
+            raise ValueError('PersistentKeepalive должен быть в диапазоне 0-65535.')
+    except ValueError as error:
+        if str(error).startswith(('MTU', 'PersistentKeepalive')):
+            raise
+        raise ValueError('MTU и PersistentKeepalive должны быть числами.') from error
+
+    lines = ['[Interface]', f"PrivateKey = {interface['PrivateKey']}", f"Address = {interface['Address']}", 'Table = off']
+    for key in ('DNS', 'MTU'):
+        if key in interface:
+            lines.append(f'{key} = {interface[key]}')
+    lines.extend(('', '[Peer]', f"PublicKey = {peer['PublicKey']}"))
+    for key in ('PresharedKey', 'Endpoint', 'AllowedIPs', 'PersistentKeepalive'):
+        if key in peer:
+            lines.append(f'{key} = {peer[key]}')
+    return '\n'.join(lines) + '\n'
+
+
+def save_wireguard_client_config(value):
+    if len(value.encode('utf-8')) > 32768:
+        raise ValueError('Конфигурация WireGuard слишком большая.')
+    config = validate_wireguard_client_config(value).encode('utf-8')
+    WIREGUARD_CLIENT_CONFIG_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    write_atomic_file(WIREGUARD_CLIENT_CONFIG_PATH, config, mode=0o600)
+
+
+def gateway_mode():
+    try:
+        payload = json.loads(GATEWAY_MODE_PATH.read_text(encoding='utf-8'))
+        return payload.get('mode') if payload.get('mode') in ('vless', 'wireguard') else 'vless'
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return 'vless'
+
+
+def control_gateway_mode(mode):
+    if mode not in ('vless', 'wireguard'):
+        raise ValueError('Неизвестный режим шлюза.')
+    if mode == 'wireguard' and not WIREGUARD_CLIENT_CONFIG_PATH.is_file():
+        raise ValueError('Сначала сохраните конфигурацию внешнего WireGuard-сервера.')
+    result = command([SYSTEMCTL_BIN, 'start', SERVICE_CONTROL_UNIT.format(f'gateway-{mode}')], timeout=120)
+    if result.returncode != 0 or gateway_mode() != mode:
+        raise RuntimeError(f'Не удалось переключить шлюз в режим {mode}.')
+
+
 def control_system_service(name, action):
     if action not in ('start', 'restart', 'stop'):
         raise ValueError('Неизвестная операция сервиса.')
+    if name == 'sing-box' and action in ('start', 'restart') and gateway_mode() == 'wireguard':
+        raise ValueError('Сначала переключите режим шлюза на VLESS.')
     result = command([SYSTEMCTL_BIN, action, name], timeout=75)
     expected = 'inactive' if action == 'stop' else 'active'
     if result.returncode != 0 or service_state(name) != expected:
@@ -386,9 +512,12 @@ def check_candidate(data):
 
 
 def restart_sing_box():
+    if gateway_mode() == 'wireguard':
+        return False
     result = command([SYSTEMCTL_BIN, 'restart', 'sing-box'], timeout=45)
     if result.returncode != 0 or service_state('sing-box') != 'active':
         raise RuntimeError('sing-box не запустился с новой конфигурацией.')
+    return True
 
 
 def apply_configuration(config):
@@ -397,7 +526,7 @@ def apply_configuration(config):
     backup = backup_configuration()
     write_atomic_bytes(data)
     try:
-        restart_sing_box()
+        return restart_sing_box()
     except RuntimeError:
         write_atomic_bytes(backup.read_bytes())
         restart_sing_box()
@@ -883,6 +1012,8 @@ def render_settings_page(config, query, message='', kind='success'):
                 happ_state = '{}'
                 happ_error = message_banner(f'HAPP Server: {error}', 'error')
         service_control = load_service_control()
+        active_gateway_mode = gateway_mode()
+        client_configured = WIREGUARD_CLIENT_CONFIG_PATH.is_file()
         service_states = {
             'wireguard': wireguard_state(),
             'vless': service_state('sing-box'),
@@ -895,9 +1026,15 @@ def render_settings_page(config, query, message='', kind='success'):
 {message_banner(message, kind)}
 {wg_error}{happ_error}
 <div class="panel-stack">
-    <section class="panel service-control-panel"><h2>Управление сервисами</h2><p class="subtitle">При остановке WireGuard маршрут по умолчанию хоста переключается на указанный LAN-шлюз до остановки контейнера.</p><div class="service-control-grid">
+    <section class="panel gateway-mode-panel"><h2>Режим шлюза</h2><p class="subtitle">Активный режим: <span class="badge {'ok' if active_gateway_mode == 'vless' else 'online'}">{'VLESS' if active_gateway_mode == 'vless' else 'Внешний WireGuard'}</span></p><div class="gateway-mode-actions">
+        <form method="post" action="/settings/gateway/mode" data-gateway-mode="vless"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="vless"><button class="{'secondary' if active_gateway_mode != 'vless' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'vless' else ''}>VLESS-шлюз</button></form>
+        <form method="post" action="/settings/gateway/mode" data-gateway-mode="wireguard"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="wireguard"><button class="{'secondary' if active_gateway_mode != 'wireguard' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'wireguard' or not client_configured else ''}>Внешний WireGuard{' · активен' if active_gateway_mode == 'wireguard' else ''}</button></form>
+    </div><p class="muted">В режиме WireGuard VLESS приостанавливается; весь трафик клиентов, кроме локальной сети, направляется во внешний туннель.</p></section>
+    <section class="panel"><h2>Клиент внешнего WireGuard</h2><p class="muted">Вставьте конфигурацию peer от внешнего сервера. Приватный ключ хранится только на этом сервере с правами 0600 и не отображается после сохранения.</p><form method="post" action="/settings/gateway/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="wireguard_client_config">Конфигурация клиента</label><textarea id="wireguard_client_config" name="wireguard_client_config" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.0.0.2/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = vpn.example.com:51820&#10;AllowedIPs = 0.0.0.0/0" required></textarea></div><div class="actions"><button type="submit">{'Обновить конфигурацию' if client_configured else 'Сохранить конфигурацию'}</button><span class="service-status">{'Конфигурация сохранена' if client_configured else 'Конфигурация ещё не задана'}</span></div></form></section>
+    <dialog class="gateway-dialog" data-gateway-dialog aria-labelledby="gateway-dialog-title"><form method="dialog"><h2 id="gateway-dialog-title" data-gateway-dialog-title>Сменить шлюз?</h2><p data-gateway-dialog-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-gateway-dialog-confirm>Переключить</button></div></form></dialog>
+    <section class="panel service-control-panel"><h2>Управление сервисами</h2><p class="subtitle">При остановке WireGuard-моста маршрут сервера переключается на LAN-шлюз.</p><div class="service-control-grid">
         <div class="service-control-item"><h3>WireGuard</h3><p class="service-status">Состояние: <span class="badge {status_class(service_states['wireguard'])}">{esc(service_states['wireguard'])}</span></p><form method="post" action="/settings/wireguard/gateway"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="wireguard_fallback_gateway">Шлюз при остановке WireGuard</label><input id="wireguard_fallback_gateway" name="wireguard_fallback_gateway" value="{esc(service_control['wireguard_fallback_gateway'])}" inputmode="decimal" required></div><div class="actions"><button class="secondary" type="submit">Сохранить шлюз</button></div></form><form method="post" action="/settings/service/wireguard"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="inline-actions"><button class="secondary" name="operation" value="start" type="submit">Запустить</button><button class="secondary" name="operation" value="restart" type="submit">Перезапустить</button><button class="danger" name="operation" value="stop" type="submit">Остановить</button></div></form></div>
-        <div class="service-control-item"><h3>VLESS</h3><p class="service-status">Состояние: <span class="badge {status_class(service_states['vless'])}">{esc(service_states['vless'])}</span></p><form method="post" action="/settings/service/vless"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="inline-actions"><button class="secondary" name="operation" value="start" type="submit">Запустить</button><button class="secondary" name="operation" value="restart" type="submit">Перезапустить</button><button class="danger" name="operation" value="stop" type="submit">Остановить</button></div></form></div>
+        <div class="service-control-item"><h3>VLESS</h3><p class="service-status">Состояние: <span class="badge {status_class(service_states['vless'])}">{esc(service_states['vless'])}</span></p><p>Состояние определяется выбранным режимом шлюза выше.</p></div>
         <div class="service-control-item"><h3>HAPP Server</h3><p class="service-status">Состояние: <span class="badge {status_class(service_states['happ'])}">{esc(service_states['happ'])}</span></p><form method="post" action="/settings/service/happ"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="inline-actions"><button class="secondary" name="operation" value="start" type="submit">Запустить</button><button class="secondary" name="operation" value="restart" type="submit">Перезапустить</button><button class="danger" name="operation" value="stop" type="submit">Остановить</button></div></form></div>
         <div class="service-control-item"><h3>Сервер</h3><p class="service-status">Перезагрузка отключит панель и сервисы на короткое время.</p><form method="post" action="/settings/system/reboot" autocomplete="off"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="reboot_confirmation">Введите REBOOT для подтверждения</label><input id="reboot_confirmation" name="reboot_confirmation" pattern="REBOOT" required></div><div class="actions"><button class="danger" type="submit">Перезагрузить сервер</button></div></form></div>
     </div></section>
@@ -1278,25 +1415,45 @@ class Handler(BaseHTTPRequestHandler):
                     with CONFIG_LOCK:
                         config = load_config()
                         tag = update_profile(config, values)
-                        apply_configuration(config)
-                    self.redirect_settings(tag, 'VLESS профиль проверен и применён.')
+                        applied = apply_configuration(config)
+                    message = 'VLESS профиль проверен и применён.' if applied else 'VLESS профиль сохранён; он применится после возврата в режим VLESS.'
+                    self.redirect_settings(tag, message)
                     return
                 if path == '/settings/vless-route':
                     with CONFIG_LOCK:
                         config = load_config()
                         tag = set_default_outbound(config, form_value(values, 'route_final'))
-                        apply_configuration(config)
-                    self.redirect_settings('', f'Исходящий профиль {tag} применён.')
+                        applied = apply_configuration(config)
+                    message = f'Исходящий профиль {tag} применён.' if applied else f'Исходящий профиль {tag} сохранён и применится в режиме VLESS.'
+                    self.redirect_settings('', message)
                     return
                 if path == '/settings/vless-restart':
                     with CONFIG_LOCK:
-                        restart_sing_box()
-                    self.redirect_settings('', 'sing-box перезапущен.')
+                        restarted = restart_sing_box()
+                    message = 'sing-box перезапущен.' if restarted else 'VLESS приостановлен; для перезапуска переключите шлюз на VLESS.'
+                    self.redirect_settings('', message)
                     return
                 if path == '/settings/wireguard/gateway':
                     with SERVICE_CONTROL_LOCK:
                         gateway = save_wireguard_fallback_gateway(form_value(values, 'wireguard_fallback_gateway'))
                     self.redirect_settings('', f'Шлюз WireGuard сохранён: {gateway}.')
+                    return
+                if path == '/settings/gateway/config':
+                    with SERVICE_CONTROL_LOCK:
+                        save_wireguard_client_config(form_value(values, 'wireguard_client_config'))
+                        if gateway_mode() == 'wireguard':
+                            control_gateway_mode('wireguard')
+                    self.redirect_settings('', 'Конфигурация внешнего WireGuard сохранена.')
+                    return
+                if path == '/settings/gateway/mode':
+                    mode = form_value(values, 'mode')
+                    with SERVICE_CONTROL_LOCK:
+                        control_gateway_mode(mode)
+                    messages = {
+                        'vless': 'Включён VLESS-шлюз. Внешний WireGuard остановлен.',
+                        'wireguard': 'Включён внешний WireGuard-шлюз. VLESS приостановлен.',
+                    }
+                    self.redirect_settings('', messages[mode])
                     return
                 if path == '/settings/service/wireguard':
                     action = form_value(values, 'operation')
@@ -1413,20 +1570,23 @@ class Handler(BaseHTTPRequestHandler):
                 with CONFIG_LOCK:
                     config = load_config()
                     tag = update_profile(config, values)
-                    apply_configuration(config)
-                self.redirect_vless(tag, 'Конфигурация проверена и применена.')
+                    applied = apply_configuration(config)
+                message = 'Конфигурация проверена и применена.' if applied else 'Конфигурация сохранена; она применится после возврата в режим VLESS.'
+                self.redirect_vless(tag, message)
                 return
             if path in ('/vless/route', '/route'):
                 with CONFIG_LOCK:
                     config = load_config()
                     tag = set_default_outbound(config, form_value(values, 'route_final'))
-                    apply_configuration(config)
-                self.redirect_vless('', f'Исходящий профиль {tag} применён.')
+                    applied = apply_configuration(config)
+                message = f'Исходящий профиль {tag} применён.' if applied else f'Исходящий профиль {tag} сохранён и применится в режиме VLESS.'
+                self.redirect_vless('', message)
                 return
             if path in ('/vless/restart', '/restart'):
                 with CONFIG_LOCK:
-                    restart_sing_box()
-                self.redirect_vless('', 'sing-box перезапущен.')
+                    restarted = restart_sing_box()
+                message = 'sing-box перезапущен.' if restarted else 'VLESS приостановлен; для перезапуска переключите шлюз на VLESS.'
+                self.redirect_vless('', message)
                 return
             if path == '/password':
                 password = form_value(values, 'new_password')

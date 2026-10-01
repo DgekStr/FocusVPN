@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+import ipaddress
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+WG_INTERFACE = 'wg-client'
+WG_CONFIG = Path('/etc/wireguard/wg-client.conf')
+MODE_PATH = Path('/etc/focusvpn/gateway-mode.json')
+VPN_NETWORK = ipaddress.ip_network(os.environ.get('FOCUSVPN_WG_NETWORK', '10.8.0.0/24'), strict=False)
+LAN_NETWORK = ipaddress.ip_network(os.environ.get('FOCUSVPN_LAN_NETWORK', '192.168.0.0/24'), strict=False)
+ROUTE_TABLE = '51820'
+LAN_RULE_PRIORITY = '90'
+WG_RULE_PRIORITY = '91'
+
+
+def run(args, optional=False, input_text=None):
+    result = subprocess.run(args, input=input_text, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60, check=False)
+    if result.returncode and not optional:
+        raise RuntimeError(result.stdout.strip() or 'gateway mode command failed')
+    return result
+
+
+def systemctl(action, unit, optional=False):
+    return run(['/usr/bin/systemctl', action, unit], optional=optional)
+
+
+def save_mode(mode):
+    MODE_PATH.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix='.gateway-mode-', dir=MODE_PATH.parent)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
+            json.dump({'mode': mode}, handle)
+            handle.write('\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, MODE_PATH)
+    except Exception:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def cleanup_wireguard():
+    systemctl('stop', f'wg-quick@{WG_INTERFACE}.service', optional=True)
+    run(['/usr/sbin/ip', 'rule', 'del', 'from', str(VPN_NETWORK), 'to', str(LAN_NETWORK), 'lookup', 'main', 'priority', LAN_RULE_PRIORITY], optional=True)
+    run(['/usr/sbin/ip', 'rule', 'del', 'from', str(VPN_NETWORK), 'lookup', ROUTE_TABLE, 'priority', WG_RULE_PRIORITY], optional=True)
+    run(['/usr/sbin/ip', 'route', 'flush', 'table', ROUTE_TABLE], optional=True)
+    run(['/usr/sbin/nft', 'delete', 'table', 'inet', 'focusvpn_wg_client'], optional=True)
+
+
+def apply_wireguard():
+    if not VPN_NETWORK.version == LAN_NETWORK.version == 4 or VPN_NETWORK.overlaps(LAN_NETWORK):
+        raise RuntimeError('FOCUSVPN_WG_NETWORK and FOCUSVPN_LAN_NETWORK must be separate IPv4 networks')
+    if not WG_CONFIG.is_file():
+        raise RuntimeError('WireGuard client configuration is missing')
+
+    systemctl('stop', 'sing-box.service')
+    cleanup_wireguard()
+    try:
+        systemctl('start', f'wg-quick@{WG_INTERFACE}.service')
+        run(['/usr/sbin/ip', 'route', 'replace', 'default', 'dev', WG_INTERFACE, 'table', ROUTE_TABLE])
+        run(['/usr/sbin/ip', 'rule', 'add', 'from', str(VPN_NETWORK), 'to', str(LAN_NETWORK), 'lookup', 'main', 'priority', LAN_RULE_PRIORITY])
+        run(['/usr/sbin/ip', 'rule', 'add', 'from', str(VPN_NETWORK), 'lookup', ROUTE_TABLE, 'priority', WG_RULE_PRIORITY])
+        run(['/usr/sbin/sysctl', '-w', 'net.ipv4.ip_forward=1'])
+        nft_rules = (
+            'add table inet focusvpn_wg_client\n'
+            'add chain inet focusvpn_wg_client postrouting { type nat hook postrouting priority srcnat; policy accept; }\n'
+            f'add rule inet focusvpn_wg_client postrouting ip saddr {VPN_NETWORK} oifname {WG_INTERFACE} masquerade\n'
+        )
+        run(['/usr/sbin/nft', '-f', '-'], input_text=nft_rules)
+        source_address = next(VPN_NETWORK.hosts(), VPN_NETWORK.network_address)
+        route = json.loads(run(['/usr/sbin/ip', '-j', '-4', 'route', 'get', '1.1.1.1', 'from', str(source_address)]).stdout)
+        if not route or route[0].get('dev') != WG_INTERFACE:
+            raise RuntimeError('VPN client default route did not resolve through wg-client')
+    except Exception:
+        cleanup_wireguard()
+        if systemctl('start', 'sing-box.service', optional=True).returncode == 0:
+            save_mode('vless')
+        raise
+    save_mode('wireguard')
+
+
+def apply_vless():
+    run(['/usr/sbin/ip', 'rule', 'del', 'from', str(VPN_NETWORK), 'to', str(LAN_NETWORK), 'lookup', 'main', 'priority', LAN_RULE_PRIORITY], optional=True)
+    run(['/usr/sbin/ip', 'rule', 'del', 'from', str(VPN_NETWORK), 'lookup', ROUTE_TABLE, 'priority', WG_RULE_PRIORITY], optional=True)
+    run(['/usr/sbin/ip', 'route', 'flush', 'table', ROUTE_TABLE], optional=True)
+    systemctl('start', 'sing-box.service')
+    cleanup_wireguard()
+    save_mode('vless')
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] not in ('vless', 'wireguard', 'restore'):
+        raise SystemExit('usage: focusvpn-gateway-mode {vless|wireguard|restore}')
+    mode = sys.argv[1]
+    if mode == 'restore':
+        try:
+            saved = json.loads(MODE_PATH.read_text(encoding='utf-8')).get('mode')
+        except (OSError, json.JSONDecodeError, AttributeError):
+            saved = 'vless'
+        mode = saved if saved in ('vless', 'wireguard') else 'vless'
+    if mode == 'wireguard':
+        apply_wireguard()
+    else:
+        apply_vless()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+        raise SystemExit(str(error)) from error

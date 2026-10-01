@@ -5,6 +5,7 @@
   let wireGuardLiveLoading = false;
   let happLiveTimer = null;
   let happLiveLoading = false;
+  let pendingGatewayForm = null;
 
   function isViewLink(anchor) {
     if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download')) {
@@ -203,6 +204,32 @@
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeWireGuardQr();
+  });
+
+  document.addEventListener('submit', (event) => {
+    const form = event.target.closest('form[data-gateway-mode]');
+    const dialog = document.querySelector('[data-gateway-dialog]');
+    if (!form || form.dataset.confirmed === 'true' || !dialog) return;
+    event.preventDefault();
+    pendingGatewayForm = form;
+    const useWireGuard = form.dataset.gatewayMode === 'wireguard';
+    const title = dialog.querySelector('[data-gateway-dialog-title]');
+    const message = dialog.querySelector('[data-gateway-dialog-message]');
+    if (title) title.textContent = useWireGuard ? 'Переключить на внешний WireGuard?' : 'Вернуться на VLESS?';
+    if (message) message.textContent = useWireGuard
+      ? 'VLESS остановится, действующие соединения переподключатся. Весь внешний трафик VPN-клиентов пойдёт через внешний сервер; локальная сеть останется доступна напрямую.'
+      : 'Внешний WireGuard остановится, а VPN-клиенты вернутся на VLESS. Действующие соединения переподключатся.';
+    dialog.showModal();
+    dialog.querySelector('[data-gateway-dialog-confirm]')?.focus();
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('[data-gateway-dialog-confirm]') || !pendingGatewayForm) return;
+    const form = pendingGatewayForm;
+    pendingGatewayForm = null;
+    document.querySelector('[data-gateway-dialog]')?.close();
+    form.dataset.confirmed = 'true';
+    form.requestSubmit();
   });
 
   async function navigate(url, pushState) {

@@ -91,6 +91,16 @@ option { background: #111b34; color: var(--text); }
 .service-control-item form:last-child { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line); }
 .service-control-item form:last-child .actions { margin-top: 14px; }
 .badge.bad { border-color: rgba(251, 113, 133, .5); color: #fda4af; }
+.gateway-mode-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 12px; }
+.gateway-mode-actions form { flex: 1 1 220px; }
+.gateway-mode-actions button { width: 100%; }
+.gateway-mode-actions button.mode-active { background: linear-gradient(135deg, #0f766e, #22c55e); box-shadow: 0 8px 18px rgba(34, 197, 94, .2); }
+button:disabled { cursor: default; filter: none; opacity: .72; }
+.gateway-dialog { width: min(100% - 32px, 480px); padding: 24px; border: 1px solid rgba(255, 255, 255, .2); background: #111b34; color: var(--text); box-shadow: 0 24px 80px rgba(0, 0, 0, .7); }
+.gateway-dialog::backdrop { background: rgba(5, 8, 22, .82); }
+.gateway-dialog h2 { margin: 0 0 10px; font-size: 19px; }
+.gateway-dialog p { color: var(--muted); }
+.gateway-dialog .actions { justify-content: flex-end; }
 
 .metrics { display: grid; gap: 0; }
 .metric { display: grid; gap: 4px; padding: 12px 0; border-bottom: 1px solid var(--line); }
@@ -169,6 +179,7 @@ th:last-child, td:last-child { padding-right: 0; }
   .form-grid { grid-template-columns: 1fr; }
   .field.full { grid-column: auto; }
   .actions, .inline-actions { align-items: stretch; flex-direction: column; }
+  .gateway-mode-actions { flex-direction: column; }
   .button, button { width: 100%; }
   .status-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .nav-section, .profile-list { grid-template-columns: 1fr; }

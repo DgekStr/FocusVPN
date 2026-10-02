@@ -2,7 +2,7 @@
 
 Единый VPN-шлюз и административная панель для WireGuard, sing-box и HAPP.
 
-Состояние проекта зафиксировано: **2026-09-29**.
+Состояние проекта зафиксировано: **2026-10-02**.
 
 ## Что готово
 
@@ -15,12 +15,14 @@
 - WireGuard/wg-easy объединён с VLESS в одной FocusLens-панели и одной Basic Auth.
 - Управление клиентами WireGuard: создание, включение, удаление, `.conf`, QR, live-активность и per-client запрет LAN.
 - Отдельный HAPP-compatible VLESS Reality server на TCP `9445`.
-- HAPP Server использует provider VLESS outbound, а не прямой выход.
-- Единый shell главной VLESS-страницы для VLESS, WireGuard, HAPP Server и Settings.
+- Gateway и HAPP синхронно используют выбранный серверный профиль; применение проверяет оба конфига и поддерживает совместный rollback.
+- Основной раздел панели - VPN-серверы; отдельный пункт VLESS скрыт. WireGuard, HAPP Server, Settings и журнал используют общий shell.
 - Settings управляет VLESS, WireGuard, HAPP Server и паролем панели; HAPP config проходит validation и rollback.
 - Режим шлюза переключается между VLESS и внешним WireGuard-клиентом; при WireGuard VLESS/TProxy приостановлен, трафик VPN-клиентов идёт через туннель, LAN остаётся напрямую.
-- VPN-серверы управляются в `/outbounds`: импорт sing-box/Xray VLESS и Hysteria2 JSON, замена профиля, удаление с синхронизацией `vless-auto` и выбор default route.
-- Конфигурация внешнего WireGuard принимается в Settings, хранится root-only и не отображается повторно; выбранный режим восстанавливается после перезагрузки.
+- VPN-серверы управляются в `/outbounds`: импорт sing-box/Xray VLESS, Hysteria2, Trojan и Shadowsocks JSON, включая массив конфигураций; замена профиля, удаление с синхронизацией `vless-auto` и выбор default route. XHTTP и WireGuard outbound не конвертируются: причина пропуска выводится отдельно.
+- В Settings доступна последовательная автопроверка VLESS с интервалом 1-60 минут, сохранением задержки через туннель и красными статусами ошибок. Автовыбор переключает gateway/HAPP после трёх последовательных побед одного VLESS; ручные изменения сбрасывают серию, WireGuard mode не переключается автоматически.
+- Журнал `/gateway-journal` фиксирует циклы и смену шлюза; уведомления Mattermost отправляются через сохранённый webhook в фоне. URL хранится приватно и не возвращается в интерфейс.
+- Исходный WireGuard-конфиг сохраняется с правами `0600` и повторно заполняет поле в авторизованных Settings; рабочий профиль не меняет DNS хоста. Выбранный режим восстанавливается после перезагрузки.
 - Public-only HAPP `vless://` и QR-модальное окно.
 - Панель WireGuard показывает пять статусных карточек: онлайн, всего, DL/UL, WAN IP и uptime сервиса.
 
@@ -29,9 +31,11 @@
 | Назначение | Адрес |
 |---|---|
 | Админ-панель | `http://<gateway-host>:9443` |
+| VPN-серверы | `http://<gateway-host>:9443/outbounds` |
 | WireGuard UI | `http://<gateway-host>:9443/wireguard` |
 | HAPP Server | `http://<gateway-host>:9443/happ-server` |
 | Настройки | `http://<gateway-host>:9443/settings` |
+| Журнал переключений | `http://<gateway-host>:9443/gateway-journal` |
 | HAPP VLESS inbound | `<public-ip-or-domain>:9445` |
 
 Панель разрешена из `<wireguard-client-network>`, `<lan-network>` и `<management-network>`. Порт `9445` требует внешнего TCP-проброса на `<gateway-host>:9445`, если сервер находится за NAT.
@@ -112,12 +116,36 @@ flowchart LR
     WG[WireGuard clients\n<wireguard-client-network>] --> FW[nftables + policy routing]
     FW --> RU[RU CIDR direct\nLAN gateway]
     FW --> TP[sing-box TPROXY]
-    TP --> VLESS[provider VLESS Reality]
+    TP --> PROVIDER[VLESS / Hysteria2 / Trojan / Shadowsocks]
     HAPP[HAPP clients\nTCP 9445] --> HS[sing-box HAPP inbound]
-    HS --> VLESS
+    HS --> PROVIDER
+    FW --> WGOUT[External WireGuard client\nWG gateway mode]
+    HS --> MARK[Direct outbound\nrouting mark 2]
+    MARK --> WGOUT
     ADMIN[FocusLens panel\n9443] --> WGAPI[wg-easy API]
     ADMIN --> SBAPI[sing-box config]
 ```
+
+## Импорт и проверки
+
+В VPN-серверы можно вставить один outbound, полный sing-box/Xray config или массив до 16 конфигураций. Для массива выбирайте добавление новых `auto-N` и оставляйте общий tag пустым. Поддерживаются VLESS TCP/gRPC, Hysteria2, Trojan TLS и Shadowsocks; XHTTP не заменяется другим транспортом, а WireGuard настраивается отдельно в Settings. Причины пропуска элементов отображаются явно.
+
+Импорт проверяет конфигурацию, синхронизирует gateway/HAPP и `vless-auto`, не меняя выбранный маршрут. HTTPS-тесты идут последовательно в фоне. В таблице видны очередь, результат, внешний IP, задержка и время проверки; стартовое уведомление заменяется фактическим результатом, а polling имеет таймаут и повторные попытки. Неуспешный тест означает сохранённый, но не подтверждённый рабочим профиль, а не зависшую очередь.
+
+Автопроверка и автовыбор по умолчанию выключены; интервал - 5 минут, допустимый диапазон 1-60 минут между полными циклами. Измеряется время до первого HTTPS-байта через туннель, не ICMP. Автовыбор рассматривает только VLESS и переключает маршрут после трёх полных циклов подряд с одним лидером. Ошибки, ручные изменения, редактирование профилей/настроек и перезапуск сбрасывают серию; в WireGuard mode автоматическое переключение запрещено.
+
+Mattermost webhook вводится в Settings и хранится приватно. Доставка выполняется в фоне, ошибки фиксируются в журнале без отката маршрута. Реальная доставка требует настройки webhook; отдельная кнопка отправляет тестовое уведомление.
+
+## Проверки разработки
+
+```powershell
+py -3 scripts/test_route_sync.py
+py -3 scripts/test_vless_monitor.py
+node scripts/test_panel_checks.js
+.\scripts\validate.ps1
+```
+
+Тесты покрывают общий маршрут gateway/HAPP и rollback, пакетный импорт, неблокирующий POST, три последовательные победы VLESS, webhook и восстановление polling после сетевой ошибки. Конфигурационный check или статус `active` не заменяют успешный HTTPS-тест.
 
 ## Репозиторий
 

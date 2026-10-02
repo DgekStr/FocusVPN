@@ -1,10 +1,12 @@
 (() => {
-  const views = new Set(['/', '/vless', '/outbounds', '/wireguard', '/happ-server', '/settings']);
+  const views = new Set(['/', '/vless', '/outbounds', '/wireguard', '/happ-server', '/settings', '/gateway-journal']);
   let navigating = false;
   let wireGuardLiveTimer = null;
   let wireGuardLiveLoading = false;
   let happLiveTimer = null;
   let happLiveLoading = false;
+  let outboundCheckTimer = null;
+  let outboundCheckLoading = false;
   let pendingGatewayForm = null;
 
   function isViewLink(anchor) {
@@ -172,6 +174,85 @@
     happLiveTimer = window.setInterval(refresh, 1000);
   }
 
+  function syncOutboundChecks() {
+    if (outboundCheckTimer) {
+      window.clearInterval(outboundCheckTimer);
+      outboundCheckTimer = null;
+    }
+    if (!document.querySelector('[data-outbound-checks], form[action="/settings/vless-monitor"]')) return;
+    const refresh = async () => {
+      if (outboundCheckLoading || document.hidden) return;
+      outboundCheckLoading = true;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch('/outbounds/checks', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+        if (response.status === 401) {
+          window.location.reload();
+          return;
+        }
+        if (!response.ok) throw new Error('Status refresh failed');
+        const payload = await response.json();
+        const monitorStatus = document.querySelector('form[action="/settings/vless-monitor"]')?.closest('section')?.querySelector('p.muted');
+        if (monitorStatus && payload.automation) {
+          const automation = payload.automation;
+          const text = `Последняя проверка: ${automation.last_checked_at || 'ещё не выполнялась'}. Кандидат: ${automation.candidate || 'нет'} · ${automation.streak || 0}/3.${automation.running ? ' Цикл выполняется.' : ''}`;
+          if (monitorStatus.textContent !== text) monitorStatus.textContent = text;
+        }
+        const checks = new Map((Array.isArray(payload.checks) ? payload.checks : []).map((check) => [check.tag, check]));
+        const summary = document.querySelector('[data-outbound-summary]');
+        if (summary) {
+          const tags = JSON.parse(summary.dataset.checkTags || '[]');
+          const selected = tags.map((tag) => checks.get(tag)).filter(Boolean);
+          const pending = selected.filter((check) => check.state === 'running' || check.state === 'queued');
+          const finished = selected.filter((check) => check.state === 'success' || check.state === 'error');
+          let text;
+          let failed = false;
+          if (pending.length) {
+            text = `Проверено ${finished.length}/${selected.length}. Остальные проверки выполняются в фоне.`;
+          } else if (selected.length === 1) {
+            text = `${selected[0].tag}: ${selected[0].message}`;
+            failed = selected[0].state !== 'success';
+          } else {
+            const failures = selected.filter((check) => check.state !== 'success');
+            text = `Проверки завершены: ${finished.length}/${selected.length}.`;
+            if (failures.length) text += ` Ошибка или нет результата: ${failures.map((check) => check.tag).join(', ')}.`;
+            failed = failures.length > 0;
+          }
+          summary.textContent = (summary.dataset.checkPrefix || '') + text;
+          summary.classList.toggle('success', pending.length === 0 && !failed);
+          summary.classList.toggle('error', failed);
+        }
+        document.querySelectorAll('[data-outbound-check-tag]').forEach((cell) => {
+          const check = checks.get(cell.dataset.outboundCheckTag);
+          if (!check) return;
+          cell.textContent = check.message || '';
+          cell.dataset.checkState = check.state;
+          const row = cell.closest('tr');
+          row?.classList.toggle('outbound-failed', check.state === 'error');
+          const latency = row?.querySelector('[data-outbound-latency]');
+          const checkedAt = row?.querySelector('[data-outbound-checked-at]');
+          if (latency) latency.textContent = typeof check.latency_ms === 'number' ? check.latency_ms.toFixed(2) : '—';
+          if (checkedAt) checkedAt.textContent = check.checked_at || '—';
+          const button = row?.querySelector('form[action="/outbounds/check"] button');
+          if (button) button.disabled = check.state === 'running' || check.state === 'queued';
+        });
+      } catch (_) {
+        const summary = document.querySelector('[data-outbound-summary]');
+        if (summary) {
+          summary.textContent = 'Не удалось обновить результаты проверки. Повторная попытка выполняется автоматически.';
+          summary.classList.remove('success');
+          summary.classList.add('error');
+        }
+      } finally {
+        window.clearTimeout(timeout);
+        outboundCheckLoading = false;
+      }
+    };
+    refresh();
+    outboundCheckTimer = window.setInterval(refresh, 1000);
+  }
+
   function closeWireGuardQr() {
     const modal = document.querySelector('[data-wg-qr-modal]');
     const image = modal?.querySelector('[data-wg-qr-image]');
@@ -207,6 +288,14 @@
   });
 
   document.addEventListener('submit', (event) => {
+    if (event.target.matches('form[action="/outbounds/import"]')) {
+      const button = event.target.querySelector('button[type="submit"]');
+      if (button) {
+        button.disabled = true;
+        button.textContent = 'Импортируется…';
+      }
+      return;
+    }
     const deleteForm = event.target.closest('form[data-outbound-delete]');
     const deleteDialog = document.querySelector('[data-outbound-delete-dialog]');
     if (deleteForm && deleteForm.dataset.confirmed !== 'true' && deleteDialog) {
@@ -285,6 +374,7 @@
       updateMenu(target.pathname);
       syncWireGuardLive();
       syncHappLive();
+      syncOutboundChecks();
       if (pushState) window.history.pushState({}, '', target.href);
       window.scrollTo({ top: 0, behavior: 'instant' });
     } catch (error) {
@@ -306,4 +396,5 @@
   updateMenu(window.location.pathname);
   syncWireGuardLive();
   syncHappLive();
+  syncOutboundChecks();
 })();

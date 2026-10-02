@@ -17,13 +17,12 @@ def load_profile_tags():
     return [
         outbound.get('tag', '')
         for outbound in config.get('outbounds', [])
-      if outbound.get('type') in ('vless', 'hysteria2') and outbound.get('tag')
+        if outbound.get('type') in ('vless', 'hysteria2', 'trojan', 'shadowsocks') and outbound.get('tag')
     ]
 
 
 def render_shell(title, body, active, profile_tags=None, selected_profile=''):
     tags = load_profile_tags() if profile_tags is None else profile_tags
-    vless_active = ' active' if active == 'vless' else ''
     wireguard_active = ' active' if active == 'wireguard' else ''
     happ_active = ' active' if active == 'happ-server' else ''
     settings_active = ' active' if active == 'settings' else ''
@@ -40,15 +39,14 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)} | FOCUSLENS.DEV</title>
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=19">
+<link rel="stylesheet" href="/panel.css?v=20">
 </head>
 <body>
 <div class="app-shell">
   <aside class="app-sidebar">
-    <a class="app-brand" href="/vless"><img src="/favicon.png" alt=""><span>FOCUSLENS.DEV<small>VLESS GATEWAY</small></span></a>
+    <a class="app-brand" href="/outbounds"><img src="/favicon.png" alt=""><span>FOCUSLENS.DEV<small>VPN GATEWAY</small></span></a>
     <nav class="app-nav" aria-label="Управление VPN">
       <section class="nav-section nav-vless">
-        <a class="nav-link{vless_active}" data-panel-nav="vless" href="/vless"><span class="nav-dot"></span>VLESS</a>
         <a class="nav-link{outbounds_active}" data-panel-nav="outbounds" href="/outbounds"><span class="nav-dot"></span>VPN-серверы</a>
         <div class="profile-list">{profile_markup}</div>
       </section>
@@ -63,7 +61,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
   </aside>
   <div class="app-content"><main class="main">{body}</main></div>
 </div>
-<script src="/panel.js?v=10" defer></script>
+<script src="/panel.js?v=13" defer></script>
 <script src="/happ-actions.js?v=6" defer></script>
 </body>
 </html>'''

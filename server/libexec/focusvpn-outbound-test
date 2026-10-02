@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+import hashlib
+import datetime as dt
+import ipaddress
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+CONFIG_PATH = Path('/etc/sing-box/config.json')
+RESULT_DIR = Path('/etc/sing-box-admin/outbound-checks')
+
+
+def parse_probe_response(output):
+    address, elapsed = output.strip().rsplit('\n', 1)
+    latency_ms = float(elapsed) * 1000
+    if not 0 <= latency_ms <= 60000:
+        raise ValueError('Invalid latency')
+    return str(ipaddress.ip_address(address.strip())), round(latency_ms, 2)
+
+
+def run_test(tag):
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', tag):
+        raise ValueError('Invalid server tag')
+    config = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+    selected = next((item for item in config['outbounds'] if item.get('tag') == tag and item.get('type') in ('vless', 'hysteria2', 'trojan', 'shadowsocks')), None)
+    if selected is None:
+        raise ValueError('Server not found')
+    fingerprint = hashlib.sha256(json.dumps(selected, sort_keys=True).encode('utf-8')).hexdigest()
+    with socket.socket() as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        port = reservation.getsockname()[1]
+    result = {'ok': False, 'fingerprint': fingerprint, 'error': 'Проверка соединения не завершена.'}
+    candidate = {
+        'log': {'level': 'error'},
+        'inbounds': [{'type': 'socks', 'tag': 'test-in', 'listen': '127.0.0.1', 'listen_port': port}],
+        'outbounds': [selected],
+        'route': {'final': tag},
+    }
+    with tempfile.TemporaryDirectory(prefix='focusvpn-outbound-test-') as directory:
+        root = Path(directory)
+        candidate_path = root / 'config.json'
+        candidate_path.write_text(json.dumps(candidate), encoding='utf-8')
+        os.chmod(candidate_path, 0o600)
+        check = subprocess.run(['/usr/bin/sing-box', 'check', '-c', str(candidate_path)], capture_output=True, timeout=10)
+        if check.returncode:
+            result['error'] = 'Тестовая конфигурация отклонена sing-box; проверьте зависимости outbound.'
+        else:
+            with (root / 'log.txt').open('w+', encoding='utf-8') as log:
+                process = subprocess.Popen(['/usr/bin/sing-box', '-D', directory, '-c', str(candidate_path), 'run'], stdout=log, stderr=log)
+                try:
+                    response = subprocess.run([
+                        '/usr/bin/curl', '--silent', '--show-error', '--fail',
+                        '--retry', '2', '--retry-connrefused', '--connect-timeout', '5', '--max-time', '10',
+                        '--write-out', '\n%{time_starttransfer}',
+                        '--socks5-hostname', f'127.0.0.1:{port}', 'https://api.ipify.org',
+                    ], text=True, capture_output=True, timeout=35)
+                    if response.returncode == 0:
+                        address, latency_ms = parse_probe_response(response.stdout)
+                        result = {'ok': True, 'fingerprint': fingerprint, 'ip': address, 'latency_ms': latency_ms}
+                    else:
+                        result['error'] = 'HTTPS через профиль не прошёл: нет ответа или выход в интернет ограничен.'
+                except (subprocess.TimeoutExpired, ValueError):
+                    result['error'] = 'HTTPS-проверка завершилась по timeout или вернула некорректный внешний IP.'
+                finally:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                log.seek(0)
+                errors = log.read().lower()
+                if not result['ok']:
+                    if 'certificate' in errors or 'x509' in errors:
+                        result['error'] = 'Ошибка проверки TLS-сертификата. Проверьте SNI и доверенный сертификат.'
+                    elif 'authentication' in errors or 'unauthorized' in errors:
+                        result['error'] = 'Сервер отклонил авторизацию. Проверьте auth/UUID.'
+    result['checked_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
+    RESULT_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix='.check-', dir=RESULT_DIR)
+    with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
+        json.dump(result, handle, ensure_ascii=False)
+        handle.write('\n')
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, RESULT_DIR / f'{tag}.json')
+
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        raise SystemExit('usage: focusvpn-outbound-test <tag>')
+    run_test(sys.argv[1])

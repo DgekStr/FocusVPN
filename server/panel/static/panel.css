@@ -91,6 +91,9 @@ option { background: #111b34; color: var(--text); }
 .service-control-item form:last-child { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line); }
 .service-control-item form:last-child .actions { margin-top: 14px; }
 .badge.bad { border-color: rgba(251, 113, 133, .5); color: #fda4af; }
+.outbound-failed { background: rgba(251, 113, 133, .08); }
+.outbound-failed td { color: var(--danger); }
+input.inline-checkbox { width: 18px; min-height: 18px; height: 18px; padding: 0; vertical-align: middle; accent-color: var(--accent-2); }
 .gateway-mode-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 12px; }
 .gateway-mode-actions form { flex: 1 1 220px; }
 .gateway-mode-actions button { width: 100%; }

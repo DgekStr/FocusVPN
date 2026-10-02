@@ -40,6 +40,7 @@ HAPP_STATE_PATH = APP_DIR / 'happ-server.json'
 SERVICE_CONTROL_PATH = APP_DIR / 'service-control.json'
 GATEWAY_MODE_PATH = Path('/etc/focusvpn/gateway-mode.json')
 WIREGUARD_CLIENT_CONFIG_PATH = Path('/etc/wireguard/wg-client.conf')
+WIREGUARD_CLIENT_INPUT_PATH = Path('/etc/focusvpn/wireguard-client-input.conf')
 FAVICON_PATH = Path('/opt/sing-box-admin/static/favicon.png')
 PANEL_CSS_PATH = Path('/opt/sing-box-admin/static/panel.css')
 PANEL_JS_PATH = Path('/opt/sing-box-admin/static/panel.js')
@@ -234,9 +235,21 @@ def validate_wireguard_client_config(value):
 def save_wireguard_client_config(value):
     if len(value.encode('utf-8')) > 32768:
         raise ValueError('Конфигурация WireGuard слишком большая.')
+    original = value.replace('\r\n', '\n').replace('\r', '\n')
     config = validate_wireguard_client_config(value).encode('utf-8')
     WIREGUARD_CLIENT_CONFIG_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    WIREGUARD_CLIENT_INPUT_PATH.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    write_atomic_file(WIREGUARD_CLIENT_INPUT_PATH, original.encode('utf-8'), mode=0o600)
     write_atomic_file(WIREGUARD_CLIENT_CONFIG_PATH, config, mode=0o600)
+
+
+def load_wireguard_client_text():
+    for path in (WIREGUARD_CLIENT_INPUT_PATH, WIREGUARD_CLIENT_CONFIG_PATH):
+        try:
+            return path.read_text(encoding='utf-8')
+        except FileNotFoundError:
+            continue
+    return ''
 
 
 def gateway_mode():
@@ -1018,6 +1031,7 @@ def render_settings_page(config, query, message='', kind='success'):
         service_control = load_service_control()
         active_gateway_mode = gateway_mode()
         client_configured = WIREGUARD_CLIENT_CONFIG_PATH.is_file()
+        wireguard_client_text = load_wireguard_client_text()
         service_states = {
             'wireguard': wireguard_state(),
             'vless': service_state('sing-box'),
@@ -1034,7 +1048,7 @@ def render_settings_page(config, query, message='', kind='success'):
         <form method="post" action="/settings/gateway/mode" data-gateway-mode="vless"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="vless"><button class="{'secondary' if active_gateway_mode != 'vless' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'vless' else ''}>VLESS-шлюз</button></form>
         <form method="post" action="/settings/gateway/mode" data-gateway-mode="wireguard"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="wireguard"><button class="{'secondary' if active_gateway_mode != 'wireguard' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'wireguard' or not client_configured else ''}>Внешний WireGuard{' · активен' if active_gateway_mode == 'wireguard' else ''}</button></form>
     </div><p class="muted">В режиме WireGuard VLESS приостанавливается; весь трафик клиентов, кроме локальной сети, направляется во внешний туннель.</p></section>
-    <section class="panel"><h2>Клиент внешнего WireGuard</h2><p class="muted">Вставьте конфигурацию peer от внешнего сервера. Приватный ключ хранится только на этом сервере с правами 0600 и не отображается после сохранения.</p><form method="post" action="/settings/gateway/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="wireguard_client_config">Конфигурация клиента</label><textarea id="wireguard_client_config" name="wireguard_client_config" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.0.0.2/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = vpn.example.com:51820&#10;AllowedIPs = 0.0.0.0/0" required></textarea></div><div class="actions"><button type="submit">{'Обновить конфигурацию' if client_configured else 'Сохранить конфигурацию'}</button><span class="service-status">{'Конфигурация сохранена' if client_configured else 'Конфигурация ещё не задана'}</span></div></form></section>
+    <section class="panel"><h2>Клиент внешнего WireGuard</h2><p class="muted">Последняя сохранённая конфигурация показывается только в этой авторизованной панели. На диске исходный текст и рабочий конфиг хранятся с правами 0600.</p><form method="post" action="/settings/gateway/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="wireguard_client_config">Конфигурация клиента</label><textarea id="wireguard_client_config" name="wireguard_client_config" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.0.0.2/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = vpn.example.com:51820&#10;AllowedIPs = 0.0.0.0/0" required>{esc(wireguard_client_text)}</textarea></div><div class="actions"><button type="submit">{'Обновить конфигурацию' if client_configured else 'Сохранить конфигурацию'}</button><span class="service-status">{'Конфигурация сохранена' if client_configured else 'Конфигурация ещё не задана'}</span></div></form></section>
     <dialog class="gateway-dialog" data-gateway-dialog aria-labelledby="gateway-dialog-title"><form method="dialog"><h2 id="gateway-dialog-title" data-gateway-dialog-title>Сменить шлюз?</h2><p data-gateway-dialog-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-gateway-dialog-confirm>Переключить</button></div></form></dialog>
     <section class="panel service-control-panel"><h2>Управление сервисами</h2><p class="subtitle">При остановке WireGuard-моста маршрут сервера переключается на LAN-шлюз.</p><div class="service-control-grid">
         <div class="service-control-item"><h3>WireGuard</h3><p class="service-status">Состояние: <span class="badge {status_class(service_states['wireguard'])}">{esc(service_states['wireguard'])}</span></p><form method="post" action="/settings/wireguard/gateway"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="wireguard_fallback_gateway">Шлюз при остановке WireGuard</label><input id="wireguard_fallback_gateway" name="wireguard_fallback_gateway" value="{esc(service_control['wireguard_fallback_gateway'])}" inputmode="decimal" required></div><div class="actions"><button class="secondary" type="submit">Сохранить шлюз</button></div></form><form method="post" action="/settings/service/wireguard"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="inline-actions"><button class="secondary" name="operation" value="start" type="submit">Запустить</button><button class="secondary" name="operation" value="restart" type="submit">Перезапустить</button><button class="danger" name="operation" value="stop" type="submit">Остановить</button></div></form></div>

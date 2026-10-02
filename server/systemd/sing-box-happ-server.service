@@ -6,6 +6,8 @@ After=network-online.target
 [Service]
 User=sing-box
 Group=sing-box
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
 ExecStart=/usr/bin/sing-box -D /var/lib/sing-box-happ-server -C /etc/sing-box-happ-server run
 Restart=on-failure
 RestartSec=5s

@@ -500,7 +500,7 @@ def update_hysteria2_auto8(config, values):
 def selectable_outbounds(config):
     return [
         outbound for outbound in config.get('outbounds', [])
-        if outbound.get('type') in ('vless', 'urltest') and outbound.get('tag')
+        if outbound.get('type') in ('vless', 'hysteria2', 'urltest') and outbound.get('tag')
     ]
 
 
@@ -509,6 +509,146 @@ def set_default_outbound(config, tag):
     if tag not in allowed_tags:
         raise ValueError('Выбранный исходящий профиль не существует.')
     config.setdefault('route', {})['final'] = tag
+    return tag
+
+
+def managed_server_outbounds(config):
+    return [item for item in config.get('outbounds', []) if item.get('tag') and item.get('type') in ('vless', 'hysteria2')]
+
+
+def next_server_tag(config):
+    tags = {item.get('tag') for item in config.get('outbounds', [])}
+    for index in range(1, 1000):
+        tag = f'auto-{index}'
+        if tag not in tags:
+            return tag
+    raise ValueError('Нет свободного auto-N tag.')
+
+
+def import_xray_outbound(source, tag):
+    protocol = source.get('protocol', '')
+    settings = source.get('settings', {})
+    stream = source.get('streamSettings', {})
+    if protocol == 'hysteria':
+        hysteria = stream.get('hysteriaSettings', {})
+        password = hysteria.get('auth') or settings.get('auth') or source.get('password')
+        if not password:
+            raise ValueError('В Xray Hysteria2 JSON отсутствует полный auth.')
+        tls_settings = stream.get('tlsSettings', {})
+        tls = {'enabled': True, 'alpn': tls_settings.get('alpn') or ['h3']}
+        if tls_settings.get('serverName'):
+            tls['server_name'] = validate_server(tls_settings['serverName'], 'Hysteria2 SNI')
+        server = settings.get('address') or settings.get('server')
+        port = settings.get('port') or settings.get('server_port')
+        return {
+            'type': 'hysteria2', 'tag': tag,
+            'server': validate_server(str(server or ''), 'Server'),
+            'server_port': require_port(str(port or '')),
+            'password': str(password), 'tls': tls,
+        }
+    if protocol != 'vless':
+        raise ValueError('Импорт поддерживает Xray VLESS/Hysteria2 или sing-box VLESS/Hysteria2 outbound.')
+    servers = settings.get('vnext', [])
+    server = servers[0] if servers else {}
+    user = next((item for item in server.get('users', []) if item.get('id')), None)
+    if user is None:
+        raise ValueError('В Xray VLESS JSON отсутствует UUID пользователя.')
+    network = stream.get('network', 'tcp')
+    security = stream.get('security', '')
+    tls_source = stream.get('realitySettings' if security == 'reality' else 'tlsSettings', {})
+    tls = {'enabled': True}
+    if tls_source.get('serverName'):
+        tls['server_name'] = validate_server(tls_source['serverName'], 'SNI')
+    if security == 'reality':
+        public_key = tls_source.get('publicKey', '')
+        short_id = str(tls_source.get('shortId', '')).lower()
+        if not PUBLIC_KEY_PATTERN.fullmatch(public_key) or not SHORT_ID_PATTERN.fullmatch(short_id):
+            raise ValueError('Xray REALITY publicKey или shortId некорректен.')
+        tls['reality'] = {'enabled': True, 'public_key': public_key, 'short_id': short_id}
+    elif security not in ('tls', ''):
+        raise ValueError('Для импорта поддерживается TLS или REALITY.')
+    outbound = {
+        'type': 'vless', 'tag': tag,
+        'server': validate_server(server.get('address', ''), 'Server'),
+        'server_port': require_port(str(server.get('port', ''))),
+        'uuid': str(user['id']), 'tls': tls,
+    }
+    flow = user.get('flow', '')
+    if flow:
+        if flow != 'xtls-rprx-vision':
+            raise ValueError('Неподдерживаемый VLESS flow.')
+        outbound['flow'] = flow
+    if network == 'grpc':
+        outbound['transport'] = {'type': 'grpc', 'service_name': stream.get('grpcSettings', {}).get('serviceName', 'grpc')}
+    elif network != 'tcp':
+        raise ValueError('Для Xray VLESS поддерживаются TCP и gRPC.')
+    return outbound
+
+
+def import_server_json(raw, config, replace_tag='', requested_tag=''):
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError('Импорт: некорректный JSON.') from error
+    if not isinstance(payload, dict):
+        raise ValueError('Импортируйте JSON-объект сервера или полный JSON config.')
+    source = payload
+    xray_protocol = payload.get('protocol')
+    sing_box_type = payload.get('type')
+    if not xray_protocol and sing_box_type not in ('vless', 'hysteria2'):
+        source = next((item for item in payload.get('outbounds', []) if item.get('type') in ('vless', 'hysteria2') or item.get('protocol') in ('vless', 'hysteria', 'hysteria2')), None)
+        if source is None:
+            raise ValueError('В JSON не найден VLESS или Hysteria2 outbound.')
+        xray_protocol = source.get('protocol')
+        sing_box_type = source.get('type')
+    if replace_tag:
+        tag = replace_tag
+        if not any(item.get('tag') == tag for item in managed_server_outbounds(config)):
+            raise ValueError('Можно заменять только существующие VLESS/Hysteria2 профили.')
+    else:
+        tag = requested_tag or next_server_tag(config)
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', tag):
+            raise ValueError('Tag содержит недопустимые символы.')
+        if any(item.get('tag') == tag for item in config.get('outbounds', [])):
+            raise ValueError('Такой tag уже существует; выберите его в списке замены.')
+    if sing_box_type in ('vless', 'hysteria2'):
+        outbound = json.loads(json.dumps(source))
+        outbound['tag'] = tag
+    elif xray_protocol in ('vless', 'hysteria', 'hysteria2'):
+        outbound = import_xray_outbound(source, tag)
+    else:
+        raise ValueError('Поддерживается импорт sing-box/Xray VLESS и Hysteria2.')
+    if outbound.get('type') not in ('vless', 'hysteria2'):
+        raise ValueError('Импортируемый outbound должен быть VLESS или Hysteria2.')
+    config['outbounds'] = [item for item in config.get('outbounds', []) if item.get('tag') != tag]
+    config['outbounds'].append(outbound)
+    selector = next((item for item in config['outbounds'] if item.get('type') == 'urltest' and item.get('tag') == 'vless-auto'), None)
+    if selector is not None and tag not in selector.setdefault('outbounds', []):
+        selector['outbounds'].append(tag)
+    return tag
+
+
+def remove_server_json(config, tag):
+    managed = managed_server_outbounds(config)
+    if not any(item.get('tag') == tag for item in managed):
+        raise ValueError('Можно удалить только существующий VLESS/Hysteria2 сервер.')
+    if len(managed) <= 1:
+        raise ValueError('Нельзя удалить последний VPN-сервер.')
+    selectors = [item for item in config.get('outbounds', []) if item.get('type') == 'urltest' and tag in item.get('outbounds', [])]
+    if any(len(item.get('outbounds', [])) <= 1 for item in selectors):
+        raise ValueError('Нельзя удалить последний outbound из urltest selector.')
+    config['outbounds'] = [item for item in config.get('outbounds', []) if item.get('tag') != tag]
+    for selector in config.get('outbounds', []):
+        if selector.get('type') == 'urltest':
+            selector['outbounds'] = [member for member in selector.get('outbounds', []) if member != tag]
+    route_rules = config.get('route', {}).get('rules', [])
+    config.setdefault('route', {})['rules'] = [
+        rule for rule in route_rules
+        if rule.get('outbound') != tag and rule.get('outboundTag') != tag
+    ]
+    if config.get('route', {}).get('final') == tag:
+        urltest = next((item.get('tag') for item in config.get('outbounds', []) if item.get('type') == 'urltest'), None)
+        config.setdefault('route', {})['final'] = urltest or managed_server_outbounds(config)[0]['tag']
     return tag
 
 
@@ -734,6 +874,7 @@ def message_banner(message, kind):
 
 def render_page(config, selected_tag, message='', kind='success'):
     all_profiles = profiles(config)
+    all_servers = managed_server_outbounds(config)
     if not all_profiles:
         raise RuntimeError('VLESS-профили не найдены.')
     selected = next((item for item in all_profiles if item.get('tag') == selected_tag), all_profiles[0])
@@ -741,10 +882,11 @@ def render_page(config, selected_tag, message='', kind='success'):
     state = dashboard_state()
     current_route = config.get('route', {}).get('final', '')
     sidebar = []
-    for item in all_profiles:
+    for item in all_servers:
         tag = item.get('tag', '')
         active = ' active' if tag == values['tag'] else ''
-        sidebar.append(f'<a class="profile-link{active}" href="/?profile={esc(tag)}"><span class="profile-dot"></span><span>{esc(tag)}</span></a>')
+        href = f'/?profile={esc(tag)}' if item.get('type') == 'vless' else f'/outbounds?tag={esc(tag)}'
+        sidebar.append(f'<a class="profile-link{active}" href="{href}"><span class="profile-dot"></span><span>{esc(tag)}</span></a>')
     fingerprint_options = select_options(FINGERPRINTS, values['fingerprint'])
     flow_options = select_options(FLOWS, values['flow'], 'без Vision')
     transport_options = select_options(TRANSPORTS, values['transport'])
@@ -900,7 +1042,7 @@ button.danger {{ border-color: rgba(251, 113, 133, .48); color: #fda4af; }}
 <aside class="sidebar">
     <div><div class="brand"><img class="brand-mark" src="/favicon.png" alt=""><span>FOCUSLENS.DEV<small>VLESS Gateway</small></span></div></div>
   <div><div class="label">Профили</div><nav class="profile-list">{''.join(sidebar)}</nav></div>
-    <div><div class="label">Управление</div><nav class="profile-list"><a class="profile-link" data-panel-nav="wireguard" href="/wireguard"><span class="profile-dot"></span><span>WireGuard</span></a><a class="profile-link" data-panel-nav="happ-routing" href="/happ-routing"><span class="profile-dot"></span><span>HAPP Direct</span></a><a class="profile-link" data-panel-nav="happ-server" href="/happ-server"><span class="profile-dot"></span><span>HAPP Server</span></a></nav></div>
+    <div><div class="label">Управление</div><nav class="profile-list"><a class="profile-link" data-panel-nav="outbounds" href="/outbounds"><span class="profile-dot"></span><span>VPN-серверы</span></a><a class="profile-link" data-panel-nav="wireguard" href="/wireguard"><span class="profile-dot"></span><span>WireGuard</span></a><a class="profile-link" data-panel-nav="happ-routing" href="/happ-routing"><span class="profile-dot"></span><span>HAPP Direct</span></a><a class="profile-link" data-panel-nav="happ-server" href="/happ-server"><span class="profile-dot"></span><span>HAPP Server</span></a></nav></div>
   <div class="sidebar-foot">Доступен только из WireGuard</div>
 </aside>
 <main class="main">
@@ -1018,7 +1160,7 @@ def render_vless_page(config, selected_tag, message='', kind='success'):
         <section class="panel"><h2>Исходящий профиль</h2><form method="post" action="/vless/route"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="route_final">Маршрут по умолчанию</label><select id="route_final" name="route_final">{''.join(route_options)}</select></div><div class="actions"><button type="submit">Применить профиль</button></div></form></section>
     </aside>
 </div>'''
-        return render_shell('VLESS', body, 'vless', [item.get('tag', '') for item in all_profiles], tag)
+        return render_shell('VLESS', body, 'vless', [item.get('tag', '') for item in managed_server_outbounds(config)], tag)
 
 
 def render_settings_page(config, query, message='', kind='success'):
@@ -1090,7 +1232,37 @@ def render_settings_page(config, query, message='', kind='success'):
     <section class="panel"><h2>HAPP Server</h2><div class="settings-grid"><form method="post" action="/settings/happ/state"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_state_json">Public link JSON</label><textarea id="happ_state_json" name="happ_state_json" spellcheck="false">{esc(happ_state)}</textarea></div><div class="actions"><button type="submit">Сохранить Public link</button></div></form><form method="post" action="/settings/happ/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_config_json">sing-box HAPP Server JSON</label><textarea id="happ_config_json" name="happ_config_json" spellcheck="false">{esc(happ_config)}</textarea></div><div class="actions"><button class="danger" type="submit">Проверить и применить HAPP config</button></div></form></div><form method="post" action="/settings/happ/restart"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit">Перезапустить HAPP Server</button></div></form></section>
     <section class="panel"><h2>Доступ к панели</h2><form method="post" action="/settings/password" autocomplete="new-password"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="new_password">Новый пароль</label><input id="new_password" name="new_password" type="password" minlength="12" required></div><div class="field"><label for="confirm_password">Повторите пароль</label><input id="confirm_password" name="confirm_password" type="password" minlength="12" required></div></div><div class="actions"><button class="danger" type="submit">Обновить пароль</button></div></form></section>
 </div>'''
-        return render_shell('Настройки', body, 'settings', [item.get('tag', '') for item in all_profiles], selected_tag)
+        return render_shell('Настройки', body, 'settings', [item.get('tag', '') for item in managed_server_outbounds(config)], selected_tag)
+
+
+def render_outbounds_page(config, query, message='', kind='success'):
+    servers = managed_server_outbounds(config)
+    current_route = config.get('route', {}).get('final', '')
+    server_options = ''.join(f'<option value="{esc(item["tag"])}">{esc(item["tag"])} · {esc(item["type"])}</option>' for item in servers)
+    rows = []
+    for outbound in servers:
+        tag = outbound['tag']
+        selected = ' selected' if current_route == tag else ''
+        rows.append(
+            '<tr>'
+            f'<td><strong>{esc(tag)}</strong></td>'
+            f'<td>{esc(outbound["type"])}</td>'
+            f'<td>{esc(outbound.get("server", ""))}</td>'
+            f'<td>{esc(outbound.get("server_port", ""))}</td>'
+            f'<td>{"active" if current_route == tag else ""}</td>'
+            f'<td><form method="post" action="/outbounds/route"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit"{ " disabled" if current_route == tag else ""}>Использовать</button></form></td>'
+            f'<td><form method="post" action="/outbounds/delete" data-outbound-delete><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="danger" type="submit"{ " disabled" if len(servers) <= 1 else ""}>Удалить</button></form></td>'
+            '</tr>'
+        )
+    if not rows:
+        rows.append('<tr><td class="empty" colspan="7">Нет импортированных серверов.</td></tr>')
+    body = f'''<section class="page-head"><div><p class="eyebrow">Outbound manager</p><h1>VPN-серверы</h1><p class="subtitle">Импортируйте JSON сервера, добавляйте его в vless-auto или удаляйте ненужные профили.</p></div></section>
+{message_banner(message, kind)}
+<div class="panel-stack">
+    <section class="panel"><h2>Настроенные серверы</h2><div class="table-wrap"><table><thead><tr><th>Tag</th><th>Тип</th><th>Сервер</th><th>Порт</th><th>Маршрут</th><th></th><th></th></tr></thead><tbody>{''.join(rows)}</tbody></table></div><p class="muted">Текущий маршрут: <strong>{esc(current_route)}</strong></p></section>
+    <section class="panel"><h2>Импорт JSON</h2><p class="muted">Поддерживается sing-box outbound и Xray VLESS/Hysteria2 outbound или полный Xray config. Новый сервер добавится в `vless-auto`; default route не изменится.</p><form method="post" action="/outbounds/import"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="import_replace_tag">Заменить существующий сервер</label><select id="import_replace_tag" name="replace_tag"><option value="">Добавить новым auto-N</option>{server_options}</select></div><div class="field"><label for="import_tag">Tag при импорте нового</label><input id="import_tag" name="import_tag" placeholder="auto-N, оставить пустым для автоматического"></div><div class="field full"><label for="outbound_json">JSON конфигурации</label><textarea id="outbound_json" name="outbound_json" spellcheck="false" required placeholder="Вставьте сюда JSON VPN-сервера"></textarea></div></div><div class="actions"><button type="submit">Проверить и импортировать</button></div></form></section>
+</div><dialog class="gateway-dialog" data-outbound-delete-dialog><form method="dialog"><h2>Удалить VPN-сервер?</h2><p data-outbound-delete-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-outbound-delete-confirm>Удалить</button></div></form></dialog>'''
+    return render_shell('VPN-серверы', body, 'outbounds', [item.get('tag', '') for item in servers], '')
 
 
 class VpnOnlyServer(ThreadingHTTPServer):
@@ -1338,6 +1510,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', '0')
         self.end_headers()
 
+    def redirect_outbounds(self, message='', kind='success'):
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_common_headers()
+        self.send_header('Location', '/outbounds?' + urlencode({'message': message, 'kind': kind}))
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
     def redirect_to(self, location):
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_common_headers()
@@ -1439,6 +1618,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_html(HTTPStatus.OK, render_settings_page(config, query, form_value(query, 'message'), form_value(query, 'kind') or 'success'))
             except (WgEasyApiError, ValueError, RuntimeError, OSError, json.JSONDecodeError) as error:
                 self.send_html(HTTPStatus.BAD_GATEWAY, f'<h1>Настройки временно недоступны</h1><p>{esc(error)}</p>')
+            return
+        if parsed.path == '/outbounds':
+            query = parse_qs(parsed.query)
+            try:
+                self.send_html(HTTPStatus.OK, render_outbounds_page(load_config(), query, form_value(query, 'message'), form_value(query, 'kind') or 'success'))
+            except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as error:
+                self.send_html(HTTPStatus.BAD_GATEWAY, f'<h1>VPN-серверы временно недоступны</h1><p>{esc(error)}</p>')
             return
         if parsed.path not in ('/', '/vless'):
             self.send_empty(HTTPStatus.NOT_FOUND)
@@ -1583,6 +1769,67 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect_settings(form_value(locals().get('values', {}), 'profile_tag'), str(error), 'error')
             except Exception:
                 self.redirect_settings('', 'Настройки не применены. Текущая конфигурация сохранена.', 'error')
+            return
+        if path.startswith('/outbounds/'):
+            try:
+                values = self.parse_form()
+                with CONFIG_LOCK:
+                    config = load_config()
+                    if path == '/outbounds/import':
+                        tag = form_value(values, 'replace_tag') or form_value(values, 'import_tag')
+                        tag = imported_server_outbound(form_value(values, 'outbound_json'), config, tag)
+                        apply_configuration(config)
+                        self.redirect_outbounds(f'Сервер {tag} импортирован и проверен.')
+                        return
+                    if path == '/outbounds/delete':
+                        tag = delete_server_outbound(config, form_value(values, 'tag'))
+                        apply_configuration(config)
+                        self.redirect_outbounds(f'Сервер {tag} удалён.')
+                        return
+                    if path == '/outbounds/route':
+                        tag = set_default_outbound(config, form_value(values, 'tag'))
+                        apply_configuration(config)
+                        self.redirect_outbounds(f'Маршрут переключён на {tag}.')
+                        return
+                self.send_empty(HTTPStatus.NOT_FOUND)
+            except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as error:
+                self.redirect_outbounds(str(error), 'error')
+            except Exception:
+                self.redirect_outbounds('Операция не выполнена; конфигурация осталась прежней.', 'error')
+            return
+        if path.startswith('/outbounds/'):
+            try:
+                values = self.parse_form()
+                with CONFIG_LOCK:
+                    config = load_config()
+                    if path == '/outbounds/import':
+                        tag = import_server_json(
+                            form_value(values, 'outbound_json'),
+                            config,
+                            form_value(values, 'replace_tag'),
+                            form_value(values, 'import_tag'),
+                        )
+                        applied = apply_configuration(config)
+                        message = f'Сервер {tag} импортирован и добавлен в selector.' if applied else f'Сервер {tag} сохранён; он применится после переключения в режим VLESS.'
+                        self.redirect_outbounds(message)
+                        return
+                    if path == '/outbounds/delete':
+                        tag = remove_server_json(config, form_value(values, 'tag'))
+                        applied = apply_configuration(config)
+                        message = f'Сервер {tag} удалён.' if applied else f'Сервер {tag} удалён из конфигурации; изменение применится в режиме VLESS.'
+                        self.redirect_outbounds(message)
+                        return
+                    if path == '/outbounds/route':
+                        tag = set_default_outbound(config, form_value(values, 'tag'))
+                        applied = apply_configuration(config)
+                        message = f'Маршрут переключён на {tag}.' if applied else f'Маршрут {tag} сохранён и применится в режиме VLESS.'
+                        self.redirect_outbounds(message)
+                        return
+                self.send_empty(HTTPStatus.NOT_FOUND)
+            except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as error:
+                self.redirect_outbounds(str(error), 'error')
+            except Exception:
+                self.redirect_outbounds('Операция не выполнена; текущая конфигурация сохранена.', 'error')
             return
         if path.startswith('/wireguard/'):
             try:

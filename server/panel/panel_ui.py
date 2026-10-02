@@ -17,7 +17,7 @@ def load_profile_tags():
     return [
         outbound.get('tag', '')
         for outbound in config.get('outbounds', [])
-        if outbound.get('type') == 'vless' and outbound.get('tag')
+      if outbound.get('type') in ('vless', 'hysteria2') and outbound.get('tag')
     ]
 
 
@@ -27,9 +27,10 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
     wireguard_active = ' active' if active == 'wireguard' else ''
     happ_active = ' active' if active == 'happ-server' else ''
     settings_active = ' active' if active == 'settings' else ''
+    outbounds_active = ' active' if active == 'outbounds' else ''
     profile_markup = ''.join(
         f'<a class="profile-link{" active" if tag == selected_profile else ""}" '
-        f'href="/vless?profile={esc(tag)}"><span class="nav-dot"></span>{esc(tag)}</a>'
+        f'href="/outbounds?tag={esc(tag)}"><span class="nav-dot"></span>{esc(tag)}</a>'
         for tag in tags
     ) or '<span class="nav-empty">Нет VLESS-профилей</span>'
     return f'''<!doctype html>
@@ -48,6 +49,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
     <nav class="app-nav" aria-label="Управление VPN">
       <section class="nav-section nav-vless">
         <a class="nav-link{vless_active}" data-panel-nav="vless" href="/vless"><span class="nav-dot"></span>VLESS</a>
+        <a class="nav-link{outbounds_active}" data-panel-nav="outbounds" href="/outbounds"><span class="nav-dot"></span>VPN-серверы</a>
         <div class="profile-list">{profile_markup}</div>
       </section>
       <section class="nav-section">
@@ -61,7 +63,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
   </aside>
   <div class="app-content"><main class="main">{body}</main></div>
 </div>
-<script src="/panel.js?v=9" defer></script>
+<script src="/panel.js?v=10" defer></script>
 <script src="/happ-actions.js?v=6" defer></script>
 </body>
 </html>'''

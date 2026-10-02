@@ -19,6 +19,7 @@
 - Единый shell главной VLESS-страницы для VLESS, WireGuard, HAPP Server и Settings.
 - Settings управляет VLESS, WireGuard, HAPP Server и паролем панели; HAPP config проходит validation и rollback.
 - Режим шлюза переключается между VLESS и внешним WireGuard-клиентом; при WireGuard VLESS/TProxy приостановлен, трафик VPN-клиентов идёт через туннель, LAN остаётся напрямую.
+- VPN-серверы управляются в `/outbounds`: импорт sing-box/Xray VLESS и Hysteria2 JSON, замена профиля, удаление с синхронизацией `vless-auto` и выбор default route.
 - Конфигурация внешнего WireGuard принимается в Settings, хранится root-only и не отображается повторно; выбранный режим восстанавливается после перезагрузки.
 - Public-only HAPP `vless://` и QR-модальное окно.
 - Панель WireGuard показывает пять статусных карточек: онлайн, всего, DL/UL, WAN IP и uptime сервиса.

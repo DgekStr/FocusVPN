@@ -1,5 +1,5 @@
 (() => {
-  const views = new Set(['/', '/vless', '/wireguard', '/happ-server', '/settings']);
+  const views = new Set(['/', '/vless', '/outbounds', '/wireguard', '/happ-server', '/settings']);
   let navigating = false;
   let wireGuardLiveTimer = null;
   let wireGuardLiveLoading = false;
@@ -207,6 +207,18 @@
   });
 
   document.addEventListener('submit', (event) => {
+    const deleteForm = event.target.closest('form[data-outbound-delete]');
+    const deleteDialog = document.querySelector('[data-outbound-delete-dialog]');
+    if (deleteForm && deleteForm.dataset.confirmed !== 'true' && deleteDialog) {
+      event.preventDefault();
+      pendingGatewayForm = deleteForm;
+      const name = deleteForm.querySelector('input[name="tag"]')?.value || '';
+      const message = deleteDialog.querySelector('[data-outbound-delete-message]');
+      if (message) message.textContent = `Профиль ${name} будет удалён из конфигурации и selector.`;
+      deleteDialog.showModal();
+      deleteDialog.querySelector('[data-outbound-delete-confirm]')?.focus();
+      return;
+    }
     const form = event.target.closest('form[data-gateway-mode]');
     const dialog = document.querySelector('[data-gateway-dialog]');
     if (!form || form.dataset.confirmed === 'true' || !dialog) return;
@@ -224,6 +236,14 @@
   });
 
   document.addEventListener('click', (event) => {
+    if (event.target.closest('[data-outbound-delete-confirm]') && pendingGatewayForm) {
+      const form = pendingGatewayForm;
+      pendingGatewayForm = null;
+      document.querySelector('[data-outbound-delete-dialog]')?.close();
+      form.dataset.confirmed = 'true';
+      form.requestSubmit();
+      return;
+    }
     if (!event.target.closest('[data-gateway-dialog-confirm]') || !pendingGatewayForm) return;
     const form = pendingGatewayForm;
     pendingGatewayForm = null;

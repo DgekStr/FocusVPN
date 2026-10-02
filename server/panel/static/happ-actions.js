@@ -70,8 +70,8 @@
     const caption = modal?.querySelector('[data-qr-caption]');
     if (opener && modal && image) {
       event.preventDefault();
-      const label = 'Public-ссылка';
-      image.src = '/happ-qr?v=2';
+      const label = opener.dataset.qrLabel || 'VIP-ссылка';
+      image.src = opener.dataset.qrUrl || '/happ-qr?v=3';
       image.alt = `QR-код HAPP: ${label}`;
       if (caption) caption.textContent = `Отсканируйте ${label} в приложении HAPP.`;
       modal.hidden = false;
@@ -85,5 +85,20 @@
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeQr();
+  });
+
+  document.addEventListener('submit', (event) => {
+    const form = event.target.closest('form[action="/happ-users/action"]');
+    if (!form || event.submitter?.value !== 'delete' || form.dataset.confirmed === 'true') return;
+    event.preventDefault();
+    const dialog = document.querySelector('[data-happ-user-delete-dialog]');
+    if (!dialog) return;
+    dialog.showModal();
+    const confirm = dialog.querySelector('[data-happ-user-delete-confirm]');
+    confirm.onclick = () => {
+      dialog.close();
+      form.dataset.confirmed = 'true';
+      form.requestSubmit(event.submitter);
+    };
   });
 })();

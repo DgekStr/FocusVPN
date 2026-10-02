@@ -1,8 +1,10 @@
-# FocusVPN
+# FocusVPN v2.0
 
 Единый VPN-шлюз и административная панель для WireGuard, sing-box и HAPP.
 
-Состояние проекта зафиксировано: **2026-10-02**.
+Состояние проекта зафиксировано: **2026-10-03**.
+
+Текущая версия: **v2.0**. Базовая версия **v1.0** соответствует ранее опубликованному коммиту `3f48b16`; история Git не переписывается.
 
 ## Что готово
 
@@ -24,6 +26,14 @@
 - Журнал `/gateway-journal` фиксирует циклы и смену шлюза; уведомления Mattermost отправляются через сохранённый webhook в фоне. URL хранится приватно и не возвращается в интерфейс.
 - Исходный WireGuard-конфиг сохраняется с правами `0600` и повторно заполняет поле в авторизованных Settings; рабочий профиль не меняет DNS хоста. Выбранный режим восстанавливается после перезагрузки.
 - Public-only HAPP `vless://` и QR-модальное окно.
+- Персональные пользователи HAPP получают отдельные UUID, ссылки и QR на существующем входе `9445`; доступны включение, отзыв, удаление и срок действия UTC. Общая VIP-ссылка сохраняется в Settings и не ротируется; применение пользователей может кратко переподключить сессии.
+- Статистика HAPP показывает подтверждённое имя, скачано/отправлено по соединению и live-сумму по пользователям. Сопоставление использует журнал аутентификации, не один IP; VIP и неопределённые записи показываются отдельно. Счётчики относятся только к активным соединениям.
+- История HAPP хранится в приватной SQLite-базе `/mnt/stat/`: фоновый сбор соединений/посещений и максимальных наблюдаемых счётчиков, фильтры по пользователю и датам, очистка по сроку из Settings (60 дней по умолчанию), экспорт настоящего XLS. В HTTPS доступен домен/IP и порт, не полный путь страницы; неизвестные финальные байты не подменяются нулём.
+- После «Открыть HAPP» в строке персонального пользователя показаны скачано/отправлено по сохранённой истории, включая закрытые соединения; счётчики обновляются в браузере. Это наблюдаемый трафик за срок хранения, не пожизненный биллинг.
+- «Открыть HAPP» добавляет персональную HTTP-подписку со статистикой `subscription-userinfo`, безлимитом `total=0` и запросом обновления раз в час. Название начинается с «🖧 FocusVPN» и имени пользователя как при копировании подписки, так и при открытии HAPP. HAPP показывает сумму upload + download / безлимит. Исходный VLESS и QR не изменены. Секретный токен даёт доступ только к своему аккаунту и отзывается при отключении/удалении/истечении срока.
+- Подписки передают короткое уведомление о частном VPN для команды focuslens.dev через `announce`, сохраняя эмодзи и лимит HAPP. `/happ-info` показывает уведомление с выравниванием по ширине; выравнивание внутри самого HAPP задаёт клиент.
+- Даты истории, XLS и проверки отклика отображаются как `dd.mm.yyyy HH:MM:SS` в UTC; исходные timestamps в базе/API остаются ISO.
+- Сетевой допуск панели настраивается через `FOCUSVPN_ADMIN_NETWORK`; по умолчанию остаются LAN/VPN/management. На текущем сервере включён `0.0.0.0/0` для `9443`, в приложении и firewall, с сохранением авторизации, токенов и защиты `51821`. HTTP не шифруется; для недоверенных сетей нужен HTTPS. Проброс NAT не меняется автоматически.
 - Панель WireGuard показывает пять статусных карточек: онлайн, всего, DL/UL, WAN IP и uptime сервиса.
 
 ## Endpoints
@@ -36,13 +46,16 @@
 | HAPP Server | `http://<gateway-host>:9443/happ-server` |
 | Настройки | `http://<gateway-host>:9443/settings` |
 | Журнал переключений | `http://<gateway-host>:9443/gateway-journal` |
+| История HAPP | `http://<gateway-host>:9443/happ-history` |
+| Информация о подписке | `http://<gateway-host>:9443/happ-info` |
+| Персональная подписка | `http://<gateway-host>:9443/happ-subscription/<secret-token>` |
 | HAPP VLESS inbound | `<public-ip-or-domain>:9445` |
 
-Панель разрешена из `<wireguard-client-network>`, `<lan-network>` и `<management-network>`. Порт `9445` требует внешнего TCP-проброса на `<gateway-host>:9445`, если сервер находится за NAT.
+По умолчанию панель разрешена из `<wireguard-client-network>`, `<lan-network>` и `<management-network>`. Дополнительную IPv4-сеть задаёт `FOCUSVPN_ADMIN_NETWORK`; на текущем сервере включён `0.0.0.0/0`. Админка по-прежнему требует входа, подписки - секретного токена аккаунта. Порт `9443` использует HTTP без шифрования: для недоверенных сетей нужен HTTPS. Порт `9445` требует внешнего TCP-проброса на `<gateway-host>:9445`, если сервер находится за NAT.
 
 ## Установка
 
-Оптимальный путь развёртывания - `git clone` и идемпотентный installer из этого репозитория. Он поддерживает Debian 12+ и Ubuntu 22.04+ на `amd64` и `arm64`, устанавливает sing-box `1.14.2`, Docker, systemd units, panel и безопасные templates. Runtime-секреты никогда не берутся из Git.
+Оптимальный путь развёртывания - `git clone` и идемпотентный installer из этого репозитория. Он поддерживает Debian 12+ и Ubuntu 22.04+ на `amd64` и `arm64`, устанавливает sing-box `1.14.2`, Docker, systemd units, panel, VERSION и безопасные templates. Для XLS устанавливается `python3-xlwt`. Runtime-секреты никогда не берутся из Git.
 
 Перед началом подготовьте root-доступ, рабочий DNS/интернет на сервере и консольный доступ: после включения firewall панель и wg-easy UI будут ограничены заданными сетями.
 
@@ -51,6 +64,7 @@
     ```bash
     git clone https://github.com/DgekStr/FocusVPN.git
     cd FocusVPN
+    git checkout v2.0
     sudo ./scripts/install.sh
     ```
 
@@ -61,6 +75,8 @@
     ```
 
     Укажите как минимум `FOCUSVPN_WG_INTERFACE`, `FOCUSVPN_WG_NETWORK`, `FOCUSVPN_LAN_NETWORK`, `FOCUSVPN_MANAGEMENT_NETWORK` и `FOCUSVPN_WG_FALLBACK_GATEWAY`. Значения по умолчанию соответствуют текущей тестовой схеме: `wg0`, `10.8.0.0/24`, `192.168.0.0/24`, `10.1.17.0/24`.
+
+    Для персональных подписок укажите доступный клиентам `FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL`; default - LAN-адрес `http://192.168.0.39:9443`. `FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0` явно расширяет допуск ко всему IPv4, не отключая авторизацию и не настраивая HTTPS/NAT.
 
 3. Заполните templates реальными значениями. Не оставляйте `<placeholder>` и не публикуйте эти файлы.
 
@@ -97,7 +113,8 @@
 
 ```bash
 cd FocusVPN
-git pull --ff-only
+git fetch --tags
+git checkout v2.0
 sudo ./scripts/install.sh
 sudo ./scripts/install.sh --enable
 
@@ -139,9 +156,14 @@ Mattermost webhook вводится в Settings и хранится приват
 ## Проверки разработки
 
 ```powershell
+py -3 -m pip install xlwt==1.3.0
 py -3 scripts/test_route_sync.py
 py -3 scripts/test_vless_monitor.py
+py -3 scripts/test_happ_users.py
+py -3 scripts/test_happ_stats.py
+py -3 scripts/test_happ_history.py
 node scripts/test_panel_checks.js
+node scripts/test_happ_stats_ui.js
 .\scripts\validate.ps1
 ```
 
@@ -157,14 +179,25 @@ node scripts/test_panel_checks.js
 - `docs/OPERATIONS.md` — эксплуатация и деплой.
 - `docs/PROJECT_STATUS.md` — закрытые вехи и текущий статус.
 - `docs/ROADMAP.md` — следующие этапы.
+- `docs/CHANGELOG.md` — изменения v2.0 и базовой v1.0.
+- `VERSION` — единый номер версии runtime и релиза.
+- `scripts/render_previews.py` — безопасные актуальные renderer для скриншотов.
 - `docs/screenshots/` — обезличенные preview UI.
 - `index.html` — публикационная страница проекта.
 
 ## Screenshots
 
+Скриншоты v2.0 сняты с текущих серверных renderer и обезличенных fixtures, не с реальных пользовательских данных. Они не подтверждают доступность демонстрационных VPN-профилей или импорт внутри Windows HAPP.
+
 ![Project overview](docs/screenshots/project-overview.png)
 
 ![WireGuard and HAPP preview](docs/screenshots/wireguard-and-happ-preview.png)
+
+![VPN servers v2.0](docs/screenshots/vpn-servers.png)
+
+![HAPP history v2.0](docs/screenshots/happ-history.png)
+
+![HAPP mobile v2.0](docs/screenshots/happ-mobile.png)
 
 ## Важно по секретам
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FocusVPN | Project status</title>
+  <title>FocusVPN v2.0 | Project status</title>
   <style>
     :root { --bg:#050816; --surface:#111b34e8; --text:#f5f7ff; --muted:#8ea0be; --line:#ffffff1f; --cyan:#22d3ee; --violet:#7c3aed; --ok:#5eead4; }
     * { box-sizing:border-box; }
@@ -11,7 +11,7 @@
     a { color:inherit; }
     .shell { margin:auto; max-width:1220px; padding:48px 24px 72px; }
     .eyebrow { color:var(--cyan); font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
-    h1 { font-size:clamp(38px,7vw,84px); line-height:.95; margin:16px 0; max-width:850px; }
+    h1 { font-size:56px; line-height:1.05; margin:16px 0; max-width:850px; }
     .lead { color:var(--muted); font-size:20px; max-width:740px; }
     .hero { border-bottom:1px solid var(--line); padding-bottom:42px; }
     .grid { display:grid; gap:16px; grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:28px; }
@@ -25,26 +25,29 @@
     li { margin:8px 0; }
     .links { display:flex; flex-wrap:wrap; gap:10px; margin-top:22px; }
     .links a { border:1px solid var(--line); padding:10px 14px; text-decoration:none; }
+    .screenshot { display:block; width:100%; height:auto; margin-top:20px; }
     @media (max-width:800px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .wide { grid-column:span 2; } }
-    @media (max-width:520px) { .shell { padding:32px 16px 52px; } .grid { grid-template-columns:1fr; } .wide { grid-column:auto; } }
+    @media (max-width:520px) { .shell { padding:32px 16px 52px; } h1 { font-size:36px; } .grid { grid-template-columns:1fr; } .wide { grid-column:auto; } }
   </style>
 </head>
 <body>
   <main class="shell">
     <section class="hero">
-      <div class="eyebrow">FocusVPN / 2026-09-29</div>
-      <h1>Единый шлюз для WireGuard, VLESS и HAPP.</h1>
-      <p class="lead">Проект собран в переносимый пакет: production UI, policy-routing, firewall scripts, systemd units, эксплуатационные документы и обезличенные конфигурационные примеры.</p>
-      <div class="links"><a href="README.md">README</a><a href="docs/PROJECT_STATUS.md">Статус проекта</a><a href="docs/ROADMAP.md">Roadmap</a><a href="docs/OPERATIONS.md">Operations</a></div>
+      <div class="eyebrow">FocusVPN / 2026-10-03</div>
+      <h1>FocusVPN v2.0</h1>
+      <p class="lead">Единый VPN-шлюз: управление серверами, внешним WireGuard, персональными HAPP аккаунтами, подписками и сохранённой историей трафика.</p>
+      <div class="links"><a href="README.md">README</a><a href="docs/PROJECT_STATUS.md">Статус проекта</a><a href="docs/ROADMAP.md">Roadmap</a><a href="docs/OPERATIONS.md">Operations</a><a href="docs/CHANGELOG.md">Изменения</a></div>
     </section>
     <section class="grid">
-      <article class="card"><small>Milestones</small><strong>10/10</strong><span class="muted">локальный пакет готов</span></article>
-      <article class="card"><small>Admin</small><strong>9443</strong><span class="muted">единая private panel</span></article>
+      <article class="card"><small>Версия</small><strong>v2.0</strong><span class="muted">база v1.0: 3f48b16</span></article>
+      <article class="card"><small>Admin</small><strong>9443</strong><span class="muted">вход и токены; HTTP без TLS</span></article>
       <article class="card"><small>HAPP inbound</small><strong>9445</strong><span class="muted">VLESS Reality</span></article>
-      <article class="card"><small>Status</small><strong class="status">Ready</strong><span class="muted">repository опубликован</span></article>
-      <article class="card wide"><small>Done today</small><ul><li>Единый main-page shell и SPA shell.</li><li>WireGuard dashboard с live-метриками.</li><li>Public HAPP Server, QR flows и Settings.</li><li>Пять цветных status cards и responsive layout.</li></ul></article>
+      <article class="card"><small>Python-тесты</small><strong class="status">68</strong><span class="muted">и 2 Node UI-регрессии</span></article>
+      <article class="card wide"><small>Новое в v2.0</small><ul><li>Персональные HAPP пользователи с сохранением VIP.</li><li>SQLite история, retention, фильтры и настоящий XLS.</li><li>Подписки: трафик / безлимит, emoji, уведомление, часовое обновление.</li><li>UTC даты dd.mm.yyyy HH:MM:SS и настраиваемый IPv4-доступ.</li></ul></article>
       <article class="card wide"><small>Publication boundary</small><p class="muted">Секреты, runtime базы, UUID и Reality keys не включены. В репозитории находятся рабочие скрипты и placeholders для controlled deployment.</p></article>
     </section>
+    <section class="section"><h2>Интерфейс v2.0</h2><p class="muted">Текущие renderer с синтетическими данными. Production credentials и история пользователей не публикуются.</p><img class="screenshot" src="docs/screenshots/wireguard-and-happ-preview.png" alt="Персональные пользователи HAPP и статистика v2.0"><img class="screenshot" src="docs/screenshots/happ-history.png" alt="История HAPP с фильтрами и экспортом XLS"></section>
+    <section class="section"><h2>Границы проверки</h2><p class="muted">Наблюдаемые счётчики не являются пожизненным биллингом. Импорт внутри Windows HAPP, доставка Mattermost и внешний WireGuard egress требуют отдельной клиентской или сетевой проверки. На текущем сервере явно разрешён IPv4-доступ к HTTP 9443 из 0.0.0.0/0; авторизация сохранена, HTTPS и NAT не настроены.</p></section>
   </main>
 </body>
 </html>

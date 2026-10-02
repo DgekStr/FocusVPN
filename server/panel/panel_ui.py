@@ -3,6 +3,10 @@ import json
 from pathlib import Path
 
 CONFIG_PATH = Path('/etc/sing-box/config.json')
+VERSION_PATH = Path(__file__).with_name('VERSION')
+if not VERSION_PATH.is_file():
+  VERSION_PATH = Path(__file__).resolve().parents[2] / 'VERSION'
+PROJECT_VERSION = VERSION_PATH.read_text(encoding='utf-8').strip() if VERSION_PATH.is_file() else 'development'
 
 
 def esc(value):
@@ -26,6 +30,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
     wireguard_active = ' active' if active == 'wireguard' else ''
     happ_active = ' active' if active == 'happ-server' else ''
     settings_active = ' active' if active == 'settings' else ''
+    history_active = ' active' if active == 'happ-history' else ''
     outbounds_active = ' active' if active == 'outbounds' else ''
     profile_markup = ''.join(
         f'<a class="profile-link{" active" if tag == selected_profile else ""}" '
@@ -53,15 +58,16 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
       <section class="nav-section">
         <a class="nav-link{wireguard_active}" data-panel-nav="wireguard" href="/wireguard"><span class="nav-dot"></span>WireGuard</a>
         <a class="nav-link{happ_active}" data-panel-nav="happ-server" href="/happ-server"><span class="nav-dot"></span>HAPP Server</a>
+        <a class="nav-link{history_active}" data-panel-nav="happ-history" href="/happ-history"><span class="nav-dot"></span>История HAPP</a>
         <a class="nav-link{settings_active}" data-panel-nav="settings" href="/settings"><span class="nav-dot"></span>Настройки</a>
         <a class="nav-link nav-logout" href="/logout"><span class="nav-dot"></span>Выход</a>
       </section>
     </nav>
-    <div class="sidebar-foot"><span>Private VPN control</span><small>FocusVPN @focuslens.dev v1.1</small></div>
+    <div class="sidebar-foot"><span>VPN control</span><small>FocusVPN @focuslens.dev v{esc(PROJECT_VERSION)}</small></div>
   </aside>
   <div class="app-content"><main class="main">{body}</main></div>
 </div>
-<script src="/panel.js?v=13" defer></script>
-<script src="/happ-actions.js?v=6" defer></script>
+<script src="/panel.js?v=17" defer></script>
+<script src="/happ-actions.js?v=7" defer></script>
 </body>
 </html>'''

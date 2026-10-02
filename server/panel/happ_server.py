@@ -1,8 +1,16 @@
 import base64
+import html
 import json
 from pathlib import Path
+from urllib.parse import quote
+
+from happ_users import parse_expiry
 
 STATE_PATH = Path('/etc/sing-box-admin/happ-server.json')
+SUBSCRIPTION_ANNOUNCEMENT = (
+    '🔒Частный VPN для команды разработчиков focuslens.dev.\n'
+    'Вы здесь не случайно. Не делитесь ссылкой🤬: она исключительно для Вас ❤️'
+)
 
 
 def load_state():
@@ -10,8 +18,7 @@ def load_state():
 
 
 def happ_add_link(link):
-    payload = base64.b64encode(link.encode('utf-8')).decode('ascii')
-    return 'happ://add/' + payload
+    return 'happ://add/' + (link if link.startswith(('https://', 'http://')) else quote(link, safe=''))
 
 
 def public_vless_link():
@@ -20,3 +27,24 @@ def public_vless_link():
 
 def public_happ_link():
     return happ_add_link(public_vless_link())
+
+
+def subscription_content(user, traffic, information_url=None):
+    download = max(0, int(traffic.get('download_bytes', 0)))
+    upload = max(0, int(traffic.get('upload_bytes', 0)))
+    userinfo = f'upload={upload}; download={download}; total=0'
+    expiry = parse_expiry(user.get('expires_at'))
+    if expiry is not None:
+        userinfo += '; expire=' + str(int(expiry.timestamp()))
+    title = base64.b64encode(('\U0001f5a7 FocusVPN ' + user['name'])[:25].encode('utf-8')).decode('ascii')
+    headers = {'subscription-userinfo': userinfo, 'profile-update-interval': '1', 'profile-title': 'base64:' + title}
+    headers['announce'] = 'base64:' + base64.b64encode(SUBSCRIPTION_ANNOUNCEMENT.encode('utf-8')).decode('ascii')
+    if information_url:
+        headers['profile-web-page-url'] = information_url
+    body = ''.join(f'#{key}: {value}\n' for key, value in headers.items()) + user['link'] + '\n'
+    return body.encode('utf-8'), headers
+
+
+def subscription_information_page():
+    paragraphs = ''.join('<p>' + html.escape(paragraph) + '</p>' for paragraph in SUBSCRIPTION_ANNOUNCEMENT.split('\n'))
+    return '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>FocusVPN</title><style>body{margin:0;background:#f4f7fa;color:#17252e;font:18px/1.65 Georgia,serif}main{max-width:680px;margin:48px auto;padding:0 24px}h1{font-size:28px}p{text-align:justify;overflow-wrap:anywhere;hyphens:auto}@media(max-width:480px){main{margin:24px auto;padding:0 18px}}</style></head><body><main><h1>FocusVPN</h1>' + paragraphs + '</main></body></html>'

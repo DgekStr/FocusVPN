@@ -69,7 +69,7 @@ esac
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y --no-install-recommends ca-certificates curl docker.io nftables python3 qrencode tar wireguard-tools
+  apt-get install -y --no-install-recommends ca-certificates curl docker.io nftables python3 python3-xlwt qrencode tar wireguard-tools
   systemctl enable --now docker
 }
 
@@ -111,9 +111,10 @@ ensure_sing_box_account() {
 install_tree() {
   install -d -m 0755 "$APP_ROOT/static" /usr/local/libexec /etc/systemd/system/sing-box.service.d
   install -d -m 0750 "$CONFIG_ROOT" "$SING_BOX_ROOT" "$HAPP_ROOT" "$ADMIN_ROOT"
-  install -d -m 0700 "$ADMIN_ROOT/backups" /etc/wg-easy /etc/wireguard
+  install -d -m 0700 "$ADMIN_ROOT/backups" /etc/wg-easy /etc/wireguard /mnt/stat
 
   find "$REPO_ROOT/server/panel" -maxdepth 1 -type f -name '*.py' -exec install -m 0644 {} "$APP_ROOT/" \;
+  install -m 0644 "$REPO_ROOT/VERSION" "$APP_ROOT/VERSION"
   find "$REPO_ROOT/server/panel/static" -maxdepth 1 -type f -exec install -m 0644 {} "$APP_ROOT/static/" \;
   find "$REPO_ROOT/server/libexec" -maxdepth 1 -type f -exec install -m 0750 {} /usr/local/libexec/ \;
   find "$REPO_ROOT/server/systemd" -maxdepth 1 \( -name '*.service' -o -name '*.timer' \) -type f -exec install -m 0644 {} /etc/systemd/system/ \;
@@ -165,12 +166,17 @@ render_template() {
   local source="$1"
   local destination="$2"
   python3 - "$source" "$destination" <<'PY'
+import ipaddress
 import os
 import sys
 from pathlib import Path
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 content = source.read_text(encoding='utf-8')
+admin_network = ipaddress.ip_network(os.environ.get('FOCUSVPN_ADMIN_NETWORK') or os.environ['FOCUSVPN_LAN_NETWORK'], strict=False)
+if admin_network.version != 4:
+  raise ValueError('FOCUSVPN_ADMIN_NETWORK must be an IPv4 network')
+content = content.replace('__FOCUSVPN_ADMIN_NETWORK__', str(admin_network))
 for name in ('FOCUSVPN_WG_INTERFACE', 'FOCUSVPN_WG_NETWORK', 'FOCUSVPN_LAN_NETWORK', 'FOCUSVPN_MANAGEMENT_NETWORK'):
     content = content.replace(f'__{name}__', os.environ[name])
 if '__FOCUSVPN_' in content:

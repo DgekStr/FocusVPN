@@ -1,5 +1,5 @@
 (() => {
-  const views = new Set(['/', '/vless', '/outbounds', '/wireguard', '/happ-server', '/settings', '/gateway-journal']);
+  const views = new Set(['/', '/vless', '/outbounds', '/wireguard', '/happ-server', '/happ-history', '/settings', '/gateway-journal']);
   let navigating = false;
   let wireGuardLiveTimer = null;
   let wireGuardLiveLoading = false;
@@ -8,6 +8,14 @@
   let outboundCheckTimer = null;
   let outboundCheckLoading = false;
   let pendingGatewayForm = null;
+
+  function formatDateTime(value, missing = '—') {
+    if (!value) return missing;
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return missing;
+    const pad = (part) => String(part).padStart(2, '0');
+    return `${pad(date.getUTCDate())}.${pad(date.getUTCMonth() + 1)}.${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+  }
 
   function isViewLink(anchor) {
     if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download')) {
@@ -124,6 +132,33 @@
     if (onlineMetric) onlineMetric.textContent = String(online);
     if (download) download.textContent = payload.download || '0 B';
     if (upload) upload.textContent = payload.upload || '0 B';
+    if (payload.account_traffic) {
+      document.querySelectorAll('[data-happ-account]').forEach((account) => {
+        const totals = payload.account_traffic[account.dataset.happAccount] || {};
+        const received = account.querySelector('[data-account-download]');
+        const sent = account.querySelector('[data-account-upload]');
+        if (received) received.textContent = totals.download || '0 B';
+        if (sent) sent.textContent = totals.upload || '0 B';
+      });
+    }
+    const usersBody = document.querySelector('[data-happ-user-traffic]');
+    if (usersBody) {
+      usersBody.replaceChildren();
+      const users = Array.isArray(payload.users) ? payload.users : [];
+      if (!users.length) {
+        const row = document.createElement('tr');
+        const cell = happCell('Нет активных подключений.');
+        cell.colSpan = 4;
+        cell.className = 'empty';
+        row.append(cell);
+        usersBody.append(row);
+      }
+      users.forEach((user) => {
+        const row = document.createElement('tr');
+        row.append(happCell(user.user_name || 'Не определён'), happCell(String(user.connections || 0)), happCell(user.download || '0 B'), happCell(user.upload || '0 B'));
+        usersBody.append(row);
+      });
+    }
     const body = document.querySelector('[data-happ-connections]');
     if (!body) return;
     body.replaceChildren();
@@ -131,7 +166,7 @@
     if (!connections.length) {
       const row = document.createElement('tr');
       const cell = document.createElement('td');
-      cell.colSpan = 5;
+      cell.colSpan = 7;
       cell.className = 'empty';
       cell.textContent = 'Нет активных подключений.';
       row.append(cell);
@@ -142,7 +177,7 @@
       const row = document.createElement('tr');
       const ip = happCell(connection.ip);
       ip.className = 'client-name';
-      row.append(ip, happCell(connection.duration), happCell(`${connection.download || '0 B'} / ${connection.upload || '0 B'}`), happCell(connection.network), happCell(connection.destination));
+      row.append(happCell(connection.user_name || 'Не определён'), ip, happCell(connection.duration), happCell(connection.download || '0 B'), happCell(connection.upload || '0 B'), happCell(connection.network), happCell(connection.destination));
       body.append(row);
     });
   }
@@ -156,8 +191,10 @@
     const refresh = async () => {
       if (happLiveLoading || document.hidden) return;
       happLiveLoading = true;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 10000);
       try {
-        const response = await fetch('/happ-server/live', { credentials: 'same-origin', cache: 'no-store' });
+        const response = await fetch('/happ-server/live', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
         if (response.status === 401) {
           window.location.reload();
           return;
@@ -167,6 +204,7 @@
       } catch (_) {
         // The next polling interval retries temporary sing-box API failures.
       } finally {
+        window.clearTimeout(timeout);
         happLiveLoading = false;
       }
     };
@@ -196,7 +234,7 @@
         const monitorStatus = document.querySelector('form[action="/settings/vless-monitor"]')?.closest('section')?.querySelector('p.muted');
         if (monitorStatus && payload.automation) {
           const automation = payload.automation;
-          const text = `Последняя проверка: ${automation.last_checked_at || 'ещё не выполнялась'}. Кандидат: ${automation.candidate || 'нет'} · ${automation.streak || 0}/3.${automation.running ? ' Цикл выполняется.' : ''}`;
+          const text = `Последняя проверка: ${formatDateTime(automation.last_checked_at, 'ещё не выполнялась')}. Кандидат: ${automation.candidate || 'нет'} · ${automation.streak || 0}/3.${automation.running ? ' Цикл выполняется.' : ''}`;
           if (monitorStatus.textContent !== text) monitorStatus.textContent = text;
         }
         const checks = new Map((Array.isArray(payload.checks) ? payload.checks : []).map((check) => [check.tag, check]));
@@ -233,7 +271,7 @@
           const latency = row?.querySelector('[data-outbound-latency]');
           const checkedAt = row?.querySelector('[data-outbound-checked-at]');
           if (latency) latency.textContent = typeof check.latency_ms === 'number' ? check.latency_ms.toFixed(2) : '—';
-          if (checkedAt) checkedAt.textContent = check.checked_at || '—';
+          if (checkedAt) checkedAt.textContent = formatDateTime(check.checked_at);
           const button = row?.querySelector('form[action="/outbounds/check"] button');
           if (button) button.disabled = check.state === 'running' || check.state === 'queued';
         });

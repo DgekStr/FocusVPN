@@ -62,6 +62,42 @@ Successful changes use the shared gateway/HAPP apply-and-rollback transaction. T
 
 Enter the Mattermost incoming-webhook URL in Settings; the URL is never displayed back or included in journal/API output. Delivery is asynchronous with a bounded timeout, and failures are journaled without undoing the route change. The test-webhook button verifies delivery using the same queue. Run `py -3 scripts/test_vless_monitor.py` and `py -3 scripts/test_route_sync.py` before deploying changes to this feature.
 
+## HAPP Personal Access
+
+The existing VIP URI and inbound users are snapshotted into `/etc/sing-box-admin/happ-vip.json` mode `0600` without rewriting `/etc/sing-box-admin/happ-server.json`. The VIP UUID, flow, listener, transport and TLS settings are protected against accidental replacement in panel configuration changes. The saved VIP URI is shown read-only in Settings and continues to use TCP `9445`.
+
+Personal users are managed on `/happ-server`, with independent UUIDs, links/QR, enable/disable/delete, and optional expiration timestamps in UTC. `/etc/sing-box-admin/happ-users.json` stores the private registry; `/etc/sing-box-admin/happ-user-events.json` retains the latest 500 management events. Expiration is reconciled once per minute, so an expired credential can remain active for up to the reconciliation interval plus apply time. Existing active sessions are interrupted when the HAPP configuration is restarted; this does not revoke the VIP credential. The registry is restored if configuration application fails.
+
+Clash API connection metadata does not directly identify users. The live view correlates its source IP, source port and start time with the authenticated VLESS journal request ID under the current HAPP PID. Binary/ANSI journal messages and Go RFC3339 nanosecond timestamps are normalized; ambiguous or missing identities are shown as `Не определён`, never assigned by IP alone. VIP is a separate shared-access group.
+
+The live connection table shows the user name, client download/upload counters and a grouped sum for active connections. These are not lifetime totals for closed sessions, and no traffic/bandwidth quotas are enforced. Identity data is cached with a journal cursor and bounded context; HAPP polling has a timeout and retries. Run `py -3 scripts/test_happ_stats.py` and `node scripts/test_happ_stats_ui.js` for identity/counter regressions, and `py -3 scripts/test_happ_users.py` for VIP-preservation and access lifecycle.
+
+## Persistent HAPP Statistics
+
+`/mnt/stat/happ-stat.sqlite3` stores observed HAPP connections and authenticated journal visits. The directory is mode `0700`, database/sidecar files mode `0600`; all persistent history settings and collector checkpoints live in the same database. The admin service sandbox permits writing `/mnt/stat`, and the installer creates the directory and installs `python3-xlwt` for BIFF XLS export.
+
+A background collector runs independently of browser polling, with a two-second pause between completed samples. Stable journal/live identifiers deduplicate snapshots; traffic is the maximum observed counter per connection, not a sum of repeated cumulative snapshots. Late user identification merges the prior live record. Closed connections remain stored, and journal-only visits preserve domain/IP, source and time with unknown final bytes. Reconnects/restarts and gaps can lose unsampled final traffic; do not treat observed totals as exact billing counters. Full HTTPS URL paths and page contents are unavailable.
+
+`/happ-history` provides user/date filters, UTC timestamps, source IP/port, destination domain/IP/port, protocol and observed bytes with pagination. `/happ-history.xls` exports all matching rows as actual XLS, splitting into additional sheets at the BIFF row limit; no server-side XLS archives are retained. Both endpoints require the normal private-network session authentication. Strings are written as XLS text, not formulas.
+
+Settings controls retention from 1 to 3650 days, default 60. Lowering retention immediately deletes records whose last observation is older than the cutoff; automatic cleanup runs at startup and hourly. SQLite secure deletion and vacuum reclaim deleted records; external filesystem snapshots, manual backups and downloaded XLS files require independent retention policies. A collector error preserves prior history and is visible on the history page.
+
+Local regression tests require `xlwt==1.3.0`: `py -3 -m pip install xlwt==1.3.0`, then `py -3 scripts/test_happ_history.py`. Runtime secrets/credentials are never copied into this history database or repository.
+
+## HAPP Account Traffic And Subscriptions
+
+The personal user row shows observed download/upload after Open HAPP, including closed sessions in the retained history. Browser polling refreshes these account totals independently from the active-connection totals. Counters cover the configured history retention (60 days by default); pruning old records can reduce them. They are sampled lower bounds, not lifetime billing or enforced quotas.
+
+Open HAPP now imports an account-specific HTTP subscription. Copy subscription supports manual import; the original VLESS copy and QR remain unchanged. Previously imported standalone configurations must be replaced or supplemented by importing the subscription to receive account metadata. Responses carry `subscription-userinfo: upload=...; download=...; total=0`, optional UTC expiry, `profile-title`, and `profile-update-interval: 1`, also represented as metadata lines in the body. HAPP's standard usage bar shows upload plus download against an unlimited allowance, not download alone. Automatic refresh is requested hourly; execution depends on the client, and manual refresh retrieves current collected counters.
+
+The subscription title starts with the network emoji U+1F5A7 followed by `FocusVPN` and the user name. UTF-8 Base64 metadata preserves it for both copied subscriptions and Open HAPP, including subsequent refreshes; the existing 25-character title limit remains.
+
+The subscription sends a shortened private-team notice through the standard `announce: base64:...` header and matching body metadata. It preserves the lock, angry-face and heart emojis and fits HAPP's documented 200-character limit, including UTF-16 surrogate pairs. `profile-web-page-url` links to `/happ-info`, a nonsecret informational page with justified paragraphs and responsive wrapping. HAPP's native announcement alignment is controlled by the client; subscriptions cannot enforce CSS justification inside that field. The information page follows the configured network filter, has no account credentials, and does not grant access to admin pages.
+
+The default subscription origin is `http://192.168.0.39:9443`. Override `FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL` with a trusted reachable origin if needed; never derive it from untrusted Host headers. The panel defaults to LAN/VPN/management networks. `FOCUSVPN_ADMIN_NETWORK` adds an IPv4 access network to both application and installer-rendered nftables rules; `0.0.0.0/0` admits all IPv4 sources. This setting is enabled on the current server by request. Authentication, per-account tokens, port 51821 protection and individual WireGuard LAN bans remain in effect. This does not configure router NAT or replace the private IP with an internet address. Port 9443 currently uses unencrypted HTTP; use HTTPS for untrusted or internet access.
+
+`/happ-subscription/<token>` requires a secret per-account HMAC token instead of an admin session and returns only that account's VLESS configuration and counters. The master key is created once in `/etc/sing-box-admin/happ-subscription-key.json`, mode `0600`; keep it across restarts/backups to preserve links. Rotating it revokes every subscription URL. Disabled, expired, deleted and invalid tokens return 404. VIP remains a shared account; its original credentials are unchanged. Run `py -3 scripts/test_happ_users.py`, `py -3 scripts/test_happ_history.py`, and `node scripts/test_happ_stats_ui.js` for subscription isolation, revocation, metadata and UI regressions.
+
 ## Rollback
 
 Use the timestamped backup created on the server, restore the specific file, run its syntax check, then restart only the owning service. Never use a blanket reset or overwrite unrelated runtime state.

@@ -14,6 +14,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
+import sqlite3
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
@@ -25,10 +27,15 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlspl
 from wg_admin import WgAdmin
 from wg_easy_api import WgEasyApi, WgEasyApiError
 from happ_server import load_state as load_happ_state
-from happ_server import public_vless_link
+from happ_server import public_vless_link, subscription_content, subscription_information_page
 from happ_server_ui import page as happ_server_page
 from happ_stats import HappStatsError, live_connections as happ_live_connections
+from happ_stats import format_datetime
 from panel_ui import render_shell
+from happ_users import HappUsers, user_link
+from happ_history import HappHistory
+from happ_history_ui import render_history
+from happ_stats import acknowledge_history_visits
 from vless_monitor import VlessMonitor, load_settings as load_monitor_settings
 
 APP_DIR = Path('/etc/sing-box-admin')
@@ -68,8 +75,11 @@ VPN_NETWORK = network_from_environment('FOCUSVPN_WG_NETWORK', '10.8.0.0/24')
 LAN_NETWORK = network_from_environment('FOCUSVPN_LAN_NETWORK', '192.168.0.0/24')
 MANAGEMENT_NETWORK = network_from_environment('FOCUSVPN_MANAGEMENT_NETWORK', '10.1.17.0/24')
 ACCESS_NETWORKS = (VPN_NETWORK, LAN_NETWORK, MANAGEMENT_NETWORK)
+if os.environ.get('FOCUSVPN_ADMIN_NETWORK'):
+    ACCESS_NETWORKS += (network_from_environment('FOCUSVPN_ADMIN_NETWORK', '0.0.0.0/0'),)
 HOST = os.environ.get('SING_BOX_ADMIN_HOST', '0.0.0.0')
 PORT = int(os.environ.get('SING_BOX_ADMIN_PORT', '9443'))
+HAPP_SUBSCRIPTION_BASE_URL = os.environ.get('FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL', 'http://192.168.0.39:9443')
 MAX_BODY_SIZE = 65536
 SESSION_COOKIE_NAME = 'focusvpn_session'
 SESSION_TTL_SECONDS = 12 * 60 * 60
@@ -83,6 +93,10 @@ OUTBOUND_CHECK_LOCK = threading.Lock()
 OUTBOUND_CHECK_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix='outbound-check')
 OUTBOUND_CHECK_JOBS = {}
 VLESS_MONITOR = None
+HAPP_USERS = None
+HAPP_EXPIRY_STOP = threading.Event()
+HAPP_HISTORY = None
+HAPP_HISTORY_STOP = threading.Event()
 SESSIONS = {}
 WG_ADMIN = WgAdmin(WgEasyApi(WG_EASY_SECRET_PATH, os.environ.get('FOCUSVPN_WG_EASY_API_URL', 'http://127.0.0.1:51821')), CSRF_TOKEN)
 HOSTNAME_PATTERN = re.compile(r'(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?\Z')
@@ -992,13 +1006,15 @@ def restart_happ_server():
 
 def apply_happ_configuration(raw):
     payload = parse_json_object(raw, 'HAPP Server')
+    if HAPP_USERS is not None:
+        HAPP_USERS.require_vip(payload)
     data = (json.dumps(payload, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
     check_happ_candidate(data)
     backup = backup_file(HAPP_CONFIG_PATH, 'happ-server-config')
     write_atomic_file(HAPP_CONFIG_PATH, data, mode=0o640, group_name='sing-box')
     try:
         restart_happ_server()
-    except RuntimeError:
+    except (RuntimeError, OSError, subprocess.SubprocessError):
         write_atomic_file(HAPP_CONFIG_PATH, backup.read_bytes(), mode=0o640, group_name='sing-box')
         restart_happ_server()
         raise RuntimeError('Новая HAPP Server конфигурация не запустилась; предыдущая версия восстановлена.')
@@ -1034,6 +1050,8 @@ def apply_happ_state(raw):
         urlencode(query, safe='-_'),
         parsed_link.fragment,
     ))
+    if HAPP_USERS is not None and rebuilt_link != HAPP_USERS.vip()['link']:
+        raise ValueError('Сохранённая VIP-ссылка защищена. Персональные ссылки создаются в разделе HAPP Server.')
     payload.update({
         'server': server,
         'port': port,
@@ -1411,8 +1429,11 @@ def render_settings_page(config, query, message='', kind='success'):
         active_gateway_mode = gateway_mode()
         client_configured = WIREGUARD_CLIENT_CONFIG_PATH.is_file()
         wireguard_client_text = load_wireguard_client_text()
+        vip_link = HAPP_USERS.vip()['link'] if HAPP_USERS is not None else public_vless_link()
         monitor_settings = load_monitor_settings(APP_DIR)
         monitor_state = VLESS_MONITOR.status() if VLESS_MONITOR is not None else {}
+        monitor_state = {**monitor_state, 'last_checked_at': format_datetime(monitor_state.get('last_checked_at'), 'ещё не выполнялась')}
+        history_days = HAPP_HISTORY.retention_days() if HAPP_HISTORY is not None else 60
         service_states = {
             'wireguard': wireguard_state(),
             'vless': service_state('sing-box'),
@@ -1425,6 +1446,8 @@ def render_settings_page(config, query, message='', kind='success'):
 {message_banner(message, kind)}
 {wg_error}{happ_error}
 <div class="panel-stack">
+    <section class="panel"><h2>Хранение статистики HAPP</h2><form method="post" action="/settings/happ-history"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_retention_days">Хранить дней · старые записи очищаются автоматически</label><input id="happ_retention_days" name="retention_days" type="number" min="1" max="3650" step="1" value="{history_days}" required></div><div class="actions"><button type="submit">Сохранить срок хранения</button><a class="button secondary" href="/happ-history">История HAPP</a></div></form><p class="muted">База хранится в /mnt/stat/. По умолчанию 60 дней; уменьшение срока сразу удалит записи старше выбранного периода.</p></section>
+    <section class="panel"><h2>VIP-ссылка HAPP</h2><div class="field"><label for="happ_vip_link">Существующая общая ссылка · сохранена без изменения</label><textarea id="happ_vip_link" class="public-link-field" readonly spellcheck="false">{esc(vip_link)}</textarea></div></section>
     <section class="panel"><h2>Автопроверка VLESS</h2><form method="post" action="/settings/vless-monitor"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label><input class="inline-checkbox" type="checkbox" name="monitor_enabled"{' checked' if monitor_settings['enabled'] else ''}> Проверять VLESS по расписанию</label></div><div class="field"><label for="monitor_interval_minutes">Интервал между циклами, минуты</label><input id="monitor_interval_minutes" name="interval_minutes" type="number" min="1" max="60" step="1" value="{monitor_settings['interval_minutes']}" required></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="auto_switch"{' checked' if monitor_settings['auto_switch'] else ''}> Автовыбор: минимальная задержка в трёх циклах подряд</label></div><div class="field"><label><input class="inline-checkbox" type="checkbox" name="mattermost_enabled"{' checked' if monitor_settings['mattermost_enabled'] else ''}> Уведомлять Mattermost о смене шлюза</label></div><div class="field"><label for="mattermost_webhook">Webhook Mattermost{' · сохранён' if monitor_settings['webhook_url'] else ''}</label><input id="mattermost_webhook" name="webhook_url" type="password" autocomplete="new-password" placeholder="{'Оставьте пустым для сохранения webhook' if monitor_settings['webhook_url'] else 'https://mattermost.example/hooks/...'}"></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="clear_webhook"> Удалить сохранённый webhook</label></div></div><div class="actions"><button type="submit">Сохранить автоматизацию</button><a class="button secondary" href="/gateway-journal">Журнал переключений</a></div></form><form method="post" action="/settings/vless-monitor/test-webhook"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit"{' disabled' if not monitor_settings['webhook_url'] else ''}>Проверить webhook</button></div></form><p class="muted">Последняя проверка: {esc(monitor_state.get('last_checked_at', 'ещё не выполнялась'))}. Кандидат: {esc(monitor_state.get('candidate') or 'нет')} · {monitor_state.get('streak', 0)}/3.</p></section>
     <section class="panel gateway-mode-panel"><h2>Режим шлюза</h2><p class="subtitle">Активный режим: <span class="badge {'ok' if active_gateway_mode == 'vless' else 'online'}">{'VLESS' if active_gateway_mode == 'vless' else 'Внешний WireGuard'}</span></p><div class="gateway-mode-actions">
         <form method="post" action="/settings/gateway/mode" data-gateway-mode="vless"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="vless"><button class="{'secondary' if active_gateway_mode != 'vless' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'vless' else ''}>VLESS-шлюз</button></form>
@@ -1491,7 +1514,7 @@ def render_outbounds_page(config, query, message='', kind='success'):
             f'<td>{"active" if current_route == tag else ""}</td>'
             f'<td data-outbound-check-tag="{esc(tag)}" role="status">{esc(checks[tag]["message"])}</td>'
             f'<td data-outbound-latency>{latency_text}</td>'
-            f'<td data-outbound-checked-at>{esc(checks[tag].get("checked_at") or "—")}</td>'
+            f'<td data-outbound-checked-at>{esc(format_datetime(checks[tag].get("checked_at")))}</td>'
             f'<td><form method="post" action="/outbounds/route"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit"{ " disabled" if current_route == tag else ""}>Использовать</button></form></td>'
             f'<td><form method="post" action="/outbounds/check"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit">Проверить соединение</button></form></td>'
             f'<td><form method="post" action="/outbounds/delete" data-outbound-delete><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="danger" type="submit"{ " disabled" if len(servers) <= 1 else ""}>Удалить</button></form></td>'
@@ -1616,15 +1639,24 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def send_happ_qr(self):
+    def send_happ_qr(self, user_id=None):
         try:
-            link = public_vless_link()
+            if user_id is None:
+                link = HAPP_USERS.vip()['link'] if HAPP_USERS is not None else public_vless_link()
+            else:
+                with HAPP_LOCK:
+                    user = next((item for item in HAPP_USERS.users() if item['id'] == user_id), None) if HAPP_USERS is not None else None
+                if user is None:
+                    self.send_empty(HTTPStatus.NOT_FOUND)
+                    return
+                link = user['link']
         except (OSError, ValueError, json.JSONDecodeError):
             self.send_empty(HTTPStatus.NOT_FOUND)
             return
         try:
             result = subprocess.run(
-                [QR_ENCODE_BIN, '-t', 'SVG', '-o', '-', '-m', '2', '-s', '8', link],
+                [QR_ENCODE_BIN, '-t', 'SVG', '-o', '-', '-m', '2', '-s', '8'],
+                input=link.encode('utf-8'),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
@@ -1803,8 +1835,49 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_empty(HTTPStatus.NOT_FOUND)
 
+    def send_happ_subscription(self, path):
+        if not self.vpn_client_allowed():
+            self.send_empty(HTTPStatus.FORBIDDEN)
+            return
+        parts = path.strip('/').split('/')
+        if len(parts) != 2:
+            self.send_empty(HTTPStatus.NOT_FOUND)
+            return
+        try:
+            if HAPP_USERS is None or HAPP_HISTORY is None:
+                self.send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            with HAPP_LOCK:
+                user = HAPP_USERS.subscription_user(parts[1])
+            if user is None:
+                self.send_empty(HTTPStatus.NOT_FOUND)
+                return
+            user_key = 'VIP' if user['id'] == 'VIP' else 'personal-' + user['id']
+            traffic = HAPP_HISTORY.user_totals().get(user_key, {})
+            content, headers = subscription_content(user, traffic, HAPP_SUBSCRIPTION_BASE_URL.rstrip('/') + '/happ-info')
+        except (ValueError, OSError, sqlite3.Error):
+            self.send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_common_headers()
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header('Content-Length', str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == '/happ-info':
+            if self.vpn_client_allowed():
+                self.send_html(HTTPStatus.OK, subscription_information_page())
+            else:
+                self.send_empty(HTTPStatus.FORBIDDEN)
+            return
+        if parsed.path.startswith('/happ-subscription/'):
+            self.send_happ_subscription(parsed.path)
+            return
         if parsed.path == '/login':
             self.login()
             return
@@ -1828,6 +1901,13 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == '/happ-qr':
             self.send_happ_qr()
             return
+        if parsed.path.startswith('/happ-users/'):
+            parts = parsed.path.strip('/').split('/')
+            if len(parts) == 3 and parts[2] == 'qr':
+                self.send_happ_qr(parts[1])
+            else:
+                self.send_empty(HTTPStatus.NOT_FOUND)
+            return
         if parsed.path == '/wireguard/live':
             try:
                 self.send_json(HTTPStatus.OK, WG_ADMIN.live_state())
@@ -1836,9 +1916,30 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == '/happ-server/live':
             try:
-                self.send_json(HTTPStatus.OK, happ_live_connections())
+                payload = happ_live_connections()
+                payload['account_traffic'] = HAPP_HISTORY.user_totals() if HAPP_HISTORY is not None else {}
+                self.send_json(HTTPStatus.OK, payload)
             except HappStatsError as error:
                 self.send_json(HTTPStatus.BAD_GATEWAY, {'error': str(error)})
+            except (OSError, sqlite3.Error):
+                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {'error': 'Статистика аккаунтов временно недоступна.'})
+            return
+        if parsed.path in ('/happ-history', '/happ-history.xls'):
+            try:
+                if HAPP_HISTORY is None:
+                    raise RuntimeError('Хранилище статистики недоступно.')
+                query = parse_qs(parsed.query)
+                if parsed.path.endswith('.xls'):
+                    data = HAPP_HISTORY.export_xls(form_value(query, 'user'), form_value(query, 'since'), form_value(query, 'until'))
+                    self.send_binary(data, 'application/vnd.ms-excel', 'attachment; filename="happ-statistics.xls"')
+                else:
+                    with HAPP_LOCK:
+                        users = HAPP_USERS.registry()['users'] if HAPP_USERS is not None else []
+                    self.send_html(HTTPStatus.OK, render_history(HAPP_HISTORY, query, form_value(query, 'message'), form_value(query, 'kind') or 'success', users))
+            except ValueError:
+                self.send_html(HTTPStatus.BAD_REQUEST, '<h1>Некорректные фильтры истории</h1><p>Проверьте даты и номер страницы.</p>')
+            except (RuntimeError, OSError, sqlite3.Error, ImportError):
+                self.send_html(HTTPStatus.SERVICE_UNAVAILABLE, '<h1>История HAPP временно недоступна</h1><p>Проверьте хранилище и зависимость XLS или повторите запрос.</p>')
             return
         if parsed.path.startswith('/wireguard/client/'):
             self.serve_wireguard_file(parsed.path)
@@ -1855,7 +1956,13 @@ class Handler(BaseHTTPRequestHandler):
             self.redirect_to('/happ-server')
             return
         if parsed.path == '/happ-server':
-            self.send_html(HTTPStatus.OK, happ_server_page())
+            query = parse_qs(parsed.query)
+            with HAPP_LOCK:
+                users = HAPP_USERS.users() if HAPP_USERS is not None else []
+                events = HAPP_USERS.events() if HAPP_USERS is not None else []
+                subscriptions = HAPP_USERS.subscription_urls(HAPP_SUBSCRIPTION_BASE_URL) if HAPP_USERS is not None else {}
+            traffic = HAPP_HISTORY.user_totals() if HAPP_HISTORY is not None else {}
+            self.send_html(HTTPStatus.OK, happ_server_page(users, CSRF_TOKEN, form_value(query, 'message'), form_value(query, 'kind') or 'success', events, traffic=traffic, subscriptions=subscriptions))
             return
         if parsed.path == '/settings':
             query = parse_qs(parsed.query)
@@ -1906,6 +2013,31 @@ class Handler(BaseHTTPRequestHandler):
         if not self.require_access():
             return
         path = urlparse(self.path).path
+        if path.startswith('/happ-users/'):
+            try:
+                values = self.parse_form()
+                if path == '/settings/happ-history':
+                    if HAPP_HISTORY is None:
+                        raise RuntimeError('Хранилище статистики недоступно.')
+                    deleted = HAPP_HISTORY.set_retention(form_value(values, 'retention_days'))
+                    self.redirect_settings('', f'Срок хранения сохранён. Удалено старых записей: {deleted}.')
+                    return
+                if HAPP_USERS is None:
+                    raise RuntimeError('Управление пользователями HAPP недоступно.')
+                with HAPP_LOCK:
+                    if path == '/happ-users/create':
+                        HAPP_USERS.create(form_value(values, 'name'), form_value(values, 'expires_at'))
+                        message = 'Персональный пользователь создан. VIP credentials сохранены; при применении HAPP переподключает сессии.'
+                    elif path == '/happ-users/action':
+                        HAPP_USERS.action(form_value(values, 'id'), form_value(values, 'operation'), form_value(values, 'name'), form_value(values, 'expires_at'))
+                        message = 'Изменение пользователя применено; VIP-ссылка сохранена.'
+                    else:
+                        self.send_empty(HTTPStatus.NOT_FOUND)
+                        return
+                self.redirect_to('/happ-server?' + urlencode({'message': message, 'kind': 'success'}))
+            except (ValueError, RuntimeError, OSError, json.JSONDecodeError, subprocess.SubprocessError):
+                self.redirect_to('/happ-server?' + urlencode({'message': 'Пользователь не изменён. Проверьте имя, срок доступа и конфигурацию HAPP.', 'kind': 'error'}))
+            return
         if path.startswith('/settings/'):
             try:
                 values = self.parse_form()
@@ -2169,8 +2301,39 @@ class Handler(BaseHTTPRequestHandler):
             self.redirect_vless('', 'Операция не выполнена. Текущая конфигурация сохранена.', 'error')
 
 
+def happ_expiry_worker():
+    while not HAPP_EXPIRY_STOP.wait(60):
+        try:
+            with HAPP_LOCK:
+                if HAPP_USERS is not None:
+                    HAPP_USERS.reconcile_expired()
+        except Exception:
+            if VLESS_MONITOR is not None:
+                VLESS_MONITOR.append_event({'event': 'happ_expiry_failed', 'message': 'Не удалось применить истечение персонального доступа HAPP; повтор через минуту.'})
+
+
+def happ_history_worker():
+    next_cleanup = 0.0
+    while not HAPP_HISTORY_STOP.is_set():
+        try:
+            if HAPP_HISTORY is not None:
+                payload = happ_live_connections(include_visits=True, history_since=HAPP_HISTORY.last_collected_at())
+                HAPP_HISTORY.ingest(payload)
+                acknowledge_history_visits(payload.get('visits', []))
+                if time.monotonic() >= next_cleanup:
+                    HAPP_HISTORY.cleanup()
+                    next_cleanup = time.monotonic() + 3600
+        except Exception:
+            try:
+                if HAPP_HISTORY is not None:
+                    HAPP_HISTORY.record_collection_error()
+            except Exception:
+                pass
+        HAPP_HISTORY_STOP.wait(2)
+
+
 def main():
-    global VLESS_MONITOR
+    global VLESS_MONITOR, HAPP_USERS, HAPP_HISTORY
     if not AUTH_PATH.is_file():
         raise SystemExit(f'Authentication file missing: {AUTH_PATH}')
     try:
@@ -2178,11 +2341,18 @@ def main():
     except ipaddress.AddressValueError as error:
         raise SystemExit('SING_BOX_ADMIN_HOST must be an IPv4 address') from error
     server = VpnOnlyServer((HOST, PORT), Handler)
+    HAPP_USERS = HappUsers(APP_DIR, HAPP_CONFIG_PATH, HAPP_STATE_PATH, apply_happ_configuration)
+    HAPP_USERS.initialize()
+    HAPP_HISTORY = HappHistory('/mnt/stat')
+    threading.Thread(target=happ_history_worker, name='happ-history', daemon=True).start()
+    threading.Thread(target=happ_expiry_worker, name='happ-expiry', daemon=True).start()
     VLESS_MONITOR = VlessMonitor(APP_DIR, load_config, queue_server_checks, outbound_check_states, switch_monitored_route, gateway_mode)
     VLESS_MONITOR.start()
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
+        HAPP_HISTORY_STOP.set()
+        HAPP_EXPIRY_STOP.set()
         VLESS_MONITOR.stop()
         server.server_close()
 

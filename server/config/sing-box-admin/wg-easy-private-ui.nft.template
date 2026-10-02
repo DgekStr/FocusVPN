@@ -5,7 +5,7 @@ table inet wg_easy_private_ui {
     type filter hook input priority filter - 10; policy accept;
     jump wg_lan_deny
     iifname != "lo" tcp dport 51821 counter drop
-    iifname != "lo" tcp dport 9443 ip saddr != { __FOCUSVPN_WG_NETWORK__, __FOCUSVPN_LAN_NETWORK__, __FOCUSVPN_MANAGEMENT_NETWORK__ } counter drop
+    iifname != "lo" tcp dport 9443 ip saddr != { __FOCUSVPN_WG_NETWORK__, __FOCUSVPN_LAN_NETWORK__, __FOCUSVPN_MANAGEMENT_NETWORK__, __FOCUSVPN_ADMIN_NETWORK__ } counter drop
   }
 
   chain forward {

@@ -16,7 +16,8 @@ function classList() {
 async function main() {
   const summary = { dataset: { checkTags: '["auto-8"]', checkPrefix: '' }, classList: classList(), textContent: 'Запущена в фоне' };
   const button = { disabled: true };
-  const row = { classList: classList(), querySelector: (selector) => selector.includes('button') ? button : { textContent: '' } };
+  const checkedAt = { textContent: '' };
+  const row = { classList: classList(), querySelector: (selector) => selector.includes('button') ? button : selector === '[data-outbound-checked-at]' ? checkedAt : { textContent: '' } };
   const cell = { dataset: { outboundCheckTag: 'auto-8' }, textContent: 'Проверяется', closest: () => row };
   const timeouts = [];
   let refresh;
@@ -54,7 +55,7 @@ async function main() {
       return Promise.resolve({
         status: 200,
         ok: true,
-        json: async () => ({ checks: [{ tag: 'auto-8', state: 'error', message: 'Нет HTTPS-ответа' }] }),
+        json: async () => ({ checks: [{ tag: 'auto-8', state: 'error', message: 'Нет HTTPS-ответа', checked_at: '2026-10-02T21:05:23.914301+00:00' }] }),
       });
     },
   };
@@ -75,6 +76,7 @@ async function main() {
   assert.equal(summary.textContent, 'auto-8: Нет HTTPS-ответа');
   assert.equal(cell.textContent, 'Нет HTTPS-ответа');
   assert.equal(button.disabled, false);
+  assert.equal(checkedAt.textContent, '02.10.2026 21:05:23');
   assert.equal(row.classList.values.has('outbound-failed'), true);
   assert.equal(summary.classList.values.has('error'), true);
   console.log('PASS: timeout recovers polling, HTTP errors surface, completed check replaces stale banner');

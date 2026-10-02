@@ -472,6 +472,31 @@ def update_profile(config, values):
     return tag
 
 
+def update_hysteria2_auto8(config, values):
+    password = form_value(values, 'hysteria2_password')
+    server_name = form_value(values, 'hysteria2_server_name')
+    outbound = next((item for item in config.get('outbounds', []) if item.get('tag') == 'auto-8'), None)
+    if outbound is None:
+        raise ValueError('Исходящий профиль auto-8 не найден.')
+    if not password:
+        password = str(outbound.get('password', ''))
+    if not password or len(password) > 1024 or any(character in password for character in '\r\n'):
+        raise ValueError('Введите полный Hysteria2 auth из конфигурации сервера.')
+    tls = {'enabled': True, 'alpn': ['h3']}
+    if server_name:
+        tls['server_name'] = validate_server(server_name, 'Hysteria2 server name')
+    outbound.clear()
+    outbound.update({
+        'type': 'hysteria2',
+        'tag': 'auto-8',
+        'server': '45.9.116.207',
+        'server_port': 443,
+        'password': password,
+        'tls': tls,
+    })
+    return outbound['tag']
+
+
 def selectable_outbounds(config):
     return [
         outbound for outbound in config.get('outbounds', [])
@@ -1032,6 +1057,10 @@ def render_settings_page(config, query, message='', kind='success'):
         active_gateway_mode = gateway_mode()
         client_configured = WIREGUARD_CLIENT_CONFIG_PATH.is_file()
         wireguard_client_text = load_wireguard_client_text()
+        auto8 = next((item for item in config.get('outbounds', []) if item.get('tag') == 'auto-8'), {})
+        auto8_is_hysteria2 = auto8.get('type') == 'hysteria2'
+        auto8_auth_saved = bool(auto8.get('password'))
+        auto8_server_name = auto8.get('tls', {}).get('server_name', '')
         service_states = {
             'wireguard': wireguard_state(),
             'vless': service_state('sing-box'),
@@ -1044,6 +1073,7 @@ def render_settings_page(config, query, message='', kind='success'):
 {message_banner(message, kind)}
 {wg_error}{happ_error}
 <div class="panel-stack">
+    <section class="panel"><h2>VLESS Auto 8 · Hysteria2</h2><p class="muted">Заменяет только профиль auto-8 внутри selector vless-auto. Текущий маршрут по умолчанию не меняется. Auth хранится в sing-box config и не показывается после сохранения.</p><form method="post" action="/settings/hysteria2-auto8"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="hysteria2_server">Сервер</label><input id="hysteria2_server" value="45.9.116.207" readonly></div><div class="field"><label for="hysteria2_port">UDP-порт</label><input id="hysteria2_port" value="443" readonly></div><div class="field"><label for="hysteria2_server_name">TLS server name, если задан сервером</label><input id="hysteria2_server_name" name="hysteria2_server_name" value="{esc(auto8_server_name)}" autocomplete="off"></div><div class="field"><label for="hysteria2_password">Hysteria2 auth{' · сохранён' if auto8_auth_saved else ''}</label><input id="hysteria2_password" name="hysteria2_password" type="password" autocomplete="new-password" placeholder="{'Оставьте пустым, чтобы сохранить текущий auth' if auto8_auth_saved else 'Введите полный auth из конфигурации'}"{' required' if not auto8_auth_saved else ''}></div></div><div class="actions"><button type="submit">Проверить и применить auto-8</button><span class="service-status">{'Сейчас Hysteria2' if auto8_is_hysteria2 else 'Сейчас VLESS'}</span></div></form></section>
     <section class="panel gateway-mode-panel"><h2>Режим шлюза</h2><p class="subtitle">Активный режим: <span class="badge {'ok' if active_gateway_mode == 'vless' else 'online'}">{'VLESS' if active_gateway_mode == 'vless' else 'Внешний WireGuard'}</span></p><div class="gateway-mode-actions">
         <form method="post" action="/settings/gateway/mode" data-gateway-mode="vless"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="vless"><button class="{'secondary' if active_gateway_mode != 'vless' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'vless' else ''}>VLESS-шлюз</button></form>
         <form method="post" action="/settings/gateway/mode" data-gateway-mode="wireguard"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="wireguard"><button class="{'secondary' if active_gateway_mode != 'wireguard' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'wireguard' or not client_configured else ''}>Внешний WireGuard{' · активен' if active_gateway_mode == 'wireguard' else ''}</button></form>
@@ -1443,6 +1473,14 @@ class Handler(BaseHTTPRequestHandler):
                         tag = set_default_outbound(config, form_value(values, 'route_final'))
                         applied = apply_configuration(config)
                     message = f'Исходящий профиль {tag} применён.' if applied else f'Исходящий профиль {tag} сохранён и применится в режиме VLESS.'
+                    self.redirect_settings('', message)
+                    return
+                if path == '/settings/hysteria2-auto8':
+                    with CONFIG_LOCK:
+                        config = load_config()
+                        update_hysteria2_auto8(config, values)
+                        applied = apply_configuration(config)
+                    message = 'Hysteria2 применён как auto-8.' if applied else 'Hysteria2 сохранён как auto-8; перезапуск sing-box отложен до режима VLESS.'
                     self.redirect_settings('', message)
                     return
                 if path == '/settings/vless-restart':

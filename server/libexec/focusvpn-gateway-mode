@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 WG_INTERFACE = 'wg-client'
+SERVER_WG_INTERFACE = os.environ.get('FOCUSVPN_WG_INTERFACE', 'wg0')
 WG_CONFIG = Path('/etc/wireguard/wg-client.conf')
 MODE_PATH = Path('/etc/focusvpn/gateway-mode.json')
 VPN_NETWORK = ipaddress.ip_network(os.environ.get('FOCUSVPN_WG_NETWORK', '10.8.0.0/24'), strict=False)
@@ -16,6 +17,7 @@ LAN_NETWORK = ipaddress.ip_network(os.environ.get('FOCUSVPN_LAN_NETWORK', '192.1
 ROUTE_TABLE = '51820'
 LAN_RULE_PRIORITY = '90'
 WG_RULE_PRIORITY = '91'
+IPTABLES = '/usr/sbin/iptables'
 
 
 def run(args, optional=False, input_text=None):
@@ -27,6 +29,21 @@ def run(args, optional=False, input_text=None):
 
 def systemctl(action, unit, optional=False):
     return run(['/usr/bin/systemctl', action, unit], optional=optional)
+
+
+def manage_forwarding(enable):
+    rules = (
+        ['-i', SERVER_WG_INTERFACE, '-o', WG_INTERFACE, '-s', str(VPN_NETWORK), '-j', 'ACCEPT'],
+        ['-i', WG_INTERFACE, '-o', SERVER_WG_INTERFACE, '-d', str(VPN_NETWORK), '-m', 'conntrack', '--ctstate', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'],
+    )
+    for rule in rules:
+        check = run([IPTABLES, '-C', 'FORWARD', *rule], optional=True)
+        if enable and check.returncode != 0:
+            run([IPTABLES, '-I', 'FORWARD', '1', *rule])
+        if not enable:
+            while check.returncode == 0:
+                run([IPTABLES, '-D', 'FORWARD', *rule], optional=True)
+                check = run([IPTABLES, '-C', 'FORWARD', *rule], optional=True)
 
 
 def save_mode(mode):
@@ -46,6 +63,7 @@ def save_mode(mode):
 
 
 def cleanup_wireguard():
+    manage_forwarding(False)
     systemctl('stop', f'wg-quick@{WG_INTERFACE}.service', optional=True)
     run(['/usr/sbin/ip', 'rule', 'del', 'from', str(VPN_NETWORK), 'to', str(LAN_NETWORK), 'lookup', 'main', 'priority', LAN_RULE_PRIORITY], optional=True)
     run(['/usr/sbin/ip', 'rule', 'del', 'from', str(VPN_NETWORK), 'lookup', ROUTE_TABLE, 'priority', WG_RULE_PRIORITY], optional=True)
@@ -59,14 +77,16 @@ def apply_wireguard():
     if not WG_CONFIG.is_file():
         raise RuntimeError('WireGuard client configuration is missing')
 
-    systemctl('stop', 'sing-box.service')
     cleanup_wireguard()
     try:
+        systemctl('stop', 'sing-box.service')
+        systemctl('stop', 'sing-box-happ-server.service')
         systemctl('start', f'wg-quick@{WG_INTERFACE}.service')
         run(['/usr/sbin/ip', 'route', 'replace', 'default', 'dev', WG_INTERFACE, 'table', ROUTE_TABLE])
         run(['/usr/sbin/ip', 'rule', 'add', 'from', str(VPN_NETWORK), 'to', str(LAN_NETWORK), 'lookup', 'main', 'priority', LAN_RULE_PRIORITY])
         run(['/usr/sbin/ip', 'rule', 'add', 'from', str(VPN_NETWORK), 'lookup', ROUTE_TABLE, 'priority', WG_RULE_PRIORITY])
         run(['/usr/sbin/sysctl', '-w', 'net.ipv4.ip_forward=1'])
+        manage_forwarding(True)
         nft_rules = (
             'add table inet focusvpn_wg_client\n'
             'add chain inet focusvpn_wg_client postrouting { type nat hook postrouting priority srcnat; policy accept; }\n'
@@ -80,6 +100,7 @@ def apply_wireguard():
     except Exception:
         cleanup_wireguard()
         if systemctl('start', 'sing-box.service', optional=True).returncode == 0:
+            systemctl('start', 'sing-box-happ-server.service', optional=True)
             save_mode('vless')
         raise
     save_mode('wireguard')
@@ -91,6 +112,7 @@ def apply_vless():
     run(['/usr/sbin/ip', 'route', 'flush', 'table', ROUTE_TABLE], optional=True)
     systemctl('start', 'sing-box.service')
     cleanup_wireguard()
+    systemctl('start', 'sing-box-happ-server.service')
     save_mode('vless')
 
 

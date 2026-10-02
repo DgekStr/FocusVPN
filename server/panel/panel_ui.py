@@ -68,6 +68,6 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
   <div class="app-content"><main class="main">{body}</main></div>
 </div>
 <script src="/panel.js?v=17" defer></script>
-<script src="/happ-actions.js?v=7" defer></script>
+<script src="/happ-actions.js?v=8" defer></script>
 </body>
 </html>'''

@@ -8,8 +8,8 @@ from happ_users import parse_expiry
 
 STATE_PATH = Path('/etc/sing-box-admin/happ-server.json')
 SUBSCRIPTION_ANNOUNCEMENT = (
-    '🔒Частный VPN для команды разработчиков focuslens.dev.\n'
-    'Вы здесь не случайно. Не делитесь ссылкой🤬: она исключительно для Вас ❤️'
+    '🔒Это частный VPN сервер, для работы команды разработчиков focuslens.dev. '
+    'Если вы здесь оказались - это не случайно ❤️'
 )
 
 
@@ -38,7 +38,9 @@ def subscription_content(user, traffic, information_url=None):
         userinfo += '; expire=' + str(int(expiry.timestamp()))
     title = base64.b64encode(('\U0001f5a7 FocusVPN ' + user['name'])[:25].encode('utf-8')).decode('ascii')
     headers = {'subscription-userinfo': userinfo, 'profile-update-interval': '1', 'profile-title': 'base64:' + title}
-    headers['announce'] = 'base64:' + base64.b64encode(SUBSCRIPTION_ANNOUNCEMENT.encode('utf-8')).decode('ascii')
+    downloaded = f'{download / (1024 ** 3):.2f} ГБ' if download >= 1024 ** 3 else f'{download / (1024 ** 2):.2f} МБ'
+    announcement = SUBSCRIPTION_ANNOUNCEMENT + '\nСкачано: ' + downloaded + ' / ∞'
+    headers['announce'] = 'base64:' + base64.b64encode(announcement.encode('utf-8')).decode('ascii')
     if information_url:
         headers['profile-web-page-url'] = information_url
     body = ''.join(f'#{key}: {value}\n' for key, value in headers.items()) + user['link'] + '\n'

@@ -71,9 +71,11 @@
     if (opener && modal && image) {
       event.preventDefault();
       const label = opener.dataset.qrLabel || 'VIP-ссылка';
-      image.src = opener.dataset.qrUrl || '/happ-qr?v=3';
-      image.alt = `QR-код HAPP: ${label}`;
-      if (caption) caption.textContent = `Отсканируйте ${label} в приложении HAPP.`;
+      const qrUrl = new URL(opener.dataset.qrUrl || '/happ-qr', window.location.href);
+      qrUrl.searchParams.set('v', '4');
+      image.src = qrUrl.href;
+      image.alt = `QR подписки HAPP: ${label}`;
+      if (caption) caption.textContent = `Мобильная подписка HAPP: ${label}`;
       modal.hidden = false;
       modal.setAttribute('aria-hidden', 'false');
       document.body.style.overflow = 'hidden';

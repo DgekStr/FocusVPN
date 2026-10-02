@@ -14,6 +14,17 @@ def now_utc():
     return dt.datetime.now(dt.timezone.utc)
 
 
+def validate_subscription_base_url(base_url):
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or any(character.isspace() for character in base_url):
+        raise ValueError('Некорректный адрес подписок HAPP.')
+    try:
+        parsed.port
+    except ValueError as error:
+        raise ValueError('Некорректный порт подписок HAPP.') from error
+    return base_url.rstrip('/')
+
+
 def parse_expiry(value):
     value = str(value or '').strip()
     if not value:
@@ -105,9 +116,7 @@ class HappUsers:
         return hmac.new(self.subscription_key, payload, hashlib.sha256).hexdigest()
 
     def subscription_urls(self, base_url):
-        parsed = urlsplit(base_url)
-        if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValueError('Некорректный адрес подписок HAPP.')
+        base_url = validate_subscription_base_url(base_url)
         vip = {'id': 'VIP', 'uuid': urlsplit(self.vip()['link']).username}
         return {user['id']: base_url.rstrip('/') + '/happ-subscription/' + self.subscription_token(user) for user in [vip, *self.registry()['users']]}
 

@@ -127,10 +127,9 @@ class HappUserTests(unittest.TestCase):
     def test_subscription_announcement_preserves_short_text_and_emojis(self):
         content, headers = subscription_content({'name': 'Alice', 'link': self.link}, {}, 'http://127.0.0.1:9443/happ-info')
         text = base64.b64decode(headers['announce'].removeprefix('base64:')).decode('utf-8')
-        self.assertEqual(text, SUBSCRIPTION_ANNOUNCEMENT)
-        self.assertTrue(text.startswith('🔒Частный VPN'))
-        self.assertTrue(text.endswith('исключительно для Вас ❤️'))
-        self.assertIn('Не делитесь ссылкой🤬', text)
+        self.assertEqual(text, SUBSCRIPTION_ANNOUNCEMENT + '\nСкачано: 0.00 МБ / ∞')
+        self.assertTrue(text.startswith('🔒Это частный VPN сервер, для работы команды разработчиков focuslens.dev.'))
+        self.assertIn('Если вы здесь оказались - это не случайно ❤️', text)
         self.assertIn('focuslens.dev', text)
         self.assertLessEqual(len(text.encode('utf-16-le')) // 2, 200)
         headers['announce'].encode('ascii')
@@ -143,6 +142,16 @@ class HappUserTests(unittest.TestCase):
             self.assertIn(html.escape(paragraph), page)
         self.assertNotIn(self.link, page)
 
+    def test_mobile_download_metric_units_and_refresh(self):
+        user = {'name': 'Alice', 'link': self.link}
+        for download, expected in ((0, '0.00 МБ'), (-10, '0.00 МБ'), (1024 ** 2, '1.00 МБ'), (512 * 1024 ** 2, '512.00 МБ'), (1024 ** 3, '1.00 ГБ'), (int(1.5 * 1024 ** 3), '1.50 ГБ'), (2 ** 63 - 1, '8589934592.00 ГБ')):
+            content, headers = subscription_content(user, {'download_bytes': download, 'upload_bytes': 1024 ** 3})
+            announcement = base64.b64decode(headers['announce'].removeprefix('base64:')).decode('utf-8')
+            self.assertEqual(announcement, SUBSCRIPTION_ANNOUNCEMENT + '\nСкачано: ' + expected + ' / ∞')
+            self.assertLessEqual(len(announcement.encode('utf-16-le')) // 2, 200)
+            self.assertIn('upload=1073741824; download=' + str(max(0, download)) + '; total=0', headers['subscription-userinfo'])
+            self.assertIn(('#announce: ' + headers['announce']).encode('ascii'), content)
+
     def test_subscription_buttons_and_user_counters(self):
         user_id = self.manager.create('Alice')
         urls = self.manager.subscription_urls('http://127.0.0.1:9443')
@@ -154,6 +163,62 @@ class HappUserTests(unittest.TestCase):
         self.assertIn('Открыть HAPP</a><span', page)
         self.assertIn('data-account-download>64.0 MB', page)
         self.assertIn('data-account-upload>8.0 MB', page)
+
+    def test_subscription_origin_prefers_settings_then_env_then_public_host(self):
+        with patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(app, 'PORT', 9443):
+            self.assertEqual(app.resolve_happ_subscription_base_url({'server': '203.0.113.10'}), 'http://203.0.113.10:9443')
+            self.assertEqual(app.resolve_happ_subscription_base_url({'server': 'vpn.example.com'}), 'http://vpn.example.com:9443')
+            self.assertEqual(app.resolve_happ_subscription_base_url({'server': '2001:db8::10'}), 'http://[2001:db8::10]:9443')
+            self.assertEqual(app.resolve_happ_subscription_base_url({'link': self.link}), 'http://vpn.example.com:9443')
+            state = {'server': '203.0.113.10', 'subscription_base_url': 'https://vpn.example.com:8443/vpn/'}
+            self.assertEqual(app.resolve_happ_subscription_base_url(state), 'https://vpn.example.com:8443/vpn')
+        with patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', 'https://env.example.com'):
+            self.assertEqual(app.resolve_happ_subscription_base_url({'server': '203.0.113.10'}), 'https://env.example.com')
+            self.assertEqual(app.resolve_happ_subscription_base_url(state), 'https://vpn.example.com:8443/vpn')
+        for invalid in ('ftp://vpn.example.com', 'http://user:secret@vpn.example.com', 'http://vpn.example.com:99999', 'https://vpn.example.com?token=bad', 'https://vpn.example.com\r\nHeader:bad'):
+            with self.assertRaises(ValueError):
+                self.manager.subscription_urls(invalid)
+
+    def test_vip_and_personal_qr_encode_public_mobile_subscription(self):
+        self.manager.create('Alice')
+        user = self.manager.users()[0]
+        handler = object.__new__(app.Handler)
+        urls = self.manager.subscription_urls('http://vpn.example.com:9443')
+        for user_id, expected in ((None, urls['VIP']), (user['id'], urls[user['id']])):
+            result = types.SimpleNamespace(returncode=0, stdout=b'<svg xmlns="http://www.w3.org/2000/svg"/>')
+            with patch.object(app, 'HAPP_USERS', self.manager), patch.object(app, 'load_happ_state', return_value={'server': 'vpn.example.com'}), patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(app, 'PORT', 9443), patch.object(app.subprocess, 'run', return_value=result) as encoder, patch.object(handler, 'send_binary') as send:
+                handler.send_happ_qr(user_id)
+                self.assertEqual(encoder.call_args.kwargs['input'].decode('utf-8'), expected)
+                self.assertEqual(urlsplit(expected).hostname, 'vpn.example.com')
+                self.assertEqual(urlsplit(expected).port, 9443)
+                self.assertTrue(urlsplit(expected).path.startswith('/happ-subscription/'))
+                resolved = self.manager.subscription_user(urlsplit(expected).path.rsplit('/', 1)[1])
+                self.assertEqual(resolved['link'], self.link if user_id is None else user['link'])
+                send.assert_called_once_with(result.stdout, 'image/svg+xml; charset=utf-8')
+
+    def test_mobile_qr_does_not_fall_back_to_raw_vless(self):
+        handler = object.__new__(app.Handler)
+        with patch.object(app, 'HAPP_USERS', None), patch.object(handler, 'send_empty') as send, patch.object(app.subprocess, 'run') as encoder:
+            handler.send_happ_qr()
+            send.assert_called_once_with(503)
+            encoder.assert_not_called()
+        with patch.object(app, 'HAPP_USERS', self.manager), patch.object(app, 'load_happ_state', return_value={'server': 'vpn.example.com'}), patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(handler, 'send_empty') as send, patch.object(app.subprocess, 'run') as encoder:
+            handler.send_happ_qr('missing-account')
+            send.assert_called_once_with(404)
+            encoder.assert_not_called()
+
+    def test_subscription_setting_save_and_clear_preserves_original_vip(self):
+        with patch.object(app, 'HAPP_STATE_PATH', self.public_path), patch.object(app, 'load_happ_state', side_effect=lambda: json.loads(self.public_path.read_text())), patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(app, 'backup_file'), patch.object(app, 'write_atomic_file', side_effect=lambda path, content, **kwargs: path.write_bytes(content)):
+            original = json.loads(self.original_public)
+            app.save_happ_subscription_base_url('https://sub.example.com:8443/')
+            self.assertEqual(json.loads(self.public_path.read_text()), {**original, 'subscription_base_url': 'https://sub.example.com:8443'})
+            app.save_happ_subscription_base_url('')
+            self.assertEqual(json.loads(self.public_path.read_text()), original)
+            with self.assertRaises(ValueError):
+                app.save_happ_subscription_base_url('ftp://sub.example.com')
+            self.assertEqual(json.loads(self.public_path.read_text()), original)
+        self.assertEqual(self.manager.vip()['link'], self.link)
+        self.assertEqual(json.loads(self.config_path.read_text())['inbounds'][0]['users'], self.config['inbounds'][0]['users'])
 
     def test_subscription_http_isolated_updates_and_preserves_admin_auth(self):
         self.manager.create('Alice')
@@ -170,7 +235,7 @@ class HappUserTests(unittest.TestCase):
         worker.start()
         connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
         try:
-            with patch.object(app, 'HAPP_USERS', self.manager), patch.object(app, 'HAPP_HISTORY', history), patch.object(app.Handler, 'vpn_client_allowed', return_value=True):
+            with patch.object(app, 'HAPP_USERS', self.manager), patch.object(app, 'HAPP_HISTORY', history), patch.object(app, 'load_happ_state', return_value={'server': 'vpn.example.com'}), patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(app.Handler, 'vpn_client_allowed', return_value=True):
                 connection.request('GET', '/happ-subscription/' + token)
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
@@ -178,8 +243,8 @@ class HappUserTests(unittest.TestCase):
                 self.assertEqual(response.getheader('profile-update-interval'), '1')
                 self.assertEqual(response.getheader('Cache-Control'), 'no-store')
                 announcement = response.getheader('announce')
-                self.assertEqual(base64.b64decode(announcement.removeprefix('base64:')).decode('utf-8'), SUBSCRIPTION_ANNOUNCEMENT)
-                self.assertTrue(response.getheader('profile-web-page-url').endswith('/happ-info'))
+                self.assertEqual(base64.b64decode(announcement.removeprefix('base64:')).decode('utf-8'), SUBSCRIPTION_ANNOUNCEMENT + '\nСкачано: 0.00 МБ / ∞')
+                self.assertEqual(response.getheader('profile-web-page-url'), 'http://vpn.example.com:9443/happ-info')
                 body = response.read().decode('utf-8')
                 self.assertIn('#announce: ' + announcement, body)
                 self.assertIn(users[0]['link'], body)
@@ -196,6 +261,15 @@ class HappUserTests(unittest.TestCase):
                 response = connection.getresponse()
                 self.assertEqual(response.getheader('subscription-userinfo'), 'upload=20; download=200; total=0')
                 response.read()
+                for amount, label in ((512 * 1024 ** 2, '512.00 МБ'), (int(1.5 * 1024 ** 3), '1.50 ГБ')):
+                    history.ingest({'connections': [{**record, 'download_bytes': amount}]})
+                    connection.request('GET', '/happ-subscription/' + token)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    refreshed = base64.b64decode(response.getheader('announce').removeprefix('base64:')).decode('utf-8')
+                    self.assertEqual(refreshed, SUBSCRIPTION_ANNOUNCEMENT + '\nСкачано: ' + label + ' / ∞')
+                    self.assertEqual(response.getheader('subscription-userinfo'), 'upload=20; download=' + str(amount) + '; total=0')
+                    response.read()
                 for route in ('/happ-server', '/happ-server/live'):
                     connection.request('GET', route)
                     response = connection.getresponse()

@@ -49,6 +49,7 @@ SING_BOX_BIN = '/usr/bin/sing-box'
 SYSTEMCTL_BIN = '/usr/bin/systemctl'
 DOCKER_BIN = '/usr/bin/docker'
 SERVICE_CONTROL_UNIT = 'focusvpn-service-control@{}.service'
+GATEWAY_MODE_UNIT = 'focusvpn-gateway-mode@{}.service'
 DEFAULT_WIREGUARD_FALLBACK_GATEWAY = os.environ.get('FOCUSVPN_WG_FALLBACK_GATEWAY', '192.168.0.6')
 
 
@@ -220,7 +221,7 @@ def validate_wireguard_client_config(value):
         raise ValueError('MTU и PersistentKeepalive должны быть числами.') from error
 
     lines = ['[Interface]', f"PrivateKey = {interface['PrivateKey']}", f"Address = {interface['Address']}", 'Table = off']
-    for key in ('DNS', 'MTU'):
+    for key in ('MTU',):
         if key in interface:
             lines.append(f'{key} = {interface[key]}')
     lines.extend(('', '[Peer]', f"PublicKey = {peer['PublicKey']}"))
@@ -251,8 +252,11 @@ def control_gateway_mode(mode):
         raise ValueError('Неизвестный режим шлюза.')
     if mode == 'wireguard' and not WIREGUARD_CLIENT_CONFIG_PATH.is_file():
         raise ValueError('Сначала сохраните конфигурацию внешнего WireGuard-сервера.')
-    result = command([SYSTEMCTL_BIN, 'start', SERVICE_CONTROL_UNIT.format(f'gateway-{mode}')], timeout=120)
-    if result.returncode != 0 or gateway_mode() != mode:
+    result = command([SYSTEMCTL_BIN, 'start', GATEWAY_MODE_UNIT.format(mode)], timeout=120)
+    if result.returncode != 0:
+        detail = result.stdout.strip()
+        raise RuntimeError(detail or f'Служба переключения шлюза завершилась с кодом {result.returncode}.')
+    if gateway_mode() != mode:
         raise RuntimeError(f'Не удалось переключить шлюз в режим {mode}.')
 
 

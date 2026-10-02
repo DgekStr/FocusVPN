@@ -9,4 +9,4 @@ User=root
 Group=root
 UMask=0077
 EnvironmentFile=-/etc/focusvpn/focusvpn.env
-ExecStart=/usr/local/libexec/focusvpn-gateway-mode %i
+ExecStart=/usr/bin/python3 /usr/local/libexec/focusvpn-gateway-mode %i

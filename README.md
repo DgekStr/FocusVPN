@@ -51,7 +51,7 @@
 | Персональная подписка | `http://<gateway-host>:9443/happ-subscription/<secret-token>` |
 | HAPP VLESS inbound | `<public-ip-or-domain>:9445` |
 
-По умолчанию панель разрешена из `<wireguard-client-network>`, `<lan-network>` и `<management-network>`. Дополнительную IPv4-сеть задаёт `FOCUSVPN_ADMIN_NETWORK`; на текущем сервере включён `0.0.0.0/0`. Админка по-прежнему требует входа, подписки - секретного токена аккаунта. Порт `9443` использует HTTP без шифрования: для недоверенных сетей нужен HTTPS. Порт `9445` требует внешнего TCP-проброса на `<gateway-host>:9445`, если сервер находится за NAT.
+По умолчанию панель разрешена из `<wireguard-client-network>`, `<lan-network>` и `<management-network>`. Дополнительную IPv4-сеть задаёт `FOCUSVPN_ADMIN_NETWORK`; на текущем сервере по прежнему запросу владельца включён `0.0.0.0/0`. Nginx reverse proxy задаётся конфигом `server/config/nginx/vpn.focuslens.dev`; backend доверяет `X-Real-IP` только от `FOCUSVPN_TRUSTED_PROXY_NETWORKS=192.168.0.15/32`, а HTTPS-сессии получают `Secure` cookie. Виртуальный хост `vpn.focuslens.dev` на gateway `192.168.0.15` проксирует HTTPS в `192.168.0.39:9443` и сохраняет штатный Basic Auth/session login. Админка по-прежнему требует входа, подписки - секретного токена аккаунта. **Важно:** порт backend `9443` также остаётся напрямую доступен по незашифрованному HTTP из-за `0.0.0.0/0`; HTTPS домен не закрывает этот обходной путь. Чтобы принудительно использовать TLS, отдельно ограничьте firewall backend-порта адресом gateway proxy. Порт `9445` требует отдельного внешнего TCP-проброса на `<gateway-host>:9445`, если сервер находится за NAT.
 
 ## Установка
 

@@ -71,12 +71,23 @@ def network_from_environment(name, default):
         raise RuntimeError(f'{name} must be a valid IP network') from error
 
 
+def network_list_from_environment(name):
+    value = os.environ.get(name, '').strip()
+    if not value:
+        return ()
+    try:
+        return tuple(ipaddress.ip_network(item.strip(), strict=False) for item in value.split(',') if item.strip())
+    except ValueError as error:
+        raise RuntimeError(f'{name} must contain valid IP networks') from error
+
+
 VPN_NETWORK = network_from_environment('FOCUSVPN_WG_NETWORK', '10.8.0.0/24')
 LAN_NETWORK = network_from_environment('FOCUSVPN_LAN_NETWORK', '192.168.0.0/24')
 MANAGEMENT_NETWORK = network_from_environment('FOCUSVPN_MANAGEMENT_NETWORK', '10.1.17.0/24')
 ACCESS_NETWORKS = (VPN_NETWORK, LAN_NETWORK, MANAGEMENT_NETWORK)
 if os.environ.get('FOCUSVPN_ADMIN_NETWORK'):
     ACCESS_NETWORKS += (network_from_environment('FOCUSVPN_ADMIN_NETWORK', '0.0.0.0/0'),)
+TRUSTED_PROXY_NETWORKS = network_list_from_environment('FOCUSVPN_TRUSTED_PROXY_NETWORKS')
 HOST = os.environ.get('SING_BOX_ADMIN_HOST', '0.0.0.0')
 PORT = int(os.environ.get('SING_BOX_ADMIN_PORT', '9443'))
 HAPP_SUBSCRIPTION_BASE_URL = os.environ.get('FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL', '')
@@ -1703,10 +1714,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def vpn_client_allowed(self):
         try:
-            client_ip = ipaddress.ip_address(self.client_address[0])
+            client_ip = self.client_ip_address()
             return any(client_ip in network for network in ACCESS_NETWORKS)
         except ValueError:
             return False
+
+    def client_ip_address(self):
+        peer_ip = ipaddress.ip_address(self.client_address[0])
+        if any(peer_ip in network for network in TRUSTED_PROXY_NETWORKS):
+            forwarded_ip = self.headers.get('X-Real-IP', '').strip()
+            if forwarded_ip:
+                try:
+                    return ipaddress.ip_address(forwarded_ip)
+                except ValueError:
+                    pass
+        return peer_ip
+
+    def request_is_secure(self):
+        try:
+            peer_ip = ipaddress.ip_address(self.client_address[0])
+        except ValueError:
+            return False
+        return any(peer_ip in network for network in TRUSTED_PROXY_NETWORKS) and self.headers.get('X-Forwarded-Proto', '').lower() == 'https'
 
     def authenticated(self):
         header = self.headers.get('Authorization', '')
@@ -1731,10 +1760,11 @@ class Handler(BaseHTTPRequestHandler):
             return ''
 
     def session_authenticated(self):
-        return valid_session(self.session_token(), self.client_address[0])
+        return valid_session(self.session_token(), str(self.client_ip_address()))
 
-    def session_cookie(self, token, max_age):
-        return f'{SESSION_COOKIE_NAME}={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict'
+    def session_cookie(self, token, max_age, secure=False):
+        secure_flag = '; Secure' if secure else ''
+        return f'{SESSION_COOKIE_NAME}={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict{secure_flag}'
 
     def send_login_challenge(self):
         self.send_response(HTTPStatus.UNAUTHORIZED)
@@ -1751,10 +1781,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_login_challenge()
             return
         FIRST_LOGIN_PATH.unlink(missing_ok=True)
-        token = issue_session(self.client_address[0])
+        token = issue_session(str(self.client_ip_address()))
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_common_headers()
-        self.send_header('Set-Cookie', self.session_cookie(token, SESSION_TTL_SECONDS))
+        self.send_header('Set-Cookie', self.session_cookie(token, SESSION_TTL_SECONDS, self.request_is_secure()))
         self.send_header('Location', '/wireguard')
         self.send_header('Content-Length', '0')
         self.end_headers()
@@ -1763,7 +1793,7 @@ class Handler(BaseHTTPRequestHandler):
         revoke_session(self.session_token())
         self.send_response(HTTPStatus.OK)
         self.send_common_headers()
-        self.send_header('Set-Cookie', self.session_cookie('', 0))
+        self.send_header('Set-Cookie', self.session_cookie('', 0, self.request_is_secure()))
         content = '<!doctype html><meta charset="utf-8"><title>FocusVPN</title><p>Сессия завершена.</p><p><a href="/login">Войти</a></p>'.encode('utf-8')
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(content)))

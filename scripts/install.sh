@@ -153,6 +153,8 @@ import ipaddress
 import os
 for name in ('FOCUSVPN_WG_NETWORK', 'FOCUSVPN_LAN_NETWORK', 'FOCUSVPN_MANAGEMENT_NETWORK'):
     ipaddress.ip_network(os.environ[name], strict=False)
+for network in filter(None, (item.strip() for item in os.environ.get('FOCUSVPN_TRUSTED_PROXY_NETWORKS', '').split(','))):
+  ipaddress.ip_network(network, strict=False)
 print('FocusVPN network settings validated')
 PY
 

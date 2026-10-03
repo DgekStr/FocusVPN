@@ -1,5 +1,6 @@
 import base64
 import datetime as dt
+from email.message import Message
 import html
 import http.client
 import ipaddress
@@ -123,6 +124,40 @@ class HappUserTests(unittest.TestCase):
                 redirect.assert_called_once_with('/login')
         with patch.dict(os.environ, {'FOCUSVPN_ADMIN_NETWORK': '0.0.0.0/0'}):
             self.assertIn(ipaddress.ip_address('203.0.113.42'), app.network_from_environment('FOCUSVPN_ADMIN_NETWORK', '192.168.0.0/24'))
+
+    def test_trusted_proxy_preserves_client_ip_and_https_cookie(self):
+        handler = object.__new__(app.Handler)
+        handler.client_address = ('192.168.0.15', 41000)
+        handler.headers = Message()
+        handler.headers['X-Real-IP'] = '203.0.113.42'
+        handler.headers['X-Forwarded-Proto'] = 'https'
+        trusted = (ipaddress.ip_network('192.168.0.15/32'),)
+        with patch.object(app, 'TRUSTED_PROXY_NETWORKS', trusted), patch.object(app, 'ACCESS_NETWORKS', (ipaddress.ip_network('203.0.113.0/24'),)):
+            self.assertEqual(str(handler.client_ip_address()), '203.0.113.42')
+            self.assertTrue(handler.vpn_client_allowed())
+            self.assertTrue(handler.request_is_secure())
+            self.assertIn('; Secure', handler.session_cookie('session', 300, handler.request_is_secure()))
+            with patch.object(handler, 'session_token', return_value='session'), patch.object(app, 'valid_session', return_value=True) as valid:
+                self.assertTrue(handler.session_authenticated())
+                valid.assert_called_once_with('session', '203.0.113.42')
+        handler.headers.replace_header('X-Real-IP', 'not-an-ip')
+        with patch.object(app, 'TRUSTED_PROXY_NETWORKS', trusted):
+            self.assertEqual(str(handler.client_ip_address()), '192.168.0.15')
+        handler.client_address = ('203.0.113.80', 41000)
+        handler.headers.replace_header('X-Real-IP', '203.0.113.42')
+        with patch.object(app, 'TRUSTED_PROXY_NETWORKS', trusted):
+            self.assertEqual(str(handler.client_ip_address()), '203.0.113.80')
+            self.assertFalse(handler.request_is_secure())
+
+    def test_trusted_proxy_environment_accepts_only_valid_networks(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('FOCUSVPN_TEST_PROXY', None)
+            self.assertEqual(app.network_list_from_environment('FOCUSVPN_TEST_PROXY'), ())
+        with patch.dict(os.environ, {'FOCUSVPN_TEST_PROXY': '192.168.0.15,10.1.17.0/24'}):
+            self.assertEqual(app.network_list_from_environment('FOCUSVPN_TEST_PROXY'), (ipaddress.ip_network('192.168.0.15/32'), ipaddress.ip_network('10.1.17.0/24')))
+        with patch.dict(os.environ, {'FOCUSVPN_TEST_PROXY': 'not-a-network'}):
+            with self.assertRaises(RuntimeError):
+                app.network_list_from_environment('FOCUSVPN_TEST_PROXY')
 
     def test_subscription_announcement_preserves_short_text_and_emojis(self):
         content, headers = subscription_content({'name': 'Alice', 'link': self.link}, {}, 'http://127.0.0.1:9443/happ-info')

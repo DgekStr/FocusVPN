@@ -37,6 +37,7 @@ from happ_history import HappHistory
 from happ_history_ui import render_history
 from happ_stats import acknowledge_history_visits
 from vless_monitor import VlessMonitor, load_settings as load_monitor_settings
+from crm_bridge import authorized as crm_authorized, embed as crm_embed, panel_url as crm_panel_url
 
 APP_DIR = Path('/etc/sing-box-admin')
 SERVER_OUTBOUND_TYPES = ('vless', 'hysteria2', 'trojan', 'shadowsocks')
@@ -1584,14 +1585,31 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format_string, *args):
         return
 
+    def crm_authenticated(self):
+        headers = getattr(self, 'headers', {})
+        if headers.get('X-FocusVPN-CRM') == '1' and headers.get('Authorization', '').startswith('Basic '):
+            return self.authenticated()
+        if not os.environ.get('FOCUSVPN_CRM_TOKEN_FILE') or not os.environ.get('FOCUSVPN_CRM_NETWORKS'):
+            return False
+        return crm_authorized(self.headers, self.client_address[0])
+
+    def send_header(self, keyword, value):
+        if keyword.lower() == 'location' and self.crm_authenticated():
+            value = crm_panel_url(value)
+        super().send_header(keyword, value)
+
     def send_common_headers(self):
+        embedded = self.crm_authenticated()
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('X-Frame-Options', 'SAMEORIGIN' if embedded else 'DENY')
         self.send_header('Referrer-Policy', 'no-referrer')
-        self.send_header('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+        ancestors = "'self'" if embedded else "'none'"
+        self.send_header('Content-Security-Policy', f"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors {ancestors}")
 
     def send_html(self, status, content):
+        if self.crm_authenticated():
+            content = crm_embed(content)
         payload = content.encode('utf-8')
         self.send_response(status)
         self.send_common_headers()
@@ -1804,7 +1822,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.vpn_client_allowed():
             self.send_empty(HTTPStatus.FORBIDDEN)
             return False
-        if not self.session_authenticated():
+        if not self.session_authenticated() and not self.crm_authenticated():
             self.redirect_to('/login')
             return False
         return True
@@ -2077,12 +2095,6 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/happ-users/'):
             try:
                 values = self.parse_form()
-                if path == '/settings/happ-history':
-                    if HAPP_HISTORY is None:
-                        raise RuntimeError('Хранилище статистики недоступно.')
-                    deleted = HAPP_HISTORY.set_retention(form_value(values, 'retention_days'))
-                    self.redirect_settings('', f'Срок хранения сохранён. Удалено старых записей: {deleted}.')
-                    return
                 if HAPP_USERS is None:
                     raise RuntimeError('Управление пользователями HAPP недоступно.')
                 with HAPP_LOCK:
@@ -2102,6 +2114,12 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/settings/'):
             try:
                 values = self.parse_form()
+                if path == '/settings/happ-history':
+                    if HAPP_HISTORY is None:
+                        raise RuntimeError('Хранилище статистики недоступно.')
+                    deleted = HAPP_HISTORY.set_retention(form_value(values, 'retention_days'))
+                    self.redirect_settings('', f'Срок хранения сохранён. Удалено старых записей: {deleted}.')
+                    return
                 if path == '/settings/vless-monitor':
                     if VLESS_MONITOR is None:
                         raise RuntimeError('Монитор проверки VLESS недоступен.')

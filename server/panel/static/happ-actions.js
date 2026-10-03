@@ -71,7 +71,7 @@
     if (opener && modal && image) {
       event.preventDefault();
       const label = opener.dataset.qrLabel || 'VIP-ссылка';
-      const qrUrl = new URL(opener.dataset.qrUrl || '/happ-qr', window.location.href);
+      const qrUrl = new URL(opener.dataset.qrUrl || `${document.body?.dataset?.vpnBase || ''}/happ-qr`, window.location.href);
       qrUrl.searchParams.set('v', '4');
       image.src = qrUrl.href;
       image.alt = `QR подписки HAPP: ${label}`;
@@ -90,7 +90,8 @@
   });
 
   document.addEventListener('submit', (event) => {
-    const form = event.target.closest('form[action="/happ-users/action"]');
+    const basePath = document.body?.dataset?.vpnBase || '';
+    const form = event.target.closest(`form[action="${basePath}/happ-users/action"]`);
     if (!form || event.submitter?.value !== 'delete' || form.dataset.confirmed === 'true') return;
     event.preventDefault();
     const dialog = document.querySelector('[data-happ-user-delete-dialog]');

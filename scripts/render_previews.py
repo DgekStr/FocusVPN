@@ -4,9 +4,10 @@ import json
 import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import SimpleCookie
 from pathlib import Path
 from unittest.mock import patch
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'server' / 'panel'))
@@ -57,10 +58,20 @@ def main():
     parser.add_argument('--serve', action='store_true')
     parser.add_argument('--capture', action='store_true')
     parser.add_argument('--port', type=int, default=8788)
+    parser.add_argument('--crm-embed', action='store_true')
+    parser.add_argument('--crm-dir', type=Path)
+    parser.add_argument('--output-dir', type=Path)
     arguments = parser.parse_args()
     pages = render_pages()
+    if arguments.crm_embed:
+        pages = {route: app.crm_embed(content) for route, content in pages.items()}
     preview = pages['/happ-server'].replace('/panel.css?v=20', '../server/panel/static/panel.css').replace('/favicon.png', '../server/panel/static/favicon.png').replace('/panel.js?v=17', '../server/panel/static/panel.js').replace('/happ-actions.js?v=7', '../server/panel/static/happ-actions.js')
-    (ROOT / 'docs' / 'ui-preview.html').write_text(preview, encoding='utf-8')
+    if arguments.output_dir:
+        arguments.output_dir.mkdir(parents=True, exist_ok=True)
+        for route, content in pages.items():
+            (arguments.output_dir / (route.strip('/') + '.html')).write_text(content, encoding='utf-8')
+    else:
+        (ROOT / 'docs' / 'ui-preview.html').write_text(preview, encoding='utf-8')
     assert 'v2.0' in preview and 'data-happ-account="personal-demo-a"' in preview
     assert '03.10.2026 09:15:23' in pages['/happ-history']
     print('safe renderer previews generated', flush=True)
@@ -70,6 +81,12 @@ def main():
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             return
+
+        def preview_role(self):
+            cookies = SimpleCookie()
+            cookies.load(self.headers.get('Cookie', ''))
+            value = cookies.get('vpn_preview_role')
+            return value.value if value else 'architect'
 
         def do_POST(self):
             allowed = {'project-overview.png', 'wireguard-and-happ-preview.png', 'vpn-servers.png', 'happ-history.png', 'happ-mobile.png'}
@@ -90,29 +107,78 @@ def main():
             self.end_headers()
 
         def do_GET(self):
-            path = urlsplit(self.path).path
-            if path in pages:
-                content, kind = pages[path].encode('utf-8'), 'text/html; charset=utf-8'
-            elif path in ('/happ-server/live', '/outbounds/checks'):
-                content, kind = json.dumps(LIVE if path == '/happ-server/live' else CHECKS, ensure_ascii=False).encode('utf-8'), 'application/json; charset=utf-8'
+            parsed = urlsplit(self.path)
+            path = parsed.path
+            extra_headers = {}
+            if arguments.crm_dir and path.startswith('/api/v1/'):
+                data = []
+                if path == '/api/v1/auth/me':
+                    data = {'userId': 'renderer-preview', 'displayName': 'VPN preview', 'roles': [self.preview_role()], 'active': True, 'authMode': 'local-session'}
+                elif path == '/api/v1/account/notification-settings':
+                    data = {'notificationRetentionDays': 10}
+                elif path == '/api/v1/bug-fixes/status':
+                    data = {'enabled': False}
+                elif path == '/api/v1/time-entries/current':
+                    data = None
+                elif path in ('/api/v1/settings', '/api/v1/profitability-settings'):
+                    data = {}
+                content = json.dumps({'data': data, 'meta': {'total': 0}}, ensure_ascii=False).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+            crm_assets = {
+                '/admin': 'admin.html', '/ui.js': 'ui.js', '/ui-bootstrap.js': 'ui-bootstrap.js',
+                '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/assets/logo_dark2.svg': 'assets/logo_dark2.svg',
+                '/assets/bg.jpg': 'assets/bg.jpg', '/favicon.svg': 'favicon.svg',
+                '/vpn-embed.css': 'vpn-embed.css', '/vpn-embed.js': 'vpn-embed.js',
+                '/chat-admin-notifications.css': 'chat-admin-notifications.css',
+                '/chat-admin-notifications.js': 'chat-admin-notifications.js',
+            }
+            if arguments.crm_dir and path in crm_assets:
+                filename = arguments.crm_dir / crm_assets[path]
+                content = filename.read_bytes()
+                types = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg'}
+                kind = types.get(filename.suffix, 'application/octet-stream')
+                role = parse_qs(parsed.query).get('role', [''])[0]
+                if path == '/admin' and role in ('admin', 'architect', 'accountant', 'viewer'):
+                    extra_headers['Set-Cookie'] = f'vpn_preview_role={role}; Path=/; SameSite=Strict'
             else:
-                assets = {'/panel.css': ('server/panel/static/panel.css', 'text/css'), '/panel.js': ('server/panel/static/panel.js', 'text/javascript'), '/happ-actions.js': ('server/panel/static/happ-actions.js', 'text/javascript'), '/favicon.png': ('server/panel/static/favicon.png', 'image/png'), '/': ('index.html', 'text/html; charset=utf-8')}
-                if path in assets:
-                    filename, kind = assets[path]
-                elif path.startswith('/docs/screenshots/') and '..' not in path:
-                    filename, kind = path[1:], 'image/png'
+                if arguments.crm_embed and path.startswith('/admin/vpn/panel/'):
+                    if arguments.crm_dir and self.preview_role() not in ('admin', 'architect'):
+                        self.send_error(403)
+                        return
+                    path = path[len('/admin/vpn/panel'):]
+                    extra_headers['X-Frame-Options'] = 'SAMEORIGIN'
+                if path in pages:
+                    content, kind = pages[path].encode('utf-8'), 'text/html; charset=utf-8'
+                elif path in ('/happ-server/live', '/outbounds/checks'):
+                    content, kind = json.dumps(LIVE if path == '/happ-server/live' else CHECKS, ensure_ascii=False).encode('utf-8'), 'application/json; charset=utf-8'
                 else:
-                    self.send_error(404)
-                    return
-                content = (ROOT / filename).read_bytes()
+                    assets = {'/panel.css': ('server/panel/static/panel.css', 'text/css'), '/panel.js': ('server/panel/static/panel.js', 'text/javascript'), '/happ-actions.js': ('server/panel/static/happ-actions.js', 'text/javascript'), '/favicon.png': ('server/panel/static/favicon.png', 'image/png'), '/': ('index.html', 'text/html; charset=utf-8')}
+                    if arguments.crm_embed:
+                        assets['/happ-qr'] = ('server/panel/static/favicon.png', 'image/png')
+                    if path in assets:
+                        filename, kind = assets[path]
+                    elif path.startswith('/docs/screenshots/') and '..' not in path:
+                        filename, kind = path[1:], 'image/png'
+                    else:
+                        self.send_error(404)
+                        return
+                    content = (ROOT / filename).read_bytes()
             self.send_response(200)
             self.send_header('Content-Type', kind)
             self.send_header('Content-Length', str(len(content)))
+            self.send_header('Cache-Control', 'no-store')
+            for name, value in extra_headers.items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(content)
 
     server = ThreadingHTTPServer(('127.0.0.1', arguments.port), Handler)
-    print(f'preview=http://127.0.0.1:{arguments.port}', flush=True)
+    print(f'preview=http://127.0.0.1:{server.server_address[1]}', flush=True)
     try:
         server.serve_forever()
     finally:

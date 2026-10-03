@@ -9,6 +9,7 @@ import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qs, urlencode, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
 if sys.platform == 'win32':
@@ -177,6 +178,28 @@ class HistoryTests(unittest.TestCase):
                     response = connection.getresponse()
                     self.assertEqual(response.status, 403)
                     response.read()
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
+    def test_history_retention_settings_post_saves_and_redirects(self):
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+        try:
+            with patch.object(app, 'HAPP_HISTORY', self.history), patch.object(app, 'HAPP_USERS', None), patch.object(app.Handler, 'require_access', return_value=True):
+                for days, csrf, kind in [('90', app.CSRF_TOKEN, 'success'), ('0', app.CSRF_TOKEN, 'error'), ('120', 'invalid-csrf', 'error')]:
+                    connection.request('POST', '/settings/happ-history', urlencode({'csrf': csrf, 'retention_days': days}), {'Content-Type': 'application/x-www-form-urlencoded'})
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 303)
+                    location = urlparse(response.getheader('Location'))
+                    self.assertEqual(location.path, '/settings')
+                    self.assertEqual(parse_qs(location.query)['kind'], [kind])
+                    response.read()
+                    self.assertEqual(self.history.retention_days(), 90)
         finally:
             connection.close()
             server.shutdown()

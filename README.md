@@ -2,7 +2,7 @@
 
 Единый VPN-шлюз и административная панель для WireGuard, sing-box и HAPP.
 
-Состояние проекта зафиксировано: **2026-10-03**.
+Состояние проекта зафиксировано: **2026-10-04**.
 
 Текущая версия: **v2.0**. Базовая версия **v1.0** соответствует ранее опубликованному коммиту `3f48b16`; история Git не переписывается.
 
@@ -36,6 +36,13 @@
 - Сетевой допуск панели настраивается через `FOCUSVPN_ADMIN_NETWORK`; по умолчанию остаются LAN/VPN/management. На текущем сервере включён `0.0.0.0/0` для `9443`, в приложении и firewall, с сохранением авторизации, токенов и защиты `51821`. HTTP не шифруется; для недоверенных сетей нужен HTTPS. Проброс NAT не меняется автоматически.
 - Панель WireGuard показывает пять статусных карточек: онлайн, всего, DL/UL, WAN IP и uptime сервиса.
 
+## CRM Administration Bridge — 2026-10-04
+
+- CRM использует существующую FocusVPN panel через role-gated server-side proxy `/admin/vpn/panel/`; отдельный VPN gateway не устанавливается.
+- Поддерживаются service-token mode с отдельным 32-byte secret и source allowlist либо administrator-password mode через CRM encrypted settings. Секреты не попадают в browser storage или Git.
+- CRM preview renderer умеет собирать embedded panel с синтетическими данными; retention HAPP settings save/validation flow покрыт persistence и CSRF tests.
+- Проверки текущего bridge среза: CRM bridge 4/4, HAPP history 15/15, panel checks, stats UI и Python compilation passed.
+
 ## Endpoints
 
 | Назначение | Адрес |
@@ -51,7 +58,7 @@
 | Персональная подписка | `http://<gateway-host>:9443/happ-subscription/<secret-token>` |
 | HAPP VLESS inbound | `<public-ip-or-domain>:9445` |
 
-По умолчанию панель разрешена из `<wireguard-client-network>`, `<lan-network>` и `<management-network>`. Дополнительную IPv4-сеть задаёт `FOCUSVPN_ADMIN_NETWORK`; на текущем сервере по прежнему запросу владельца включён `0.0.0.0/0`. Nginx reverse proxy задаётся конфигом `server/config/nginx/vpn.focuslens.dev`; backend доверяет `X-Real-IP` только от `FOCUSVPN_TRUSTED_PROXY_NETWORKS=192.168.0.15/32`, а HTTPS-сессии получают `Secure` cookie. Виртуальный хост `vpn.focuslens.dev` на gateway `192.168.0.15` проксирует HTTPS в `192.168.0.39:9443` и сохраняет штатный Basic Auth/session login. Админка по-прежнему требует входа, подписки - секретного токена аккаунта. **Важно:** порт backend `9443` также остаётся напрямую доступен по незашифрованному HTTP из-за `0.0.0.0/0`; HTTPS домен не закрывает этот обходной путь. Чтобы принудительно использовать TLS, отдельно ограничьте firewall backend-порта адресом gateway proxy. Порт `9445` требует отдельного внешнего TCP-проброса на `<gateway-host>:9445`, если сервер находится за NAT.
+По умолчанию панель разрешена из `<wireguard-client-network>`, `<lan-network>` и `<management-network>`. Дополнительную IPv4-сеть задаёт `FOCUSVPN_ADMIN_NETWORK`; на текущем сервере по прежнему запросу владельца включён `0.0.0.0/0`. Nginx reverse proxy задаётся конфигом `server/config/nginx/vpn.focuslens.dev`; backend доверяет `X-Real-IP` только от `FOCUSVPN_TRUSTED_PROXY_NETWORKS=192.168.0.15/32`, а HTTPS-сессии получают `Secure` cookie. Виртуальный хост `vpn.focuslens.dev` на gateway `192.168.0.15` проксирует HTTPS в `192.168.0.39:9443` и сохраняет штатный Basic Auth/session login. Админка по-прежнему требует входа, подписки - секретного токена аккаунта. Прямой WAN-доступ к `37.208.69.6:9443` сейчас закрыт (внешняя TCP-проверка завершается timeout); внутренний backend listener `192.168.0.39:9443` остаётся HTTP и доступен для reverse proxy по LAN. У приложения сохранён allowlist `0.0.0.0/0`, поэтому клиенты с прямой LAN-доступностью могут обойти HTTPS; для запрета такого LAN-обхода отдельно ограничьте host firewall источником `192.168.0.15`. Порт `9445` требует отдельного внешнего TCP-проброса на `<gateway-host>:9445`, если сервер находится за NAT.
 
 ## Установка
 

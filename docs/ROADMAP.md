@@ -1,6 +1,6 @@
 # Roadmap
 
-Версия: **v2.0**. Дата: **2026-10-03**.
+Версия: **v2.0**. Дата среза: **2026-10-04**.
 
 ## Закрыто
 
@@ -22,6 +22,9 @@
 - [x] Добавить последовательную VLESS автопроверку 1-60 минут и переключение после 3 побед одного профиля.
 - [x] Создать приватный журнал и асинхронную отправку Mattermost с кнопкой проверки webhook.
 - [x] Добавить regression suites для маршрутов/rollback, import, scheduler, notifications и browser polling.
+- [x] Подключить CRM admin bridge к существующей панели с server-side role/origin checks, service-token allowlist и encrypted password mode.
+- [x] Добавить combined CRM/VPN preview renderer с synthetic API fixtures и role-aware embed.
+- [x] Исправить Settings return flow после сохранения HAPP history retention; покрыть persistence, validation и CSRF regression.
 
 ## Следующие вехи
 
@@ -42,3 +45,21 @@
 ## Критерий готовности к публикации
 
 Перед публикацией проверять `git diff`, отсутствие runtime-секретов, Python regression suites, browser Node VM scenario и publication checks. CI ещё предстоит настроить; локальный проход тестов не означает наличие CI. Коммиты и push выполняются только по явной команде владельца.
+
+## Сверка milestones — 2026-10-04
+
+### Закрыто в текущем срезе
+
+- CRM bridge развёрнут на двух сторонах; root-only shared token и network allowlist настроены отдельно от Git.
+- Panel renderer собирает embedded CRM/VPN preview; regression проверяет synthetic data и role boundary.
+- HAPP history retention Settings save/validation flow исправлен и протестирован.
+
+### Осталось
+
+- Автоматические smoke-тесты systemd units и CI pipeline.
+- Production browser acceptance на Windows/Android/iOS HAPP клиентах для subscribe metadata, emoji, announce и refresh.
+- Проверка внешнего WireGuard egress и возвратного трафика.
+- Безопасный deploy script с dry-run/rollback и schema/config migration versioning.
+- Authenticated health/latency dashboard и ручная проверка Mattermost доставки после настройки действующего webhook.
+
+Текущая версия FocusVPN остаётся `v2.0`; CRM release `1.0.0.0.9` не меняет версию VPN.

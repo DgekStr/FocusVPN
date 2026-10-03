@@ -1,5 +1,9 @@
 (() => {
   const views = new Set(['/', '/vless', '/outbounds', '/wireguard', '/happ-server', '/happ-history', '/settings', '/gateway-journal']);
+  const basePath = document.body?.dataset?.vpnBase || '';
+  const panelPath = (value) => basePath + value;
+  const relativePath = (value) => basePath && value.startsWith(basePath + '/') ? value.slice(basePath.length) : value;
+  const formSelector = (action) => `form[action="${panelPath(action)}"]`;
   let navigating = false;
   let wireGuardLiveTimer = null;
   let wireGuardLiveLoading = false;
@@ -22,10 +26,11 @@
       return false;
     }
     const url = new URL(anchor.href, window.location.href);
-    return url.origin === window.location.origin && views.has(url.pathname);
+    return url.origin === window.location.origin && views.has(relativePath(url.pathname));
   }
 
   function updateMenu(pathname) {
+    pathname = relativePath(pathname);
     document.querySelectorAll('[data-panel-nav]').forEach((link) => {
       const active = link.dataset.panelNav === 'vless'
         ? pathname === '/' || pathname.startsWith('/vless')
@@ -99,7 +104,7 @@
       if (wireGuardLiveLoading || document.hidden) return;
       wireGuardLiveLoading = true;
       try {
-        const response = await fetch('/wireguard/live', { credentials: 'same-origin', cache: 'no-store' });
+        const response = await fetch(panelPath('/wireguard/live'), { credentials: 'same-origin', cache: 'no-store' });
         if (response.status === 401) {
           window.location.reload();
           return;
@@ -194,7 +199,7 @@
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 10000);
       try {
-        const response = await fetch('/happ-server/live', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+        const response = await fetch(panelPath('/happ-server/live'), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
         if (response.status === 401) {
           window.location.reload();
           return;
@@ -217,21 +222,21 @@
       window.clearInterval(outboundCheckTimer);
       outboundCheckTimer = null;
     }
-    if (!document.querySelector('[data-outbound-checks], form[action="/settings/vless-monitor"]')) return;
+    if (!document.querySelector(`[data-outbound-checks], ${formSelector('/settings/vless-monitor')}`)) return;
     const refresh = async () => {
       if (outboundCheckLoading || document.hidden) return;
       outboundCheckLoading = true;
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 8000);
       try {
-        const response = await fetch('/outbounds/checks', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+        const response = await fetch(panelPath('/outbounds/checks'), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
         if (response.status === 401) {
           window.location.reload();
           return;
         }
         if (!response.ok) throw new Error('Status refresh failed');
         const payload = await response.json();
-        const monitorStatus = document.querySelector('form[action="/settings/vless-monitor"]')?.closest('section')?.querySelector('p.muted');
+        const monitorStatus = document.querySelector(formSelector('/settings/vless-monitor'))?.closest('section')?.querySelector('p.muted');
         if (monitorStatus && payload.automation) {
           const automation = payload.automation;
           const text = `Последняя проверка: ${formatDateTime(automation.last_checked_at, 'ещё не выполнялась')}. Кандидат: ${automation.candidate || 'нет'} · ${automation.streak || 0}/3.${automation.running ? ' Цикл выполняется.' : ''}`;
@@ -272,7 +277,7 @@
           const checkedAt = row?.querySelector('[data-outbound-checked-at]');
           if (latency) latency.textContent = typeof check.latency_ms === 'number' ? check.latency_ms.toFixed(2) : '—';
           if (checkedAt) checkedAt.textContent = formatDateTime(check.checked_at);
-          const button = row?.querySelector('form[action="/outbounds/check"] button');
+          const button = row?.querySelector(`${formSelector('/outbounds/check')} button`);
           if (button) button.disabled = check.state === 'running' || check.state === 'queued';
         });
       } catch (_) {
@@ -326,7 +331,7 @@
   });
 
   document.addEventListener('submit', (event) => {
-    if (event.target.matches('form[action="/outbounds/import"]')) {
+    if (event.target.matches(formSelector('/outbounds/import'))) {
       const button = event.target.querySelector('button[type="submit"]');
       if (button) {
         button.disabled = true;
@@ -382,7 +387,7 @@
   async function navigate(url, pushState) {
     if (navigating) return;
     const target = new URL(url, window.location.href);
-    if (target.origin !== window.location.origin || !views.has(target.pathname)) return;
+    if (target.origin !== window.location.origin || !views.has(relativePath(target.pathname))) return;
     const current = new URL(window.location.href);
     if (target.pathname === current.pathname && target.search === current.search && target.hash === current.hash) {
       updateMenu(target.pathname);

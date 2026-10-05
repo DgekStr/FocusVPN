@@ -13,7 +13,14 @@
 - HTTPS reverse proxy `vpn.focuslens.dev`, trusted-proxy IP/session binding, обновление Subscription origin из публичного DNS URL.
 - Standalone Git-clone bootstrap, автоматическая установка системных зависимостей и интерактивное безопасное создание panel auth hash; systemd units ставятся при bootstrap, VPN services стартуют только после заполнения реальных конфигов.
 - Runtime VERSION, актуальные README/status/roadmap/security/operations и обезличенные screenshots.
-- 68 Python-тестов, два Node VM UI-сценария и локальные publication checks.
+- 88 Python-тестов, два Node VM UI-сценария и локальные publication checks.
+
+### Post-release updates — 2026-10-05
+
+- Добавлен opt-in default gateway mode для WireGuard-клиентов с проверкой main route, forwarding, FORWARD и NAT. Он оставляет системный route и HAPP inbound незатронутыми; активный production mode не меняется автоматически.
+- Settings перестроен в равные responsive две колонки; selector gateway вынесен наверх.
+- Добавлен однофайловый Git bootstrap: скачивание выбранного ref, зависимостей и checksum-проверенного sing-box; password prompt не передаёт пароль через argv/environment. Пустые/placeholder configs блокируют старт VPN-служб.
+- Проверен clean clone `master`; installer tests/unit tests/publication gates прошли. Полный privileged apt/systemd first boot требует отдельной Debian/Ubuntu VM.
 
 ### Ограничения
 

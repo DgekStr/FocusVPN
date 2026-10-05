@@ -1,6 +1,6 @@
 # Roadmap
 
-Версия: **v2.0**. Дата среза: **2026-10-04**.
+Версия: **v2.0**. Дата среза: **2026-10-05**.
 
 ## Закрыто
 
@@ -25,6 +25,10 @@
 - [x] Подключить CRM admin bridge к существующей панели с server-side role/origin checks, service-token allowlist и encrypted password mode.
 - [x] Добавить combined CRM/VPN preview renderer с synthetic API fixtures и role-aware embed.
 - [x] Исправить Settings return flow после сохранения HAPP history retention; покрыть persistence, validation и CSRF regression.
+- [x] Добавить default gateway mode с route/forward/NAT preflight; проверить WireGuard-to-default и VLESS-to-default transitions без смены production mode.
+- [x] Выравнять Settings панели в равные responsive 2-column rows; вынести gateway selector наверх.
+- [x] Добавить bootstrap с temporary Git clone, dependency downloads, secure password prompt и полным unit validation.
+- [x] Настроить HTTPS reverse proxy `vpn.focuslens.dev` с real-client session binding и обновляемым subscription origin.
 
 ## Следующие вехи
 
@@ -62,4 +66,4 @@
 - Безопасный deploy script с dry-run/rollback и schema/config migration versioning.
 - Authenticated health/latency dashboard и ручная проверка Mattermost доставки после настройки действующего webhook.
 
-Текущая версия FocusVPN остаётся `v2.0`; CRM release `1.0.0.0.9` не меняет версию VPN.
+Текущая версия FocusVPN остаётся `v2.0`; CRM release `1.0.0.0.9` не меняет версию VPN. Новый default gateway mode развёрнут, но production оставлен в VLESS. Standalone bootstrap и clean-clone source/tests проверены; полноценный `apt/systemd` first-boot требуется дополнительно прогнать в disposable Debian/Ubuntu VM.

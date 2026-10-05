@@ -181,7 +181,7 @@ node scripts/test_happ_stats_ui.js
 .\scripts\validate.ps1
 ```
 
-Тесты покрывают общий маршрут gateway/HAPP и rollback, пакетный импорт, неблокирующий POST, три последовательные победы VLESS, webhook и восстановление polling после сетевой ошибки. Конфигурационный check или статус `active` не заменяют успешный HTTPS-тест.
+88 Python-тестов и две Node UI suites покрывают gateway/HAPP transitions и rollback, default-route preflight, proxy IP/session binding, password bootstrap, пакетный импорт, VLESS monitoring/webhook, HAPP users/subscriptions/history/XLS и browser polling. Публичный `master` прошёл clean-clone validation. Полный privileged apt/systemd first boot требует disposable Debian/Ubuntu VM; конфигурационный check или статус `active` не заменяют успешный HTTPS-тест.
 
 ## Репозиторий
 

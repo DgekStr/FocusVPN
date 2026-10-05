@@ -9,6 +9,9 @@
 - Короткое уведомление о частном VPN для focuslens.dev через UTF-8 Base64 `announce`; `/happ-info` с выравниванием по ширине. Нативное выравнивание контролирует HAPP.
 - Отображение дат отчётов, XLS и проверки отклика в UTC `dd.mm.yyyy HH:MM:SS`; исходный ISO storage/API сохранён.
 - Настраиваемый IPv4-допуск `FOCUSVPN_ADMIN_NETWORK`, согласованный с nftables. На текущем сервере явно включён `0.0.0.0/0`; auth/token checks и защита wg-easy 51821 сохранены.
+- Default VPN gateway mode: direct egress через текущий server default route, с предварительной проверкой route/forward/NAT и сохранением per-client LAN deny; активируется явно из Settings.
+- HTTPS reverse proxy `vpn.focuslens.dev`, trusted-proxy IP/session binding, обновление Subscription origin из публичного DNS URL.
+- Standalone Git-clone bootstrap, автоматическая установка системных зависимостей и интерактивное безопасное создание panel auth hash; systemd units ставятся при bootstrap, VPN services стартуют только после заполнения реальных конфигов.
 - Runtime VERSION, актуальные README/status/roadmap/security/operations и обезличенные screenshots.
 - 68 Python-тестов, два Node VM UI-сценария и локальные publication checks.
 

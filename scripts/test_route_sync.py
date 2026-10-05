@@ -98,6 +98,27 @@ class RouteSyncTests(unittest.TestCase):
         self.assertEqual(json.loads(self.happ_path.read_text())['route']['final'], 'focusvpn-wg-direct')
         self.assertEqual(json.loads(self.mode_path.read_text())['happ_route'], 'auto-8')
 
+    def test_gateway_default_mode_persists_and_blocks_tproxy_restart(self):
+        self.mode_path.write_text(json.dumps({'mode': 'default'}))
+        self.assertEqual(app.gateway_mode(), 'default')
+        command = self.patch('command', return_value=CompletedProcess([], 0, ''))
+        self.patch('VLESS_MONITOR', None)
+        with patch.object(app, 'GATEWAY_MODE_UNIT', 'focusvpn-gateway-mode@{}.service'):
+            app.control_gateway_mode('default')
+        self.assertEqual(command.call_args.args[0], [app.SYSTEMCTL_BIN, 'start', 'focusvpn-gateway-mode@default.service'])
+        with self.assertRaisesRegex(ValueError, 'режим шлюза на VLESS'):
+            app.control_system_service('sing-box', 'start')
+
+    def test_gateway_default_mode_does_not_require_external_peer_config(self):
+        self.patch('GATEWAY_MODE_PATH', self.mode_path)
+        self.patch('WIREGUARD_CLIENT_CONFIG_PATH', Path(self.directory.name) / 'missing-wg-client.conf')
+        command = self.patch('command', return_value=CompletedProcess([], 0, ''))
+        self.patch('VLESS_MONITOR', None)
+        with patch.object(app, 'gateway_mode', side_effect=['vless', 'default']):
+            app.control_gateway_mode('default')
+        self.assertEqual(command.call_args.args[0], [app.SYSTEMCTL_BIN, 'start', app.GATEWAY_MODE_UNIT.format('default')])
+        self.assertFalse((Path(self.directory.name) / 'missing-wg-client.conf').exists())
+
     def test_failed_restart_restores_both_configs_and_mode(self):
         previous = [path.read_bytes() for path in (self.gateway_path, self.happ_path, self.mode_path)]
         self.happ_restart.side_effect = [RuntimeError('failed restart'), None]
@@ -112,6 +133,39 @@ class RouteSyncTests(unittest.TestCase):
         self.assertIn('/outbounds/check', page)
         self.assertNotIn('data-panel-nav="vless"', page)
         self.assertFalse(hasattr(app, 'update_hysteria2_auto8'))
+
+    def test_settings_shows_gateway_modes_first_in_two_column_layout(self):
+        api = types.SimpleNamespace(general=Mock(return_value={}), interface=Mock(return_value={}))
+        self.patch('WG_ADMIN', types.SimpleNamespace(api=api))
+        self.patch('managed_server_outbounds', return_value=[])
+        self.patch('selectable_outbounds', return_value=[])
+        self.patch('json_text', return_value='{}')
+        self.patch('load_happ_state', return_value={'server': 'vpn.example.com'})
+        self.patch('HAPP_USERS', None)
+        self.patch('public_vless_link', return_value='vless://demo@vpn.example.com:9445')
+        self.patch('load_service_control', return_value={'wireguard_fallback_gateway': '192.168.0.6'})
+        self.patch('gateway_mode', return_value='default')
+        self.patch('WIREGUARD_CLIENT_CONFIG_PATH', Path(self.directory.name) / 'missing-wg.conf')
+        self.patch('load_wireguard_client_text', return_value='')
+        self.patch('VLESS_MONITOR', None)
+        self.patch('load_monitor_settings', return_value={'enabled': False, 'interval_minutes': 5, 'auto_switch': False, 'mattermost_enabled': False, 'webhook_url': ''})
+        self.patch('HAPP_HISTORY', None)
+        self.patch('wireguard_state', return_value='active')
+        self.patch('service_state', return_value='active')
+        self.patch('render_shell', side_effect=lambda title, body, *args, **kwargs: body)
+
+        page = app.render_settings_page({}, {})
+        self.assertIn('<div class="settings-layout">', page)
+        self.assertEqual(page.count('class="panel gateway-mode-panel"'), 1)
+        self.assertEqual(page.count('class="panel service-control-panel"'), 1)
+        self.assertNotIn('settings-wide', page)
+        self.assertLess(page.index('Режим работы VPN-шлюза'), page.index('Публичный URL подписки HAPP'))
+        self.assertEqual(page.count('data-gateway-mode='), 3)
+        self.assertIn('data-gateway-mode="default"', page)
+        self.assertIn('value="default"', page)
+        self.assertIn('Шлюз по умолчанию', page)
+        self.assertEqual(page.count('class="panel service-control-panel"'), 1)
+        self.assertNotIn('settings-wide', page)
 
     def test_connection_result_is_bound_to_profile(self):
         root = Path(self.directory.name)

@@ -34,8 +34,8 @@ Options:
   -h, --help  Show this help.
 
 The default mode installs dependencies, code, systemd units and safe templates,
-but does not start network services. Complete runtime config files first, then
-run the command again with --enable.
+but does not start VPN services until all real runtime configs are provided.
+For a one-command GitHub bootstrap, see scripts/bootstrap.sh.
 EOF
 }
 
@@ -190,38 +190,7 @@ PY
 initialize_auth() {
   [[ -f "$ADMIN_ROOT/auth.json" ]] && return
   [[ -t 0 ]] || fail "no auth.json found; run interactively once to create panel credentials"
-  local username password confirmation
-  read -r -p 'FocusVPN panel username [admin]: ' username
-  username="${username:-admin}"
-  read -r -s -p 'FocusVPN panel password: ' password
-  printf '\n'
-  read -r -s -p 'Repeat panel password: ' confirmation
-  printf '\n'
-  [[ "$password" == "$confirmation" ]] || fail "passwords do not match"
-  [[ ${#password} -ge 12 ]] || fail "panel password must contain at least 12 characters"
-  printf '%s\n%s\n' "$username" "$password" | python3 - "$ADMIN_ROOT/auth.json" <<'PY'
-import base64
-import datetime as dt
-import json
-import os
-import secrets
-import sys
-from pathlib import Path
-username = sys.stdin.readline().rstrip('\n')
-password = sys.stdin.readline().rstrip('\n')
-salt = secrets.token_bytes(16)
-payload = {
-    'username': username,
-    'salt': base64.b64encode(salt).decode('ascii'),
-    'hash': base64.b64encode(__import__('hashlib').scrypt(password.encode('utf-8'), salt=salt, n=2**14, r=8, p=1, dklen=32)).decode('ascii'),
-    'realm': f'FocusVPN {secrets.token_hex(4)}',
-    'updated_at': dt.datetime.now(dt.timezone.utc).isoformat(),
-}
-path = Path(sys.argv[1])
-path.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
-os.chmod(path, 0o600)
-PY
-  unset password confirmation
+  python3 "$REPO_ROOT/scripts/create_panel_auth.py" "$ADMIN_ROOT/auth.json" || fail "panel credentials setup failed"
   log "created $ADMIN_ROOT/auth.json"
 }
 
@@ -249,10 +218,23 @@ enable_services() {
   sing-box check -C "$SING_BOX_ROOT"
   sing-box check -C "$HAPP_ROOT"
   nft --check -f "$SING_BOX_ROOT/tproxy.nft"
-  systemd-analyze verify /etc/systemd/system/sing-box.service /etc/systemd/system/sing-box-admin.service /etc/systemd/system/sing-box-happ-server.service /etc/systemd/system/focusvpn-gateway-mode.service /etc/systemd/system/focusvpn-gateway-mode@.service
+  systemd-analyze verify \
+    /etc/systemd/system/sing-box.service \
+    /etc/systemd/system/sing-box-gateway.service \
+    /etc/systemd/system/sing-box-admin.service \
+    /etc/systemd/system/sing-box-happ-server.service \
+    /etc/systemd/system/sing-box-ru-zone-update.service \
+    /etc/systemd/system/sing-box-ru-zone-update.timer \
+    /etc/systemd/system/wg-easy-private-ui.service \
+    /etc/systemd/system/wg-peer-keepalive.service \
+    /etc/systemd/system/wg-peer-keepalive.timer \
+    /etc/systemd/system/focusvpn-gateway-mode.service \
+    /etc/systemd/system/focusvpn-gateway-mode@.service \
+    /etc/systemd/system/focusvpn-service-control@.service \
+    /etc/systemd/system/focusvpn-outbound-test@.service
   systemctl daemon-reload
   systemctl enable --now sing-box sing-box-happ-server sing-box-admin wg-easy-private-ui sing-box-ru-zone-update.timer wg-peer-keepalive.timer focusvpn-gateway-mode.service
-  systemctl is-active --quiet sing-box sing-box-happ-server sing-box-admin wg-easy-private-ui wg-peer-keepalive.timer
+  systemctl is-active --quiet sing-box sing-box-gateway sing-box-happ-server sing-box-admin wg-easy-private-ui sing-box-ru-zone-update.timer wg-peer-keepalive.timer focusvpn-gateway-mode.service
   log "FocusVPN services are active"
 }
 

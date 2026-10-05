@@ -35,6 +35,26 @@ systemd-analyze verify /etc/systemd/system/sing-box-admin.service
 
 ## Panel deployment
 
+For a clean Debian 12+/Ubuntu 22.04+ host, the standalone executable bootstrap entry point is:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/master/scripts/bootstrap.sh | sudo bash -s -- master
+```
+
+`bootstrap.sh` accepts a Git branch/tag followed by installer options, for example `master --start-wg-easy`; if Git or OS packages are missing it installs them through apt, clones the requested ref into a temporary directory, and runs the same installer. It forwards password prompts to the controlling TTY even when invoked as `curl | sudo bash`. `scripts/create_panel_auth.py` confirms a 12+ character panel password, stores only a salted scrypt hash atomically with mode `0600`, and never sends the password through argv/environment. The installer writes every packaged systemd service/template and downloads sing-box after verifying its SHA-256 checksum. It does not start VPN services with placeholder configs. After entering real gateway/HAPP/wg-easy configs, run `sudo ./scripts/install.sh --enable` from a clone, or repeat the standalone bootstrap with `--enable`. wg-easy initial setup is optional and separately requested with `--start-wg-easy`; its admin/API configuration must be completed before `--enable`.
+
+For a clean-clone smoke without changing a server, clone the same public ref into a temporary directory, check that `VERSION`, `scripts/bootstrap.sh`, `scripts/install.sh`, panel/helper files and packaged systemd units exist, run the Python/Node/publication suites from that checkout, and invoke `scripts/install.sh --help`. A full OS/service startup test requires a disposable Debian/Ubuntu VM; unit tests on Windows do not emulate apt/systemd or start VPN networking.
+
+For a clean Debian 12+/Ubuntu 22.04+ host, the standalone entry point is:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/master/scripts/bootstrap.sh | sudo bash -s -- master
+```
+
+`bootstrap.sh` accepts a Git branch/tag followed by installer options, for example `master --start-wg-easy`; if packages need installation it downloads them through apt, clones the requested ref into a temporary directory, and runs the same installer. `scripts/create_panel_auth.py` prompts through the controlling TTY (so the command also works when bootstrap is piped), confirms a 12+ character panel password, stores only a salted scrypt hash atomically with mode `0600`, and never sends the password through argv/environment. The installer writes all service unit files but does not start VPN services with placeholder configs. After entering real gateway/HAPP/wg-easy configs, run `sudo ./scripts/install.sh --enable` from a clone, or repeat the standalone bootstrap with `--enable`. wg-easy initial setup is optional and separately requested with `--start-wg-easy`; its admin/API configuration must be completed before `--enable`.
+
+To verify the clone/deploy path without touching the production host, run `git clone --branch <ref> --depth 1 https://github.com/DgekStr/FocusVPN.git <temporary-dir>`, then execute `scripts/validate.ps1` and the documented Python/Node suites from that checkout. The bootstrap uses only the cloned repository; production runtime credentials are not sourced from Git.
+
 The default outbound and server profiles are shared between the gateway and HAPP configuration. Applying a server or route change validates and backs up both files, then restarts both services in VLESS mode. In WireGuard mode HAPP retains its marked direct outbound; the chosen provider route is stored for the return to VLESS. Regression check: `py -3 scripts/test_route_sync.py`.
 
 Server JSON import queues `focusvpn-outbound-test@<tag>.service` checks after saving validated profiles and returns without waiting for network tests. An isolated sing-box process with a loopback SOCKS listener checks HTTPS egress without switching the production route or holding the configuration lock. The manager polls the authenticated `/outbounds/checks` endpoint and displays queued, running, success or error status per profile. Only a sanitized result is stored under `/etc/sing-box-admin/outbound-checks/`. The manager provides a repeat-check button; TLS verification stays enabled unless explicitly configured otherwise in the imported profile.
@@ -48,7 +68,7 @@ Server JSON import queues `focusvpn-outbound-test@<tag>.service` checks after sa
 
 ## Firewall deployment
 
-The libexec scripts are paired with units in `server/systemd/`. `focusvpn-gateway-mode@.service` switches between VLESS/TProxy and the external `wg-client` interface. Routes are source-policy scoped to `FOCUSVPN_WG_NETWORK`; `FOCUSVPN_LAN_NETWORK` uses the main route table. Apply nft rules only after validation; keep the current ruleset backup for rollback.
+The libexec scripts are paired with units in `server/systemd/`. `focusvpn-gateway-mode@.service` switches among VLESS/TProxy, the system's default gateway, and external `wg-client`. In default mode it stops sing-box TPROXY and external WG, keeps the main default route unchanged, restores HAPP's normal provider outbound, and sends forwarded WireGuard-client Internet traffic through the existing default-device FORWARD/MASQUERADE rules. Before changing mode it verifies the main default route, the post-transition route decision for a `wg0` client, IPv4 forwarding, return-path FORWARD, and subnet MASQUERADE; it refuses the transition if any prerequisite is absent. The existing `wg_lan_deny` policy remains active. VLESS mode keeps the RU/private split; external WG mode remains source-policy scoped to `FOCUSVPN_WG_NETWORK`; `FOCUSVPN_LAN_NETWORK` uses the main route table in tunnel modes. Default mode provides ordinary gateway egress without TPROXY; this is not a VPN tunnel and does not encrypt traffic beyond the server. The mode is for the WireGuard client subnet; HAPP inbound clients remain on their separate configured HAPP outbound. Keep the current ruleset backup for rollback.
 
 The external peer configuration is entered in the authenticated Settings page and stored root-only at `/etc/wireguard/wg-client.conf`. Use a single peer with IPv4 `AllowedIPs = 0.0.0.0/0`; do not add `PostUp`, `PreUp`, or other shell hooks. The selected mode is restored by `focusvpn-gateway-mode.service` after reboot. Do not switch to WireGuard until the external peer is provisioned and reachable.
 

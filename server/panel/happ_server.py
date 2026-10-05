@@ -3,6 +3,7 @@ import html
 import json
 from pathlib import Path
 from urllib.parse import quote
+from urllib.parse import urlsplit, urlunsplit
 
 from happ_users import parse_expiry
 
@@ -27,6 +28,20 @@ def public_vless_link():
 
 def public_happ_link():
     return happ_add_link(public_vless_link())
+
+
+def vless_link_for_subscription(link, subscription_url):
+    parsed_link = urlsplit(link)
+    public_host = urlsplit(subscription_url).hostname
+    if parsed_link.scheme != 'vless' or not parsed_link.hostname or not public_host:
+        raise ValueError('Не удалось определить публичный VLESS host.')
+    if ':' in public_host:
+        public_host = '[' + public_host + ']'
+    userinfo, separator, _ = parsed_link.netloc.rpartition('@')
+    authority = (userinfo + separator if separator else '') + public_host
+    if parsed_link.port:
+        authority += ':' + str(parsed_link.port)
+    return urlunsplit((parsed_link.scheme, authority, parsed_link.path, parsed_link.query, parsed_link.fragment))
 
 
 def subscription_content(user, traffic, information_url=None):

@@ -18,6 +18,17 @@ async function main() {
   const button = { disabled: true };
   const checkedAt = { textContent: '' };
   const row = { classList: classList(), querySelector: (selector) => selector.includes('button') ? button : selector === '[data-outbound-checked-at]' ? checkedAt : { textContent: '' } };
+  const documentEvents = new Map();
+  const dialogTitle = { textContent: '' };
+  const dialogMessage = { textContent: '' };
+  const gatewayDialog = {
+    showModal() { this.open = true; },
+    querySelector(selector) {
+      if (selector === '[data-gateway-dialog-title]') return dialogTitle;
+      if (selector === '[data-gateway-dialog-message]') return dialogMessage;
+      return { focus() {} };
+    },
+  };
   const cell = { dataset: { outboundCheckTag: 'auto-8' }, textContent: 'Проверяется', closest: () => row };
   const timeouts = [];
   let refresh;
@@ -29,10 +40,11 @@ async function main() {
     console,
     document: {
       hidden: false,
-      addEventListener() {},
+      addEventListener(name, callback) { documentEvents.set(name, callback); },
       querySelector(selector) {
         if (selector === '[data-outbound-summary]') return summary;
         if (selector.startsWith('[data-outbound-checks]')) return {};
+        if (selector === '[data-gateway-dialog]') return gatewayDialog;
         return null;
       },
       querySelectorAll: (selector) => selector === '[data-outbound-check-tag]' ? [cell] : [],
@@ -80,6 +92,19 @@ async function main() {
   assert.equal(row.classList.values.has('outbound-failed'), true);
   assert.equal(summary.classList.values.has('error'), true);
   console.log('PASS: timeout recovers polling, HTTP errors surface, completed check replaces stale banner');
+
+  const gatewayForm = { dataset: { gatewayMode: 'default' } };
+  documentEvents.get('submit')({
+    target: {
+      matches: () => false,
+      closest: (selector) => selector === 'form[data-gateway-mode]' ? gatewayForm : null,
+    },
+    preventDefault() {},
+  });
+  assert.equal(gatewayDialog.open, true);
+  assert.equal(dialogTitle.textContent, 'Переключить на шлюз по умолчанию?');
+  assert.match(dialogMessage.textContent, /основной шлюз сервера/);
+  console.log('PASS: default gateway confirmation explains direct server-default egress');
 }
 
 main().catch((error) => {

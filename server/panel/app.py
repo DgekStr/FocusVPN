@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlspl
 from wg_admin import WgAdmin
 from wg_easy_api import WgEasyApi, WgEasyApiError
 from happ_server import load_state as load_happ_state
-from happ_server import public_vless_link, subscription_content, subscription_information_page
+from happ_server import public_vless_link, subscription_content, subscription_information_page, vless_link_for_subscription
 from happ_server_ui import page as happ_server_page
 from happ_stats import HappStatsError, live_connections as happ_live_connections
 from happ_stats import format_datetime
@@ -288,14 +288,14 @@ def load_wireguard_client_text():
 def gateway_mode():
     try:
         payload = json.loads(GATEWAY_MODE_PATH.read_text(encoding='utf-8'))
-        return payload.get('mode') if payload.get('mode') in ('vless', 'wireguard') else 'vless'
+        return payload.get('mode') if payload.get('mode') in ('vless', 'wireguard', 'default') else 'vless'
     except (OSError, json.JSONDecodeError, AttributeError):
         return 'vless'
 
 
 def control_gateway_mode(mode):
     previous_mode = gateway_mode()
-    if mode not in ('vless', 'wireguard'):
+    if mode not in ('vless', 'wireguard', 'default'):
         raise ValueError('Неизвестный режим шлюза.')
     if mode == 'wireguard' and not WIREGUARD_CLIENT_CONFIG_PATH.is_file():
         raise ValueError('Сначала сохраните конфигурацию внешнего WireGuard-сервера.')
@@ -312,8 +312,8 @@ def control_gateway_mode(mode):
 def control_system_service(name, action):
     if action not in ('start', 'restart', 'stop'):
         raise ValueError('Неизвестная операция сервиса.')
-    if name == 'sing-box' and action in ('start', 'restart') and gateway_mode() == 'wireguard':
-        raise ValueError('Сначала переключите режим шлюза на VLESS.')
+    if name == 'sing-box' and action in ('start', 'restart') and gateway_mode() in ('wireguard', 'default'):
+        raise ValueError('Переключите режим шлюза на VLESS перед запуском sing-box/TPROXY.')
     result = command([SYSTEMCTL_BIN, action, name], timeout=75)
     expected = 'inactive' if action == 'stop' else 'active'
     if result.returncode != 0 or service_state(name) != expected:
@@ -883,7 +883,7 @@ def check_candidate(data):
 
 
 def restart_sing_box():
-    if gateway_mode() == 'wireguard':
+    if gateway_mode() in ('wireguard', 'default'):
         return False
     result = command([SYSTEMCTL_BIN, 'restart', 'sing-box'], timeout=45)
     if result.returncode != 0 or service_state('sing-box') != 'active':
@@ -1472,6 +1472,7 @@ def render_settings_page(config, query, message='', kind='success'):
         client_configured = WIREGUARD_CLIENT_CONFIG_PATH.is_file()
         wireguard_client_text = load_wireguard_client_text()
         vip_link = HAPP_USERS.vip()['link'] if HAPP_USERS is not None else public_vless_link()
+        vip_link = vless_link_for_subscription(vip_link, happ_subscription_origin)
         monitor_settings = load_monitor_settings(APP_DIR)
         monitor_state = VLESS_MONITOR.status() if VLESS_MONITOR is not None else {}
         monitor_state = {**monitor_state, 'last_checked_at': format_datetime(monitor_state.get('last_checked_at'), 'ещё не выполнялась')}
@@ -1482,20 +1483,23 @@ def render_settings_page(config, query, message='', kind='success'):
             'happ': service_state('sing-box-happ-server'),
         }
         status_class = lambda value: 'ok' if value in ('active', 'running') else 'bad'
+        gateway_mode_labels = {'vless': 'VLESS', 'wireguard': 'Внешний WireGuard', 'default': 'Шлюз по умолчанию'}
+        gateway_mode_panel = f'''<section class="panel gateway-mode-panel"><h2>Режим работы VPN-шлюза</h2><p class="subtitle">Активный режим: <span class="badge {'ok' if active_gateway_mode == 'vless' else 'online'}">{esc(gateway_mode_labels[active_gateway_mode])}</span></p><div class="gateway-mode-actions">
+        <form method="post" action="/settings/gateway/mode" data-gateway-mode="vless"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="vless"><button class="{'secondary' if active_gateway_mode != 'vless' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'vless' else ''}>VLESS-шлюз</button></form>
+        <form method="post" action="/settings/gateway/mode" data-gateway-mode="default"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="default"><button class="{'secondary' if active_gateway_mode != 'default' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'default' else ''}>Шлюз по умолчанию</button></form>
+        <form method="post" action="/settings/gateway/mode" data-gateway-mode="wireguard"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="wireguard"><button class="{'secondary' if active_gateway_mode != 'wireguard' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'wireguard' or not client_configured else ''}>Внешний WireGuard{' · активен' if active_gateway_mode == 'wireguard' else ''}</button></form>
+    </div><p class="muted">«Шлюз по умолчанию» отключает VLESS/TPROXY и внешний WireGuard: интернет-трафик клиентов WireGuard идёт через основной шлюз сервера. Локальные сети маршрутизируются напрямую; индивидуальные LAN-запреты сохраняются. Основной маршрут сервера не меняется.</p></section>'''
         body = f'''<section class="page-head">
     <div><p class="eyebrow">Service control</p><h1>Настройки</h1><p class="subtitle">VLESS, WireGuard, HAPP Server и доступ к панели.</p></div>
 </section>
 {message_banner(message, kind)}
 {wg_error}{happ_error}
-<div class="panel-stack">
+<div class="settings-layout">
+    {gateway_mode_panel}
     <section class="panel"><h2>Публичный URL подписки HAPP</h2><form method="post" action="/settings/happ/subscription"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_subscription_base_url">WAN / DNS URL · пусто = публичный адрес HAPP</label><input id="happ_subscription_base_url" name="subscription_base_url" type="url" value="{esc(happ_subscription_setting)}" placeholder="{esc(happ_subscription_origin)}"></div><p class="muted">Текущий адрес: {esc(happ_subscription_origin)}. Внешний порт должен быть доступен клиенту; HTTPS задаётся только для настроенного TLS endpoint.</p><div class="actions"><button type="submit">Сохранить URL подписки</button></div></form></section>
     <section class="panel"><h2>Хранение статистики HAPP</h2><form method="post" action="/settings/happ-history"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_retention_days">Хранить дней · старые записи очищаются автоматически</label><input id="happ_retention_days" name="retention_days" type="number" min="1" max="3650" step="1" value="{history_days}" required></div><div class="actions"><button type="submit">Сохранить срок хранения</button><a class="button secondary" href="/happ-history">История HAPP</a></div></form><p class="muted">База хранится в /mnt/stat/. По умолчанию 60 дней; уменьшение срока сразу удалит записи старше выбранного периода.</p></section>
     <section class="panel"><h2>VIP-ссылка HAPP</h2><div class="field"><label for="happ_vip_link">Существующая общая ссылка · сохранена без изменения</label><textarea id="happ_vip_link" class="public-link-field" readonly spellcheck="false">{esc(vip_link)}</textarea></div></section>
     <section class="panel"><h2>Автопроверка VLESS</h2><form method="post" action="/settings/vless-monitor"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label><input class="inline-checkbox" type="checkbox" name="monitor_enabled"{' checked' if monitor_settings['enabled'] else ''}> Проверять VLESS по расписанию</label></div><div class="field"><label for="monitor_interval_minutes">Интервал между циклами, минуты</label><input id="monitor_interval_minutes" name="interval_minutes" type="number" min="1" max="60" step="1" value="{monitor_settings['interval_minutes']}" required></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="auto_switch"{' checked' if monitor_settings['auto_switch'] else ''}> Автовыбор: минимальная задержка в трёх циклах подряд</label></div><div class="field"><label><input class="inline-checkbox" type="checkbox" name="mattermost_enabled"{' checked' if monitor_settings['mattermost_enabled'] else ''}> Уведомлять Mattermost о смене шлюза</label></div><div class="field"><label for="mattermost_webhook">Webhook Mattermost{' · сохранён' if monitor_settings['webhook_url'] else ''}</label><input id="mattermost_webhook" name="webhook_url" type="password" autocomplete="new-password" placeholder="{'Оставьте пустым для сохранения webhook' if monitor_settings['webhook_url'] else 'https://mattermost.example/hooks/...'}"></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="clear_webhook"> Удалить сохранённый webhook</label></div></div><div class="actions"><button type="submit">Сохранить автоматизацию</button><a class="button secondary" href="/gateway-journal">Журнал переключений</a></div></form><form method="post" action="/settings/vless-monitor/test-webhook"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit"{' disabled' if not monitor_settings['webhook_url'] else ''}>Проверить webhook</button></div></form><p class="muted">Последняя проверка: {esc(monitor_state.get('last_checked_at', 'ещё не выполнялась'))}. Кандидат: {esc(monitor_state.get('candidate') or 'нет')} · {monitor_state.get('streak', 0)}/3.</p></section>
-    <section class="panel gateway-mode-panel"><h2>Режим шлюза</h2><p class="subtitle">Активный режим: <span class="badge {'ok' if active_gateway_mode == 'vless' else 'online'}">{'VLESS' if active_gateway_mode == 'vless' else 'Внешний WireGuard'}</span></p><div class="gateway-mode-actions">
-        <form method="post" action="/settings/gateway/mode" data-gateway-mode="vless"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="vless"><button class="{'secondary' if active_gateway_mode != 'vless' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'vless' else ''}>VLESS-шлюз</button></form>
-        <form method="post" action="/settings/gateway/mode" data-gateway-mode="wireguard"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="wireguard"><button class="{'secondary' if active_gateway_mode != 'wireguard' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'wireguard' or not client_configured else ''}>Внешний WireGuard{' · активен' if active_gateway_mode == 'wireguard' else ''}</button></form>
-    </div><p class="muted">В режиме WireGuard VLESS приостанавливается; весь трафик клиентов, кроме локальной сети, направляется во внешний туннель.</p></section>
     <section class="panel"><h2>Клиент внешнего WireGuard</h2><p class="muted">Последняя сохранённая конфигурация показывается только в этой авторизованной панели. На диске исходный текст и рабочий конфиг хранятся с правами 0600.</p><form method="post" action="/settings/gateway/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="wireguard_client_config">Конфигурация клиента</label><textarea id="wireguard_client_config" name="wireguard_client_config" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.0.0.2/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = vpn.example.com:51820&#10;AllowedIPs = 0.0.0.0/0" required>{esc(wireguard_client_text)}</textarea></div><div class="actions"><button type="submit">{'Обновить конфигурацию' if client_configured else 'Сохранить конфигурацию'}</button><span class="service-status">{'Конфигурация сохранена' if client_configured else 'Конфигурация ещё не задана'}</span></div></form></section>
     <dialog class="gateway-dialog" data-gateway-dialog aria-labelledby="gateway-dialog-title"><form method="dialog"><h2 id="gateway-dialog-title" data-gateway-dialog-title>Сменить шлюз?</h2><p data-gateway-dialog-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-gateway-dialog-confirm>Переключить</button></div></form></dialog>
     <section class="panel service-control-panel"><h2>Управление сервисами</h2><p class="subtitle">При остановке WireGuard-моста маршрут сервера переключается на LAN-шлюз.</p><div class="service-control-grid">
@@ -1933,7 +1937,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             user_key = 'VIP' if user['id'] == 'VIP' else 'personal-' + user['id']
             traffic = HAPP_HISTORY.user_totals().get(user_key, {})
-            content, headers = subscription_content(user, traffic, resolve_happ_subscription_base_url() + '/happ-info')
+            subscription_origin = resolve_happ_subscription_base_url()
+            user = {**user, 'link': vless_link_for_subscription(user['link'], subscription_origin)}
+            content, headers = subscription_content(user, traffic, subscription_origin + '/happ-info')
         except (ValueError, OSError, sqlite3.Error):
             self.send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
             return
@@ -2039,9 +2045,12 @@ class Handler(BaseHTTPRequestHandler):
             with HAPP_LOCK:
                 users = HAPP_USERS.users() if HAPP_USERS is not None else []
                 events = HAPP_USERS.events() if HAPP_USERS is not None else []
-                subscriptions = HAPP_USERS.subscription_urls(resolve_happ_subscription_base_url()) if HAPP_USERS is not None else {}
+                subscription_origin = resolve_happ_subscription_base_url()
+                subscriptions = HAPP_USERS.subscription_urls(subscription_origin) if HAPP_USERS is not None else {}
+                vip_vless_link = vless_link_for_subscription(HAPP_USERS.vip()['link'], subscription_origin) if HAPP_USERS is not None else public_vless_link()
+                users = [{**user, 'link': vless_link_for_subscription(user['link'], subscription_origin)} for user in users]
             traffic = HAPP_HISTORY.user_totals() if HAPP_HISTORY is not None else {}
-            self.send_html(HTTPStatus.OK, happ_server_page(users, CSRF_TOKEN, form_value(query, 'message'), form_value(query, 'kind') or 'success', events, traffic=traffic, subscriptions=subscriptions))
+            self.send_html(HTTPStatus.OK, happ_server_page(users, CSRF_TOKEN, form_value(query, 'message'), form_value(query, 'kind') or 'success', events, traffic=traffic, subscriptions=subscriptions, vip_vless_link=vip_vless_link))
             return
         if parsed.path == '/settings':
             query = parse_qs(parsed.query)
@@ -2184,6 +2193,7 @@ class Handler(BaseHTTPRequestHandler):
                     messages = {
                         'vless': 'Включён VLESS-шлюз. Внешний WireGuard остановлен.',
                         'wireguard': 'Включён внешний WireGuard-шлюз. VLESS приостановлен.',
+                        'default': 'Включён шлюз по умолчанию. Весь внешний трафик клиентов идёт через основной шлюз сервера.',
                     }
                     self.redirect_settings('', messages[mode])
                     return

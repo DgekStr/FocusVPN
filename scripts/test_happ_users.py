@@ -17,7 +17,7 @@ from urllib.parse import urlsplit, parse_qs, quote, unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
 from happ_users import HappUsers, build_user_config, user_link, now_utc, write_private_json
-from happ_server import happ_add_link, subscription_content, SUBSCRIPTION_ANNOUNCEMENT, subscription_information_page
+from happ_server import happ_add_link, subscription_content, SUBSCRIPTION_ANNOUNCEMENT, subscription_information_page, vless_link_for_subscription
 from happ_history import HappHistory
 if sys.platform == 'win32':
     sys.modules.setdefault('grp', types.ModuleType('grp'))
@@ -76,6 +76,15 @@ class HappUserTests(unittest.TestCase):
         self.assertEqual(unquote(wrapped.path[1:]), link)
         self.assertIn('security%3Dreality', wrapped.path)
         self.assertIn('%2526', wrapped.path)
+
+    def test_vless_public_host_uses_subscription_origin_and_preserves_transport(self):
+        rewritten = vless_link_for_subscription(self.link, 'https://vpn.focuslens.dev:443/happ-subscription/demo-token')
+        self.assertEqual(urlsplit(rewritten).hostname, 'vpn.focuslens.dev')
+        self.assertEqual(urlsplit(rewritten).port, 9445)
+        self.assertEqual(urlsplit(rewritten).query, urlsplit(self.link).query)
+        self.assertEqual(urlsplit(rewritten).fragment, urlsplit(self.link).fragment)
+        self.assertEqual(urlsplit(rewritten).username, urlsplit(self.link).username)
+        self.assertEqual(vless_link_for_subscription(self.link, 'http://[2001:db8::10]:9443').split('@', 1)[1].split('?', 1)[0], '[2001:db8::10]:9445')
 
     def test_subscription_token_stable_private_and_revoked(self):
         user_id = self.manager.create('Alice')

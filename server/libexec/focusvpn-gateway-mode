@@ -97,6 +97,39 @@ def configure_happ_outbound(mode, original_route=None):
     return previous_route
 
 
+def verify_default_gateway_route(require_selected=True):
+    defaults = json.loads(run(['/usr/sbin/ip', '-j', '-4', 'route', 'show', 'default']).stdout)
+    if not defaults:
+        raise RuntimeError('Основной IPv4-шлюз сервера не настроен.')
+    default = min(defaults, key=lambda item: item.get('metric', 0))
+    selected = []
+    for source in VPN_NETWORK.hosts():
+        probe = run(['/usr/sbin/ip', '-j', '-4', 'route', 'get', '1.1.1.1', 'from', str(source), 'iif', SERVER_WG_INTERFACE], optional=True)
+        if probe.returncode == 0:
+            selected = json.loads(probe.stdout)
+            if selected:
+                break
+    if not selected:
+        raise RuntimeError('Не удалось определить маршрут клиентского трафика.')
+    if require_selected and not any(item.get('dev') == selected[0].get('dev') and item.get('gateway') == selected[0].get('gateway') for item in defaults):
+        raise RuntimeError('Трафик клиентов не использует основной шлюз сервера.')
+    device = default.get('dev', '')
+    if not device:
+        raise RuntimeError('У основного шлюза сервера не определён сетевой интерфейс.')
+    rules = (
+        [IPTABLES, '-C', 'FORWARD', '-i', SERVER_WG_INTERFACE, '-o', device, '-j', 'ACCEPT'],
+        [IPTABLES, '-C', 'FORWARD', '-i', device, '-o', SERVER_WG_INTERFACE, '-m', 'conntrack', '--ctstate', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'],
+        [IPTABLES, '-t', 'nat', '-C', 'POSTROUTING', '-s', str(VPN_NETWORK), '-o', device, '-j', 'MASQUERADE'],
+    )
+    for rule in rules:
+        if run(rule, optional=True).returncode != 0:
+            raise RuntimeError('Не настроены FORWARD/NAT правила для выхода через основной шлюз сервера.')
+    forwarding = run(['/usr/sbin/sysctl', '-n', 'net.ipv4.ip_forward'])
+    if forwarding.stdout.strip() != '1':
+        raise RuntimeError('IPv4 forwarding выключен на сервере.')
+    return selected[0] if require_selected else default
+
+
 def save_mode(mode, happ_route=None):
     MODE_PATH.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     payload = {'mode': mode}
@@ -171,18 +204,53 @@ def apply_vless():
     save_mode('vless')
 
 
+def apply_default():
+    previous_state = load_mode_state()
+    previous_mode = previous_state.get('mode', 'vless')
+    if previous_mode not in ('vless', 'wireguard', 'default'):
+        previous_mode = 'vless'
+    verify_default_gateway_route(require_selected=False)
+    previous_happ_bytes = HAPP_CONFIG_PATH.read_bytes()
+    previous_happ = json.loads(previous_happ_bytes)
+    original_happ_route = previous_state.get('happ_route') if previous_mode == 'wireguard' else None
+    try:
+        cleanup_wireguard()
+        systemctl('stop', 'sing-box.service')
+        configure_happ_outbound('vless', original_happ_route)
+        if HAPP_CONFIG_PATH.read_bytes() != previous_happ_bytes:
+            systemctl('restart', 'sing-box-happ-server.service')
+        else:
+            systemctl('start', 'sing-box-happ-server.service')
+        verify_default_gateway_route()
+    except Exception:
+        write_json(HAPP_CONFIG_PATH, previous_happ, 0o640, 'sing-box')
+        if previous_mode == 'wireguard':
+            apply_wireguard()
+        elif previous_mode == 'vless':
+            apply_vless()
+        else:
+            cleanup_wireguard()
+            systemctl('stop', 'sing-box.service', optional=True)
+            systemctl('start', 'sing-box-happ-server.service')
+            save_mode('default')
+        raise
+    save_mode('default')
+
+
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ('vless', 'wireguard', 'restore'):
-        raise SystemExit('usage: focusvpn-gateway-mode {vless|wireguard|restore}')
+    if len(sys.argv) != 2 or sys.argv[1] not in ('vless', 'wireguard', 'default', 'restore'):
+        raise SystemExit('usage: focusvpn-gateway-mode {vless|wireguard|default|restore}')
     mode = sys.argv[1]
     if mode == 'restore':
         try:
             saved = json.loads(MODE_PATH.read_text(encoding='utf-8')).get('mode')
         except (OSError, json.JSONDecodeError, AttributeError):
             saved = 'vless'
-        mode = saved if saved in ('vless', 'wireguard') else 'vless'
+        mode = saved if saved in ('vless', 'wireguard', 'default') else 'vless'
     if mode == 'wireguard':
         apply_wireguard()
+    elif mode == 'default':
+        apply_default()
     else:
         apply_vless()
 

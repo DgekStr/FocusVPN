@@ -5,9 +5,9 @@ from happ_server import load_state, happ_add_link, public_vless_link
 from panel_ui import render_shell
 
 
-def page(users=None, csrf='', message='', kind='success', events=None, traffic=None, subscriptions=None):
+def page(users=None, csrf='', message='', kind='success', events=None, traffic=None, subscriptions=None, vip_vless_link=None):
     data = load_state()
-    vless_link = public_vless_link()
+    vless_link = vip_vless_link or public_vless_link()
     subscriptions = subscriptions or {}
     traffic = traffic or {}
     happ_link = happ_add_link(subscriptions.get('VIP', vless_link))

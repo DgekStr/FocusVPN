@@ -2,7 +2,7 @@
 
 Единый VPN-шлюз и административная панель для WireGuard, sing-box и HAPP.
 
-Состояние проекта зафиксировано: **2026-10-04**.
+Состояние проекта зафиксировано: **2026-10-05**.
 
 Текущая версия: **v2.0**. Базовая версия **v1.0** соответствует ранее опубликованному коммиту `3f48b16`; история Git не переписывается.
 
@@ -20,7 +20,8 @@
 - Gateway и HAPP синхронно используют выбранный серверный профиль; применение проверяет оба конфига и поддерживает совместный rollback.
 - Основной раздел панели - VPN-серверы; отдельный пункт VLESS скрыт. WireGuard, HAPP Server, Settings и журнал используют общий shell.
 - Settings управляет VLESS, WireGuard, HAPP Server и паролем панели; HAPP config проходит validation и rollback.
-- Режим шлюза переключается между VLESS и внешним WireGuard-клиентом; при WireGuard VLESS/TProxy приостановлен, трафик VPN-клиентов идёт через туннель, LAN остаётся напрямую.
+- Установка доступна как из Git clone, так и отдельной исполняемой `scripts/bootstrap.sh`: при необходимости устанавливаются Git/пакеты/sing-box, запрашивается пароль панели и создаются все systemd units.
+- Режим работы VPN-шлюза переключается между VLESS/TPROXY, прямым egress через основной default gateway сервера и внешним WireGuard-клиентом. Default mode не меняет системный маршрут сервера; перед включением проверяются route, IPv4 forwarding, существующие FORWARD/NAT правила, индивидуальные LAN-запреты сохраняются. Для WireGuard mode VLESS/TPROXY приостанавливается, трафик VPN-клиентов идёт через внешний туннель. HAPP inbound/outbound остаётся отдельным.
 - VPN-серверы управляются в `/outbounds`: импорт sing-box/Xray VLESS, Hysteria2, Trojan и Shadowsocks JSON, включая массив конфигураций; замена профиля, удаление с синхронизацией `vless-auto` и выбор default route. XHTTP и WireGuard outbound не конвертируются: причина пропуска выводится отдельно.
 - В Settings доступна последовательная автопроверка VLESS с интервалом 1-60 минут, сохранением задержки через туннель и красными статусами ошибок. Автовыбор переключает gateway/HAPP после трёх последовательных побед одного VLESS; ручные изменения сбрасывают серию, WireGuard mode не переключается автоматически.
 - Журнал `/gateway-journal` фиксирует циклы и смену шлюза; уведомления Mattermost отправляются через сохранённый webhook в фоне. URL хранится приватно и не возвращается в интерфейс.
@@ -62,16 +63,21 @@
 
 ## Установка
 
-Оптимальный путь развёртывания - `git clone` и идемпотентный installer из этого репозитория. Он поддерживает Debian 12+ и Ubuntu 22.04+ на `amd64` и `arm64`, устанавливает sing-box `1.14.2`, Docker, systemd units, panel, VERSION и безопасные templates. Для XLS устанавливается `python3-xlwt`. Runtime-секреты никогда не берутся из Git.
+Для чистого Debian 12+/Ubuntu 22.04+ (`amd64`/`arm64`) доступен one-command bootstrap. Он при необходимости устанавливает Git, клонирует выбранную ветку/тег во временный каталог `0700`, запускает installer, скачивает нужные системные зависимости и sing-box с проверкой SHA-256, устанавливает панель/VERSION/templates/все systemd units и интерактивно создаёт пароль Basic Auth. Bootstrap удаляет временный clone после установки; секреты остаются только в `/etc` с root-only permissions.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/master/scripts/bootstrap.sh | sudo bash -s -- master
+```
+
+Для первичной настройки контейнера wg-easy добавьте `--start-wg-easy`; создание контейнера не настраивает его admin/API автоматически. Если реальные runtime-конфиги уже подготовлены, добавьте `--enable`; иначе installer намеренно оставит VPN-службы остановленными, пока placeholders не заменены и wg-easy API не настроен. Это предотвращает запуск некорректного VPN. Повторный вызов bootstrap с `--enable` сохраняет существующие конфиги/auth. Для проверяемого исходного дерева можно выполнить обычный `git clone`, затем `sudo ./scripts/install.sh`.
 
 Перед началом подготовьте root-доступ, рабочий DNS/интернет на сервере и консольный доступ: после включения firewall панель и wg-easy UI будут ограничены заданными сетями.
 
-1. Клонируйте репозиторий и запустите безопасную базовую установку. Она спросит пароль Basic Auth для панели, но не запустит сетевые сервисы.
+1. Альтернативный ручной путь: клонируйте репозиторий и запустите безопасную базовую установку. Она спросит пароль Basic Auth для панели, но не запустит VPN-сервисы с placeholders.
 
     ```bash
     git clone https://github.com/DgekStr/FocusVPN.git
     cd FocusVPN
-    git checkout v2.0
     sudo ./scripts/install.sh
     ```
 
@@ -105,7 +111,7 @@
 
     После создания администратора wg-easy внесите его данные в `wg-easy-api.json`. Не открывайте порт `51821` в интернет: после следующего шага доступ к нему ограничит локальный firewall.
 
-5. Проверьте конфигурации и включите сервисы. Installer откажется запускаться при placeholders, отсутствующем wg-easy или невалидной конфигурации.
+5. Проверьте конфигурации и включите сервисы. Installer откажется запускаться при placeholders, отсутствующем wg-easy или невалидной конфигурации. Standalone bootstrap эквивалентен вызову ниже с `--enable`.
 
     ```bash
     sudo ./scripts/install.sh --enable
@@ -120,8 +126,7 @@
 
 ```bash
 cd FocusVPN
-git fetch --tags
-git checkout v2.0
+git pull --ff-only
 sudo ./scripts/install.sh
 sudo ./scripts/install.sh --enable
 
@@ -164,6 +169,8 @@ Mattermost webhook вводится в Settings и хранится приват
 
 ```powershell
 py -3 -m pip install xlwt==1.3.0
+py -3 scripts/test_install_auth.py
+py -3 scripts/test_gateway_mode.py
 py -3 scripts/test_route_sync.py
 py -3 scripts/test_vless_monitor.py
 py -3 scripts/test_happ_users.py

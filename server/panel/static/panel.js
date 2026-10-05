@@ -356,13 +356,17 @@
     if (!form || form.dataset.confirmed === 'true' || !dialog) return;
     event.preventDefault();
     pendingGatewayForm = form;
-    const useWireGuard = form.dataset.gatewayMode === 'wireguard';
+    const targetMode = form.dataset.gatewayMode;
     const title = dialog.querySelector('[data-gateway-dialog-title]');
     const message = dialog.querySelector('[data-gateway-dialog-message]');
-    if (title) title.textContent = useWireGuard ? 'Переключить на внешний WireGuard?' : 'Вернуться на VLESS?';
-    if (message) message.textContent = useWireGuard
-      ? 'VLESS остановится, действующие соединения переподключатся. Весь внешний трафик VPN-клиентов пойдёт через внешний сервер; локальная сеть останется доступна напрямую.'
-      : 'Внешний WireGuard остановится, а VPN-клиенты вернутся на VLESS. Действующие соединения переподключатся.';
+    const confirmations = {
+      vless: ['Переключить на VLESS?', 'Шлюз по умолчанию или внешний WireGuard остановится. VPN-клиенты вернутся на VLESS; действующие соединения переподключатся.'],
+      wireguard: ['Переключить на внешний WireGuard?', 'VLESS/TPROXY остановится. Весь внешний трафик VPN-клиентов пойдёт через внешний WG-туннель; локальные сети останутся напрямую.'],
+      default: ['Переключить на шлюз по умолчанию?', 'VLESS/TPROXY и внешний WireGuard остановятся. Внешний трафик VPN-клиентов пойдёт через основной шлюз сервера; локальные сети и индивидуальные LAN-запреты сохраняются.']
+    };
+    const [titleText, messageText] = confirmations[targetMode] || confirmations.vless;
+    if (title) title.textContent = titleText;
+    if (message) message.textContent = messageText;
     dialog.showModal();
     dialog.querySelector('[data-gateway-dialog-confirm]')?.focus();
   });

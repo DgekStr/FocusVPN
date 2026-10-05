@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
-from happ_stats import authenticated_peers, connection_identity, connection_item, summarize_users, journal_message, parse_connection_start, format_datetime
+from happ_stats import aggregate_connections, authenticated_peers, connection_identity, connection_item, summarize_users, rank_top_users, journal_message, parse_connection_start, format_datetime
 
 
 class HappStatsTests(unittest.TestCase):
@@ -68,6 +68,33 @@ class HappStatsTests(unittest.TestCase):
         self.assertEqual(alice['download_bytes'], 3072)
         self.assertEqual(alice['upload_bytes'], 192)
         self.assertEqual(alice['download'], '3.0 KB')
+
+    def test_connections_group_by_ip_and_protocol_and_sum_live_fields(self):
+        items = [
+            {'ip': '203.0.113.1', 'network': 'TCP', 'user_name': 'Alice', 'started_at': '2026-10-02T18:00:00+00:00', 'destination': 'old.example:443', 'duration_seconds': 120, 'download_bytes': 100, 'upload_bytes': 10},
+            {'ip': '203.0.113.1', 'network': 'tcp', 'user_name': 'Alice', 'started_at': '2026-10-02T18:01:00+00:00', 'destination': 'new.example:443', 'duration_seconds': 30, 'download_bytes': 200, 'upload_bytes': 20},
+            {'ip': '203.0.113.1', 'network': 'udp', 'user_name': 'Bob', 'started_at': '2026-10-02T18:02:00+00:00', 'destination': 'dns.example:53', 'duration_seconds': 40, 'download_bytes': 50, 'upload_bytes': 5},
+        ]
+        grouped = aggregate_connections(items)
+        self.assertEqual(len(grouped), 2)
+        tcp = next(item for item in grouped if item['network'] == 'TCP')
+        self.assertEqual(tcp['user_name'], 'Alice')
+        self.assertEqual(tcp['connections'], 2)
+        self.assertEqual(tcp['destination'], 'new.example:443')
+        self.assertEqual(tcp['duration_seconds'], 150)
+        self.assertEqual(tcp['download_bytes'], 300)
+        self.assertEqual(tcp['upload_bytes'], 30)
+        udp = next(item for item in grouped if item['network'] == 'UDP')
+        self.assertEqual(udp['user_name'], 'Bob')
+        self.assertEqual(udp['download_bytes'], 50)
+
+    def test_top_users_ranks_by_combined_download_and_upload(self):
+        users = [
+            {'user_name': f'User {index}', 'download_bytes': download, 'upload_bytes': upload}
+            for index, (download, upload) in enumerate([(10, 0), (10, 50), (30, 30), (5, 0), (20, 0), (1, 0)], 1)
+        ]
+        ranked = rank_top_users(users)
+        self.assertEqual([item['user_name'] for item in ranked], ['User 2', 'User 3', 'User 5', 'User 1', 'User 4'])
 
     def test_rename_uses_current_registry_name(self):
         records = {}

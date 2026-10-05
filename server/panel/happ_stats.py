@@ -217,6 +217,14 @@ def summarize_users(items):
     return sorted(grouped.values(), key=lambda item: item['user_name'].casefold())
 
 
+def rank_top_users(users, limit=5):
+    ranked = sorted(
+        users,
+        key=lambda item: (-(item['download_bytes'] + item['upload_bytes']), item['user_name'].casefold()),
+    )
+    return ranked[:max(0, min(5, int(limit)))]
+
+
 def acknowledge_history_visits(visits):
     with IDENTITY_LOCK:
         pending = IDENTITY_CACHE['records'].get('pending_visits', {})
@@ -238,14 +246,18 @@ def format_bytes(value):
     return '0 B'
 
 
-def duration(value):
+def duration_seconds(value):
     if not value:
-        return '—'
+        return 0
     try:
         started = parse_connection_start(value)
     except ValueError:
-        return '—'
-    seconds = max(0, int((dt.datetime.now(dt.timezone.utc) - started).total_seconds()))
+        return 0
+    return max(0, int((dt.datetime.now(dt.timezone.utc) - started).total_seconds()))
+
+
+def format_duration_seconds(seconds):
+    seconds = max(0, int(seconds or 0))
     hours, seconds = divmod(seconds, 3600)
     minutes, seconds = divmod(seconds, 60)
     if hours:
@@ -253,6 +265,10 @@ def duration(value):
     if minutes:
         return f'{minutes} мин. {seconds} сек.'
     return f'{seconds} сек.'
+
+
+def duration(value):
+    return format_duration_seconds(duration_seconds(value))
 
 
 def source_ip(metadata):
@@ -294,11 +310,53 @@ def connection_item(value, peers=None):
         'destination': destination(metadata),
         'network': str(metadata.get('network') or value.get('network') or '—').upper(),
         'duration': duration(value.get('start')),
+        'duration_seconds': duration_seconds(value.get('start')),
         'download': format_bytes(value.get('download')),
         'upload': format_bytes(value.get('upload')),
         'download_bytes': max(0, int(value.get('download') or 0)),
         'upload_bytes': max(0, int(value.get('upload') or 0)),
     }
+
+
+def aggregate_connections(items):
+    grouped = {}
+    for item in items:
+        ip = str(item.get('ip') or '—')
+        try:
+            ip = str(ipaddress.ip_address(ip))
+        except ValueError:
+            pass
+        protocol = str(item.get('network') or '—').upper()
+        key = (ip, protocol)
+        group = grouped.setdefault(key, {
+            'ip': ip, 'network': protocol, 'user_names': [], 'connections': 0,
+            'duration_seconds': 0, 'download_bytes': 0, 'upload_bytes': 0,
+            'latest_started': None, 'destination': '—',
+        })
+        name = str(item.get('user_name') or 'Не определён')
+        if name not in group['user_names']:
+            group['user_names'].append(name)
+        group['connections'] += 1
+        group['duration_seconds'] += max(0, int(item.get('duration_seconds') or 0))
+        group['download_bytes'] += max(0, int(item.get('download_bytes') or 0))
+        group['upload_bytes'] += max(0, int(item.get('upload_bytes') or 0))
+        try:
+            started = parse_connection_start(item.get('started_at'))
+        except (ValueError, TypeError):
+            started = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+        if group['latest_started'] is None or started >= group['latest_started']:
+            group['latest_started'] = started
+            group['destination'] = str(item.get('destination') or '—')
+
+    result = []
+    for group in grouped.values():
+        group['user_name'] = ', '.join(group.pop('user_names')) or 'Не определён'
+        group.pop('latest_started')
+        group['duration'] = format_duration_seconds(group['duration_seconds'])
+        group['download'] = format_bytes(group['download_bytes'])
+        group['upload'] = format_bytes(group['upload_bytes'])
+        result.append(group)
+    return sorted(result, key=lambda item: (item['ip'], item['network']))
 
 
 def live_connections(include_visits=False, history_since=None):
@@ -315,12 +373,14 @@ def live_connections(include_visits=False, history_since=None):
     peers = journal_identities(connections, history_since)
     items = [connection_item(item, peers) for item in connections]
     items.sort(key=lambda item: item['id'])
+    users = summarize_users(items)
     payload = {
         'online_count': len(items),
         'download': format_bytes(sum(item['download_bytes'] for item in items)),
         'upload': format_bytes(sum(item['upload_bytes'] for item in items)),
-        'connections': items,
-        'users': summarize_users(items),
+        'connections': aggregate_connections(items),
+        'users': users,
+        'top_users': rank_top_users(users),
     }
     if include_visits:
         with IDENTITY_LOCK:

@@ -142,6 +142,21 @@ th:last-child, td:last-child { padding-right: 0; }
 .status-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
 .happ-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 18px 0; }
 .happ-connections { min-width: 840px; }
+.happ-traffic-top { display: grid; gap: 14px; }
+.happ-traffic-rank { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 1.3fr); gap: 18px; align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.happ-traffic-rank:last-child { padding-bottom: 0; border-bottom: 0; }
+.happ-traffic-user { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.happ-traffic-place { color: var(--accent-2); font-size: 12px; font-weight: 800; }
+.happ-traffic-user-name { min-width: 0; overflow-wrap: anywhere; }
+.happ-traffic-user-name small { display: block; color: var(--muted); font-size: 11px; font-weight: 500; }
+.happ-traffic-measures { display: grid; gap: 7px; }
+.happ-traffic-measure { display: grid; grid-template-columns: 78px minmax(0, 1fr) auto; gap: 9px; align-items: center; font-size: 11px; }
+.happ-traffic-label { color: var(--muted); }
+.happ-traffic-track { height: 7px; overflow: hidden; background: rgba(142, 160, 190, .16); }
+.happ-traffic-fill { display: block; height: 100%; min-width: 0; }
+.happ-traffic-fill.download { background: var(--accent-2); }
+.happ-traffic-fill.upload { background: var(--ok); }
+.happ-traffic-value { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .wg-live-connections { min-width: 960px; }
 .status-card { min-width: 0; padding: 16px; border: 1px solid var(--line); box-shadow: var(--shadow); }
 .status-card.cyan { background: linear-gradient(145deg, rgba(34, 211, 238, .22), rgba(17, 27, 52, .9)); border-color: rgba(34, 211, 238, .42); }
@@ -179,6 +194,7 @@ th:last-child, td:last-child { padding-right: 0; }
   .profile-list { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 6px 0 0; }
   .main { padding: 24px 14px 36px; }
   .page-head, .topline { display: grid; }
+  .happ-traffic-rank { grid-template-columns: minmax(0, 1fr); gap: 9px; }
 }
 @media (max-width: 560px) {
   .form-grid { grid-template-columns: 1fr; }

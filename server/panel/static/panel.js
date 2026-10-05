@@ -177,6 +177,60 @@
     if (onlineMetric) onlineMetric.textContent = String(online);
     if (download) download.textContent = payload.download || '0 B';
     if (upload) upload.textContent = payload.upload || '0 B';
+    const topUsersBody = document.querySelector('[data-happ-top-users]');
+    if (topUsersBody) {
+      topUsersBody.replaceChildren();
+      const topUsers = Array.isArray(payload.top_users) ? payload.top_users : [];
+      if (!topUsers.length) {
+        const empty = document.createElement('p');
+        empty.className = 'muted';
+        empty.textContent = 'Нет активных пользователей для рейтинга.';
+        topUsersBody.append(empty);
+      } else {
+        const maxDownload = Math.max(1, ...topUsers.map((user) => Number(user.download_bytes) || 0));
+        const maxUpload = Math.max(1, ...topUsers.map((user) => Number(user.upload_bytes) || 0));
+        const appendMeasure = (container, label, value, bytes, maximum, direction) => {
+          const measure = document.createElement('div');
+          measure.className = 'happ-traffic-measure';
+          const caption = document.createElement('span');
+          caption.className = 'happ-traffic-label';
+          caption.textContent = label;
+          const track = document.createElement('span');
+          track.className = 'happ-traffic-track';
+          const fill = document.createElement('span');
+          fill.className = `happ-traffic-fill ${direction}`;
+          fill.style.width = `${Math.max(0, Math.min(100, (Number(bytes) || 0) / maximum * 100))}%`;
+          track.append(fill);
+          const amount = document.createElement('strong');
+          amount.className = 'happ-traffic-value';
+          amount.textContent = value || '0 B';
+          measure.append(caption, track, amount);
+          container.append(measure);
+        };
+        topUsers.forEach((user, index) => {
+          const row = document.createElement('article');
+          row.className = 'happ-traffic-rank';
+          const identity = document.createElement('div');
+          identity.className = 'happ-traffic-user';
+          const place = document.createElement('span');
+          place.className = 'happ-traffic-place';
+          place.textContent = `0${index + 1}`;
+          const name = document.createElement('strong');
+          name.className = 'happ-traffic-user-name';
+          name.textContent = user.user_name || 'Не определён';
+          const connections = document.createElement('small');
+          connections.textContent = `${user.connections || 0} соединений`;
+          name.append(connections);
+          identity.append(place, name);
+          const measures = document.createElement('div');
+          measures.className = 'happ-traffic-measures';
+          appendMeasure(measures, 'Скачано', user.download, user.download_bytes, maxDownload, 'download');
+          appendMeasure(measures, 'Отправлено', user.upload, user.upload_bytes, maxUpload, 'upload');
+          row.append(identity, measures);
+          topUsersBody.append(row);
+        });
+      }
+    }
     if (payload.account_traffic) {
       document.querySelectorAll('[data-happ-account]').forEach((account) => {
         const totals = payload.account_traffic[account.dataset.happAccount] || {};

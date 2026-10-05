@@ -13,6 +13,46 @@
   let outboundCheckLoading = false;
   let pendingGatewayForm = null;
 
+  function animateFavicon() {
+    const icons = [...document.querySelectorAll('link[rel~="icon"]')];
+    if (!icons.length) return;
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    canvas.width = 32;
+    canvas.height = 32;
+    const startedAt = Date.now();
+    const draw = () => {
+      const phase = ((Date.now() - startedAt) % 1500) / 1500;
+      const radius = 5 + phase * 9;
+      context.clearRect(0, 0, 32, 32);
+      context.fillStyle = '#101820';
+      context.beginPath();
+      context.roundRect(0, 0, 32, 32, 8);
+      context.fill();
+      context.globalAlpha = 0.9 * (1 - phase);
+      context.strokeStyle = '#34d399';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.arc(16, 16, radius, 0, Math.PI * 2);
+      context.stroke();
+      context.globalAlpha = 1;
+      context.fillStyle = '#34d399';
+      context.beginPath();
+      context.arc(16, 16, 4.5 + Math.sin(phase * Math.PI * 2) * 0.5, 0, Math.PI * 2);
+      context.fill();
+      const frame = canvas.toDataURL('image/png');
+      icons.forEach((icon) => {
+        icon.type = 'image/png';
+        icon.href = frame;
+      });
+    };
+    draw();
+    window.setInterval(draw, 120);
+  }
+
+  animateFavicon();
+
   function formatDateTime(value, missing = '—') {
     if (!value) return missing;
     const date = new Date(value);

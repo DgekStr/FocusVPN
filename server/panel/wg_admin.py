@@ -296,6 +296,7 @@ def page_shell(title, body, active='wireguard'):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)} | FOCUSLENS.DEV</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="stylesheet" href="/panel.css?v=2">
 <style>

@@ -31,6 +31,9 @@ async function main() {
   };
   const cell = { dataset: { outboundCheckTag: 'auto-8' }, textContent: 'Проверяется', closest: () => row };
   const timeouts = [];
+  const faviconLinks = [{ href: '/favicon.svg' }, { href: '/favicon.png' }];
+  let faviconFrames = 0;
+  let renderFaviconFrame;
   let refresh;
   let requests = 0;
   let phase = 'hang';
@@ -41,19 +44,31 @@ async function main() {
     document: {
       hidden: false,
       addEventListener(name, callback) { documentEvents.set(name, callback); },
+      createElement(name) {
+        assert.equal(name, 'canvas');
+        const context = new Proxy({}, { get: () => () => {} });
+        return {
+          getContext: () => context,
+          toDataURL: () => `data:image/png;frame=${++faviconFrames}`,
+        };
+      },
       querySelector(selector) {
         if (selector === '[data-outbound-summary]') return summary;
         if (selector.startsWith('[data-outbound-checks]')) return {};
         if (selector === '[data-gateway-dialog]') return gatewayDialog;
         return null;
       },
-      querySelectorAll: (selector) => selector === '[data-outbound-check-tag]' ? [cell] : [],
+      querySelectorAll: (selector) => selector === 'link[rel~="icon"]' ? faviconLinks : selector === '[data-outbound-check-tag]' ? [cell] : [],
     },
     window: {
       location: { pathname: '/outbounds', href: 'http://localhost/outbounds', origin: 'http://localhost', reload() {} },
       addEventListener() {},
       clearInterval() {},
-      setInterval(callback) { refresh = callback; return 1; },
+      setInterval(callback, delay) {
+        if (delay === 120) renderFaviconFrame = callback;
+        else refresh = callback;
+        return 1;
+      },
       setTimeout(callback, delay) { timeouts.push({ callback, delay }); return timeouts.length; },
       clearTimeout() {},
     },
@@ -73,6 +88,12 @@ async function main() {
   };
   const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'panel', 'static', 'panel.js'), 'utf8');
   vm.runInNewContext(source, sandbox);
+  const firstFaviconFrame = faviconLinks[0].href;
+  renderFaviconFrame();
+  assert.notEqual(faviconLinks[0].href, firstFaviconFrame);
+  assert.equal(faviconLinks[0].href, faviconLinks[1].href);
+  assert.equal(faviconLinks[0].type, 'image/png');
+  console.log('PASS: favicon canvas renders and updates both browser icon links');
   assert.equal(requests, 1);
   assert.equal(timeouts[0].delay, 8000);
   timeouts[0].callback();

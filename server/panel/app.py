@@ -53,6 +53,7 @@ GATEWAY_MODE_PATH = Path('/etc/focusvpn/gateway-mode.json')
 WIREGUARD_CLIENT_CONFIG_PATH = Path('/etc/wireguard/wg-client.conf')
 WIREGUARD_CLIENT_INPUT_PATH = Path('/etc/focusvpn/wireguard-client-input.conf')
 FAVICON_PATH = Path('/opt/sing-box-admin/static/favicon.png')
+FAVICON_SVG_PATH = Path('/opt/sing-box-admin/static/favicon.svg')
 PANEL_CSS_PATH = Path('/opt/sing-box-admin/static/panel.css')
 PANEL_JS_PATH = Path('/opt/sing-box-admin/static/panel.js')
 HAPP_ACTIONS_PATH = Path('/opt/sing-box-admin/static/happ-actions.js')
@@ -1173,6 +1174,7 @@ def render_page(config, selected_tag, message='', kind='success'):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FOCUSLENS.DEV | VLESS Gateway</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="apple-touch-icon" href="/favicon.png">
 <link rel="stylesheet" href="/panel.css?v=2">
@@ -1609,7 +1611,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('X-Frame-Options', 'SAMEORIGIN' if embedded else 'DENY')
         self.send_header('Referrer-Policy', 'no-referrer')
         ancestors = "'self'" if embedded else "'none'"
-        self.send_header('Content-Security-Policy', f"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors {ancestors}")
+        self.send_header('Content-Security-Policy', f"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors {ancestors}")
 
     def send_html(self, status, content):
         if self.crm_authenticated():
@@ -1645,6 +1647,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_response(HTTPStatus.OK)
         self.send_header('Content-Type', 'image/png')
+        self.send_header('Cache-Control', 'public, max-age=86400')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Content-Length', str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def send_favicon_svg(self):
+        try:
+            payload = FAVICON_SVG_PATH.read_bytes()
+        except OSError:
+            self.send_empty(HTTPStatus.NOT_FOUND)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_common_headers()
+        self.send_header('Content-Type', 'image/svg+xml; charset=utf-8')
         self.send_header('Cache-Control', 'public, max-age=86400')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Content-Length', str(len(payload)))
@@ -1971,6 +1988,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == '/favicon.png':
             self.send_favicon()
+            return
+        if parsed.path == '/favicon.svg':
+            self.send_favicon_svg()
             return
         if parsed.path == '/panel.css':
             self.send_panel_css()

@@ -9,10 +9,40 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
 from wg_easy_api import WgEasyApi, WgEasyApiError
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from configure_wg_easy import prepare_credentials, write_init_environment
+from configure_wg_easy import prepare_credentials, verify_api, write_init_environment
 
 
 class WgEasyAuthorizationTests(unittest.TestCase):
+    def test_initial_api_500_is_retried_until_wireguard_interface_is_ready(self):
+        class FakeApi:
+            attempts = 0
+
+            def __init__(self, _secret_path):
+                pass
+
+            def clients(self):
+                type(self).attempts += 1
+                if type(self).attempts < 4:
+                    raise WgEasyApiError('HTTP 500', status_code=500)
+
+        verify_api('unused', FakeApi, attempts=5, delay=0)
+        self.assertEqual(FakeApi.attempts, 4)
+
+    def test_authentication_error_is_not_retried(self):
+        class UnauthorizedApi:
+            attempts = 0
+
+            def __init__(self, _secret_path):
+                pass
+
+            def clients(self):
+                type(self).attempts += 1
+                raise WgEasyApiError('HTTP 401', status_code=401)
+
+        with self.assertRaises(WgEasyApiError):
+            verify_api('unused', UnauthorizedApi, attempts=5, delay=0)
+        self.assertEqual(UnauthorizedApi.attempts, 1)
+
     def test_generated_credentials_are_preserved_across_updates(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'secret.json'

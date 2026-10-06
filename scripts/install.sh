@@ -415,6 +415,15 @@ create_wg_easy_container() {
     setup_location="$(curl --silent --show-error --max-time 5 --output /dev/null --write-out '%{redirect_url}' http://127.0.0.1:51821/)"
     if [[ "$setup_location" != *'/setup/'* ]]; then
       python3 "$REPO_ROOT/scripts/configure_wg_easy.py" verify "$ADMIN_ROOT/wg-easy-api.json" || fail "existing wg-easy administrator does not match panel credentials; refusing to reset it"
+      if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' wg-easy | grep -q '^INIT_PASSWORD='; then
+        log "removing one-time wg-easy initialization credentials from container environment"
+        docker stop wg-easy >/dev/null
+        docker rm wg-easy >/dev/null
+        rm -f "$initialization_environment"
+        docker run --detach --name wg-easy --label com.focusvpn.managed=true --network host --cap-add NET_ADMIN --restart unless-stopped --volume /etc/wg-easy:/etc/wireguard "$WG_EASY_IMAGE"
+        curl --fail --silent --retry 15 --retry-connrefused --retry-delay 1 --max-time 5 http://127.0.0.1:51821/ >/dev/null || fail "wg-easy did not become ready after removing initialization environment"
+        python3 "$REPO_ROOT/scripts/configure_wg_easy.py" verify "$ADMIN_ROOT/wg-easy-api.json" || fail "wg-easy API authorization failed after removing initialization environment"
+      fi
       log "existing wg-easy API authorization verified"
       return
     fi

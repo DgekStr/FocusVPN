@@ -78,9 +78,10 @@ class HappUserTests(unittest.TestCase):
             destination.write_bytes(path.read_bytes())
             return destination
 
-        with patch.object(app, 'HAPP_USERS', self.manager), patch.object(app, 'HAPP_CONFIG_PATH', self.config_path), patch.object(app, 'HAPP_STATE_PATH', self.public_path), patch.object(app, 'command', side_effect=command), patch.object(app, 'check_happ_candidate', side_effect=RuntimeError('invalid config') if validation_error else None) as check, patch.object(app, 'backup_file', side_effect=backup), patch.object(app, 'write_atomic_file', side_effect=lambda path, data, **kwargs: path.write_bytes(data)), patch.object(app, 'service_state', return_value='inactive'), patch.object(app, 'restart_happ_server', side_effect=RuntimeError('failed') if restart_error else None):
+        with patch.object(app, 'HAPP_USERS', self.manager), patch.object(app, 'HAPP_CONFIG_PATH', self.config_path), patch.object(app, 'HAPP_STATE_PATH', self.public_path), patch.object(app, 'command', side_effect=command) as service_command, patch.object(app, 'check_happ_candidate', side_effect=RuntimeError('invalid config') if validation_error else None) as check, patch.object(app, 'backup_file', side_effect=backup), patch.object(app, 'write_atomic_file', side_effect=lambda path, data, **kwargs: path.write_bytes(data)), patch.object(app, 'service_state', return_value='inactive'), patch.object(app, 'restart_happ_server', side_effect=RuntimeError('failed') if restart_error else None):
             app.generate_and_apply_happ_keys('vpn.example.com', 'www.cloudflare.com', '9445')
             check.assert_called_once()
+            service_command.assert_any_call([app.SYSTEMCTL_BIN, 'enable', 'sing-box-happ-server'], timeout=30)
 
     def test_key_generation_updates_all_links_without_changing_user_ids(self):
         self.manager.create('Alice')

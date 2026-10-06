@@ -3,10 +3,12 @@ import os
 import secrets
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
 from wg_easy_api import WgEasyApi
+from wg_easy_api import WgEasyApiError
 
 
 def prepare_credentials(path):
@@ -48,11 +50,23 @@ def write_init_environment(secret_path, environment_path, host, network):
     os.chmod(environment_path, 0o600)
 
 
+def verify_api(secret_path, api_factory=WgEasyApi, attempts=60, delay=1):
+    for attempt in range(attempts):
+        try:
+            api_factory(secret_path).clients()
+            return
+        except WgEasyApiError as error:
+            if error.status_code is None or error.status_code < 500 or attempt + 1 == attempts:
+                raise
+            time.sleep(delay)
+    raise WgEasyApiError('wg-easy API did not become ready in time.')
+
+
 if __name__ == '__main__':
     if len(sys.argv) == 6 and sys.argv[1] == 'prepare':
         write_init_environment(*sys.argv[2:])
     elif len(sys.argv) == 3 and sys.argv[1] == 'verify':
-        WgEasyApi(sys.argv[2]).clients()
+        verify_api(sys.argv[2])
         print('wg-easy API authorization verified')
     else:
         raise SystemExit('Usage: configure_wg_easy.py prepare SECRET ENV HOST NETWORK | verify SECRET')

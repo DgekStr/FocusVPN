@@ -6,7 +6,9 @@ from urllib import error, request
 
 
 class WgEasyApiError(RuntimeError):
-    pass
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class WgEasyApi:
@@ -48,7 +50,7 @@ class WgEasyApi:
                 body = response.read()
                 response_headers = dict(response.headers.items())
         except error.HTTPError as exc:
-            raise WgEasyApiError(f'wg-easy API вернул HTTP {exc.code}.') from exc
+            raise WgEasyApiError(f'wg-easy API вернул HTTP {exc.code}.', status_code=exc.code) from exc
         except error.URLError as exc:
             raise WgEasyApiError('wg-easy API недоступен.') from exc
         if not expect_json:

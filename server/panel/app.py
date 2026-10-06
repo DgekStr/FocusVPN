@@ -1105,6 +1105,8 @@ def generate_and_apply_happ_keys(server, sni, port):
         restart_happ_server()
         if command([SYSTEMCTL_BIN, 'enable', 'sing-box-happ-server'], timeout=30).returncode != 0:
             raise RuntimeError('Не удалось включить автозапуск HAPP Server.')
+        if command([SYSTEMCTL_BIN, 'enable', 'sing-box-happ-server'], timeout=30).returncode != 0:
+            raise RuntimeError('Не удалось включить автозапуск HAPP Server.')
     except (RuntimeError, OSError, subprocess.SubprocessError):
         for path, backup, mode, group in backups:
             write_atomic_file(path, backup.read_bytes(), mode=mode, group_name=group)

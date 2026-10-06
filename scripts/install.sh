@@ -32,8 +32,8 @@ Options:
   -h, --help  Show this help.
 
 The default mode installs dependencies, code, systemd units and safe templates,
-then starts the wg-easy setup container with its web UI restricted to localhost.
-Other VPN services stay stopped until all real runtime configs are provided.
+then initializes wg-easy automatically with private service credentials.
+Its web UI is restricted to localhost; sing-box/HAPP require real configs.
 For a one-command GitHub bootstrap, see scripts/bootstrap.sh.
 EOF
 }
@@ -81,8 +81,8 @@ confirm_install_plan() {
 Packages: ca-certificates, curl, Docker, nftables, Nginx, OpenSSL, Python 3, python3-xlwt, qrencode, tar, wireguard-tools, sing-box.
 Services/container to enable: docker, nginx, sing-box-admin, wg-easy-private-ui, wg-easy.
 Admin panel: https://<server-ip>:7445 (self-signed certificate; browser warning expected).
-wg-easy setup is restricted to localhost; use an SSH tunnel for initial setup.
-Other VPN services remain stopped unless --enable is requested with real configurations.
+wg-easy administrator/API setup is automatic; private credentials are stored with mode 0600.
+WireGuard is initialized; sing-box/HAPP remain stopped unless --enable is requested with real configurations.
 EOF
   [[ -r /dev/tty && -w /dev/tty ]] || fail "interactive confirmation is required before installation"
   read -r -p "Install these packages and services? [y/N] " answer < /dev/tty
@@ -404,15 +404,35 @@ contains_placeholder() {
 }
 
 create_wg_easy_container() {
+  local server_ip initialization_environment setup_location
+  initialization_environment="$ADMIN_ROOT/wg-easy-init.env"
   if docker inspect wg-easy >/dev/null 2>&1; then
     docker start wg-easy >/dev/null
-    log "started existing wg-easy container"
-    return
+    curl --fail --silent --retry 10 --retry-connrefused --retry-delay 1 --max-time 5 http://127.0.0.1:51821/ >/dev/null || fail "wg-easy did not become ready"
+    setup_location="$(curl --silent --show-error --max-time 5 --output /dev/null --write-out '%{redirect_url}' http://127.0.0.1:51821/)"
+    if [[ "$setup_location" != *'/setup/'* ]]; then
+      python3 "$REPO_ROOT/scripts/configure_wg_easy.py" verify "$ADMIN_ROOT/wg-easy-api.json" || fail "existing wg-easy administrator does not match panel credentials; refusing to reset it"
+      log "existing wg-easy API authorization verified"
+      return
+    fi
+    log "completing unfinished managed wg-easy setup"
+    docker stop wg-easy >/dev/null
+    docker rm wg-easy >/dev/null
   fi
+  server_ip="$(ip -4 route get 1.1.1.1 | awk '{ for (field = 1; field <= NF; field++) if ($field == "src") { print $(field + 1); exit } }')"
+  python3 "$REPO_ROOT/scripts/configure_wg_easy.py" prepare "$ADMIN_ROOT/wg-easy-api.json" "$initialization_environment" "$server_ip" "$FOCUSVPN_WG_NETWORK"
   docker pull "$WG_EASY_IMAGE"
+  docker run --detach --name wg-easy --label com.focusvpn.managed=true --network host --cap-add NET_ADMIN --restart unless-stopped --env-file "$initialization_environment" --volume /etc/wg-easy:/etc/wireguard "$WG_EASY_IMAGE"
+  curl --fail --silent --retry 15 --retry-connrefused --retry-delay 1 --max-time 5 http://127.0.0.1:51821/ >/dev/null || fail "wg-easy did not become ready"
+  python3 "$REPO_ROOT/scripts/configure_wg_easy.py" verify "$ADMIN_ROOT/wg-easy-api.json" || fail "automatic wg-easy setup or API authorization failed"
+  docker stop wg-easy >/dev/null
+  docker rm wg-easy >/dev/null
+  rm -f "$initialization_environment"
   docker run --detach --name wg-easy --label com.focusvpn.managed=true --network host --cap-add NET_ADMIN --restart unless-stopped --volume /etc/wg-easy:/etc/wireguard "$WG_EASY_IMAGE"
+  curl --fail --silent --retry 15 --retry-connrefused --retry-delay 1 --max-time 5 http://127.0.0.1:51821/ >/dev/null || fail "wg-easy did not become ready"
+  python3 "$REPO_ROOT/scripts/configure_wg_easy.py" verify "$ADMIN_ROOT/wg-easy-api.json" || fail "wg-easy API authorization failed after removing initialization environment"
   docker inspect --format '{{.State.Status}}' wg-easy | grep -Fxq running || fail "wg-easy container failed to start"
-  log "created and started wg-easy; complete its setup through an SSH tunnel to localhost:51821"
+  log "wg-easy administrator created automatically; private API credentials saved, initialization environment removed"
 }
 
 enable_services() {
@@ -465,14 +485,14 @@ main() {
   if (( ENABLE_SERVICES )); then
     enable_services
   else
-    log "runtime installed without starting network services"
+    log "panel and wg-easy installed; sing-box/HAPP services were not enabled"
     log "complete configs, then run: sudo ./scripts/install.sh --enable"
   fi
   server_ip="$(ip -4 route show default | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
   log "installed packages: Docker, Nginx, OpenSSL, Python 3, nftables, WireGuard tools, sing-box and panel dependencies"
   log "started services: docker, nginx, sing-box-admin, wg-easy-private-ui, wg-easy container"
   log "admin panel: https://$server_ip:7445 (self-signed certificate; browser warning expected)"
-  log "wg-easy setup: ssh -L 51821:127.0.0.1:51821 root@$server_ip, then open http://127.0.0.1:51821"
+  log "wg-easy API configured automatically; credentials stored privately in $ADMIN_ROOT/wg-easy-api.json"
 }
 
 main "$@"

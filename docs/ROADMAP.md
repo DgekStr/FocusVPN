@@ -1,6 +1,6 @@
 # Roadmap
 
-Версия: **v2.1.4**. Дата среза: **2026-10-06**.
+Версия: **v2.1.5**. Дата среза: **2026-10-06**.
 
 ## Закрыто
 
@@ -35,11 +35,13 @@
 - [x] Добавить host OS/LAN IP, uptime, 24h CPU/LAN peaks и boot network totals в Settings.
 - [x] Перенести VIP VLESS endpoint в конец `/happ-server` и связать его hostname с public subscription URL.
 - [x] Добавить анимированный зелёный favicon, совместимый с Chromium через Canvas frames.
-- [x] Проверить локальный Git-clone installer path: 110 Python tests, две Node UI suites, publication validation и installer help.
+- [x] Проверить локальный Git-clone installer path: 114 Python tests, две Node UI suites, publication validation и installer help.
 - [x] Исправить sing-box installer checksum: использовать SHA-256 asset digest из GitHub Release API с fail-closed проверкой.
 - [x] Повторить Git bootstrap на Ubuntu 22.04 amd64, задать доступ панели `0.0.0.0/0`, поднять TLS proxy `:7445` с Basic Auth; VPN-службы оставить остановленными до заполнения реальных конфигураций.
 - [x] Перед apt показывать список пакетов и служб и требовать подтверждение; запускать Nginx и wg-easy автоматически с защищённым setup-портом.
 - [x] Обнаруживать legacy WireGuard и после отдельного согласия сохранять старые настройки в резервную копию.
+- [x] Создавать служебного администратора wg-easy автоматически, сохранять пароль при upgrade и проверять API без ручной настройки.
+- [ ] Добавить управляемую смену служебного пароля wg-easy с синхронизацией API-файла панели.
 
 ## Следующие вехи
 
@@ -75,4 +77,4 @@
 - Безопасный deploy script с dry-run/rollback и schema/config migration versioning.
 - Authenticated health/latency dashboard и ручная проверка Mattermost доставки после настройки действующего webhook.
 
-Текущая версия FocusVPN — `v2.1.4`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway оставлен в VLESS. Full clone/bootstrap upgrade прошёл на Ubuntu 22.04: Nginx HTTPS `:7445`, панель и wg-easy healthy/auto-restart; setup порт закрыт извне. На тестовом сервере legacy WireGuard не было, поэтому backup/cancel ветка не выполнялась. Реальные VPN-конфигурации не установлены. Host metrics peaks покрывают период с запуска collector, network totals сбрасываются при reboot.
+Текущая версия FocusVPN — `v2.1.5`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway оставлен в VLESS. Автоматическое создание служебного администратора wg-easy и API авторизация проверены на Ubuntu 22.04; INIT-переменные удаляются после настройки, данные сохраняются. Публикация и Git bootstrap повторного обновления ещё проверяются. Смена служебного пароля через Settings остаётся отдельной задачей.

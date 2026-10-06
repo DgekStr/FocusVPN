@@ -21,6 +21,8 @@ class WgEasyApi:
             password = secret['password']
         except (KeyError, OSError, json.JSONDecodeError) as exc:
             raise WgEasyApiError('Служебный доступ к wg-easy не настроен.') from exc
+        if any(not isinstance(value, str) or not value.strip() or (value.startswith('<') and value.endswith('>')) for value in (username, password)):
+            raise WgEasyApiError('Завершите первичную настройку wg-easy через SSH-туннель и настройте служебные учётные данные панели.')
         token = base64.b64encode(f'{username}:{password}'.encode('utf-8')).decode('ascii')
         return f'Basic {token}'
 

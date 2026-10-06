@@ -58,8 +58,8 @@ fi
 cat <<'EOF'
 [focusvpn-bootstrap] WARNING: installation will make system-level changes.
 Packages: Git/curl if missing, Docker, Nginx, OpenSSL, nftables, Python 3, sing-box and panel dependencies.
-Services/container: Docker, Nginx HTTPS panel on :7445, sing-box-admin, restricted wg-easy setup container.
-Other VPN services remain stopped unless --enable is requested with real configurations.
+Services/container: Docker, Nginx HTTPS panel on :7445, sing-box-admin, wg-easy with automatic administrator setup.
+WireGuard is initialized; sing-box/HAPP remain stopped unless --enable is requested with real configurations.
 Existing WireGuard runtime will trigger a separate warning and backup-or-cancel prompt.
 EOF
 read -r -p 'Install this package/service plan? [y/N] ' answer < "$installer_tty"

@@ -28,7 +28,7 @@
 | M20. Default gateway mode | Done, opt-in | Прямой egress через основной gateway для WG-клиентов; route/FORWARD/NAT preflight, LAN deny сохранён |
 | M21. Standalone bootstrap | Done | Git-clone bootstrap, checksum-verified sing-box, интерактивный scrypt auth, все systemd units |
 | M22. HTTPS panel entry | Done | `vpn.focuslens.dev` Nginx proxy, trusted-proxy IP/session binding, Secure cookie, subscription origin |
-| M23. Clean-clone verification | Done | Git bootstrap `v2.1.1` успешно установлен на Ubuntu 22.04 amd64; панель прошла HTTPS/Basic Auth smoke через `:7445`, VPN-службы оставлены выключенными; локальные 108 Python-тестов, 2 Node UI suites и publication checks прошли |
+| M23. Clean-clone verification | Done | Git bootstrap `v2.1.2` успешно установлен на Ubuntu 22.04 amd64; панель прошла HTTPS/Basic Auth smoke через `:7445`, VPN-службы оставлены выключенными; локальные 108 Python-тестов, 2 Node UI suites и publication checks прошли |
 | M24. Host metrics | Done | Settings показывает LAN IP/OS, uptime, CPU/LAN peaks за 24 часа и boot RX/TX; local collector сохраняет samples в `/mnt/stat/` |
 | M25. HAPP live/history UI | Done | Группировка IP/protocol, per-profile lifetime reset, history traffic chart, VIP endpoint из subscription URL |
 | M26. Panel favicon | Done | Зелёная Canvas-анимация; сохраняется PNG fallback |

@@ -83,18 +83,19 @@ install_sing_box() {
     return
   fi
 
-  local temporary archive checksums asset base
+  local temporary archive release_metadata asset base expected_checksum
   temporary="$(mktemp -d)"
   trap 'rm -rf "$temporary"' RETURN
   asset="sing-box-${SING_BOX_VERSION}-linux-${ARCH}.tar.gz"
   base="https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}"
   archive="$temporary/$asset"
-  checksums="$temporary/checksums.txt"
+  release_metadata="$temporary/release.json"
 
   log "downloading sing-box $SING_BOX_VERSION for $ARCH"
   curl --fail --location --retry 3 --output "$archive" "$base/$asset"
-  curl --fail --location --retry 3 --output "$checksums" "$base/checksums.txt"
-  (cd "$temporary" && grep -F " $asset" checksums.txt | sha256sum --check --status) || fail "sing-box checksum verification failed"
+  curl --fail --location --retry 3 --header 'Accept: application/vnd.github+json' --header 'User-Agent: FocusVPN-installer' --output "$release_metadata" "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v${SING_BOX_VERSION}"
+  expected_checksum="$(python3 "$REPO_ROOT/scripts/installer_utils.py" "$release_metadata" "$asset")" || fail "could not read sing-box release digest"
+  printf '%s  %s\n' "$expected_checksum" "$archive" | sha256sum --check --status || fail "sing-box checksum verification failed"
   tar --extract --gzip --file "$archive" --directory "$temporary"
   install -m 0755 "$(find "$temporary" -type f -name sing-box -print -quit)" /usr/bin/sing-box
   [[ "$(sing-box version | awk 'NR == 1 { print $3 }')" == "$SING_BOX_VERSION" ]] || fail "installed sing-box version mismatch"

@@ -75,4 +75,4 @@
 - Безопасный deploy script с dry-run/rollback и schema/config migration versioning.
 - Authenticated health/latency dashboard и ручная проверка Mattermost доставки после настройки действующего webhook.
 
-Текущая версия FocusVPN — `v2.1.4`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway оставлен в VLESS. Установочный поток подтверждает пакеты/службы, безопасно обрабатывает legacy WireGuard и автоматически запускает защищённый wg-easy setup и Nginx HTTPS endpoint. На Ubuntu 22.04 прошёл full install smoke; реальные VPN-конфигурации не установлены. Host metrics peaks покрывают период с запуска collector, network totals сбрасываются при reboot.
+Текущая версия FocusVPN — `v2.1.4`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway оставлен в VLESS. Full clone/bootstrap upgrade прошёл на Ubuntu 22.04: Nginx HTTPS `:7445`, панель и wg-easy healthy/auto-restart; setup порт закрыт извне. На тестовом сервере legacy WireGuard не было, поэтому backup/cancel ветка не выполнялась. Реальные VPN-конфигурации не установлены. Host metrics peaks покрывают период с запуска collector, network totals сбрасываются при reboot.

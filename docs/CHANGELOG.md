@@ -3,6 +3,8 @@
 ## v2.1.4 - 2026-10-06
 
 - Legacy detector дополнительно замечает остановленные, но enabled `wg-quick@...` units и после отдельного подтверждения отключает их. Конфиги до очистки перемещаются в root-only backup.
+- Проверен fresh clone/upgrade на Ubuntu 22.04 amd64: Nginx и панель активны, wg-easy `15.4.0` healthy с restart policy `unless-stopped`; setup API доступен на localhost, внешние порты `:51821` и `:80` закрыты, `:7445` требует Basic Auth.
+- Старых WireGuard конфигураций на тестовом хосте не было; destructive backup path там не запускался.
 
 ## v2.1.3 - 2026-10-06
 

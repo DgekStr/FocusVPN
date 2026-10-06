@@ -28,7 +28,7 @@
 | M20. Default gateway mode | Done, opt-in | Прямой egress через основной gateway для WG-клиентов; route/FORWARD/NAT preflight, LAN deny сохранён |
 | M21. Standalone bootstrap | Done | Git-clone bootstrap, checksum-verified sing-box, интерактивный scrypt auth, все systemd units |
 | M22. HTTPS panel entry | Done | `vpn.focuslens.dev` Nginx proxy, trusted-proxy IP/session binding, Secure cookie, subscription origin |
-| M23. Clean-clone verification | In progress | На `.41` bootstrap `v2.1.3` успешно установил и запустил wg-easy с `unless-stopped`, Nginx и panel; внешние `:51821`/`:80` закрыты, `:7445` отвечает. Fresh clone/upgrade `v2.1.4` и 110 тестов ожидают финальной проверки |
+| M23. Clean-clone verification | Done | Fresh clone/upgrade `v2.1.4` прошёл на Ubuntu 22.04 amd64; 110 Python-тестов, 2 Node UI suites и publication checks прошли; HTTPS `:7445` отвечает, wg-easy healthy с `unless-stopped`, внешний setup `:51821` закрыт |
 | M24. Host metrics | Done | Settings показывает LAN IP/OS, uptime, CPU/LAN peaks за 24 часа и boot RX/TX; local collector сохраняет samples в `/mnt/stat/` |
 | M25. HAPP live/history UI | Done | Группировка IP/protocol, per-profile lifetime reset, history traffic chart, VIP endpoint из subscription URL |
 | M26. Panel favicon | Done | Зелёная Canvas-анимация; сохраняется PNG fallback |
@@ -40,7 +40,7 @@
 - HAPP inbound: `0.0.0.0:9445`.
 - Admin panel: `0.0.0.0:9443`.
 - Test deployment `192.168.0.41`: Nginx HTTPS proxy `:7445` использует self-signed сертификат; backend `sing-box-admin` слушает только `127.0.0.1:9443`, `FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0`, trusted proxy `127.0.0.1/32`; login возвращает Basic Auth challenge. wg-easy `15.4.0` запускается с `unless-stopped`, setup доступен только через loopback/SSH tunnel, HAPP и sing-box units не включались.
-- Installer v2.1.4 после подтверждения перечисляет пакеты/службы, запускает Nginx и wg-easy с автоперезапуском, ограничивает setup API localhost и выводит URL панели/SSH-туннель.
+- Installer v2.1.4 после подтверждения перечисляет пакеты/службы, запускает Nginx и wg-easy с автоперезапуском, ограничивает setup API localhost и выводит URL панели/SSH-туннель. На `.41` старых WireGuard конфигов/units не было, поэтому backup/cancel ветка проверена контрактным тестом, но не выполнялась на сервере.
 - Server metrics use `/proc` counters; rolling peaks retain up to 24 hours, network byte totals reset at OS boot. Peaks start accumulating after the metrics collector is installed.
 - Admin UI is reached externally at `https://vpn.focuslens.dev` via the TLS Nginx gateway. Direct WAN mapping to `37.208.69.6:9443` is closed; private HTTP remains the gateway upstream.
 - WireGuard network: `10.8.0.0/24`.

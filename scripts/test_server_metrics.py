@@ -1,0 +1,70 @@
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
+from server_metrics import ServerMetrics, format_decimal, format_uptime, parse_cpu_stat, parse_net_dev, render_metrics_panel, selected_interfaces
+
+
+class ServerMetricsTests(unittest.TestCase):
+    def test_formats_uptime_and_localized_decimal(self):
+        self.assertEqual(format_uptime(17 * 86400 + 18 * 3600), '17дн 18ч')
+        self.assertEqual(format_decimal(53.1), '53,1')
+        self.assertEqual(format_decimal(811274, 0), '811 274')
+
+    def test_metrics_panel_renders_server_identity_peaks_and_escaped_values(self):
+        panel = render_metrics_panel({
+            'current': {'uptime': 17 * 86400 + 18 * 3600, 'rx_bytes': 811_274_000_000, 'tx_bytes': 820_873_000_000},
+            'peaks': {'cpu': 53.1, 'rx_rate': 54_612_500, 'tx_rate': 30_000_000, 'observed_since': 1_759_673_400},
+            'identity': {'ip': '192.0.2.4', 'os': '<Ubuntu 24.10>'},
+        })
+        self.assertIn('192.0.2.4', panel)
+        self.assertIn('&lt;Ubuntu 24.10&gt;', panel)
+        self.assertIn('17дн 18ч', panel)
+        self.assertIn('53,1%', panel)
+        self.assertIn('436,9 Мбит/с', panel)
+        self.assertIn('811 274', panel)
+        self.assertIn('820 873', panel)
+
+    def test_parses_cpu_and_network_counters_and_selects_physical_interfaces(self):
+        total, idle = parse_cpu_stat('cpu  100 2 30 800 20 3 4 1 0 0\ncpu0 1 0 0 9')
+        self.assertEqual(total, 960)
+        self.assertEqual(idle, 820)
+        counters = parse_net_dev('Inter-| Receive | Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\nlo: 100 1 0 0 0 0 0 0 200 1 0 0 0 0 0 0\nenp1s0: 1000 1 0 0 0 0 0 0 2000 1 0 0 0 0 0 0\ndocker0: 500 1 0 0 0 0 0 0 700 1 0 0 0 0 0 0')
+        self.assertEqual(counters['enp1s0'], (1000, 2000))
+        self.assertEqual(selected_interfaces(counters, net_root='/missing'), ['enp1s0'])
+
+    def test_samples_peak_cpu_and_lan_rates_over_last_24_hours(self):
+        with tempfile.TemporaryDirectory() as directory, patch('server_metrics.server_identity', return_value={'ip': '192.0.2.10', 'os': 'Ubuntu test', 'interface': 'eth0'}):
+            metrics = ServerMetrics(Path(directory) / 'server.sqlite3')
+            first = {'uptime': 1000, 'cpu_total': 100, 'cpu_idle': 90, 'rx_bytes': 1_000_000, 'tx_bytes': 2_000_000}
+            second = {'uptime': 1005, 'cpu_total': 200, 'cpu_idle': 170, 'rx_bytes': 2_000_000, 'tx_bytes': 3_500_000}
+            third = {'uptime': 1010, 'cpu_total': 300, 'cpu_idle': 260, 'rx_bytes': 2_500_000, 'tx_bytes': 4_000_000}
+            metrics.sample(first, now=100)
+            snapshot = metrics.sample(second, now=105)
+            self.assertAlmostEqual(snapshot['current']['cpu_percent'], 20.0)
+            self.assertAlmostEqual(snapshot['current']['rx_rate'], 200_000)
+            self.assertAlmostEqual(snapshot['current']['tx_rate'], 300_000)
+            snapshot = metrics.sample(third, now=110)
+            self.assertAlmostEqual(snapshot['peaks']['cpu'], 20.0)
+            self.assertAlmostEqual(snapshot['peaks']['rx_rate'], 200_000)
+            self.assertAlmostEqual(snapshot['peaks']['tx_rate'], 300_000)
+            self.assertEqual(snapshot['current']['rx_bytes'], 2_500_000)
+            self.assertEqual(snapshot['identity']['ip'], '192.0.2.10')
+
+    def test_reboot_starts_a_new_peak_window_and_old_samples_expire(self):
+        with tempfile.TemporaryDirectory() as directory, patch('server_metrics.server_identity', return_value={'ip': '192.0.2.10', 'os': 'Ubuntu test', 'interface': 'eth0'}):
+            metrics = ServerMetrics(Path(directory) / 'server.sqlite3')
+            metrics.sample({'uptime': 1000, 'cpu_total': 100, 'cpu_idle': 50, 'rx_bytes': 100, 'tx_bytes': 100}, now=100)
+            metrics.sample({'uptime': 1005, 'cpu_total': 200, 'cpu_idle': 170, 'rx_bytes': 1000, 'tx_bytes': 1000}, now=105)
+            restarted = metrics.sample({'uptime': 3, 'cpu_total': 10, 'cpu_idle': 5, 'rx_bytes': 5, 'tx_bytes': 7}, now=110)
+            self.assertEqual(restarted['peaks']['cpu'], 0)
+            self.assertEqual(restarted['current']['rx_bytes'], 5)
+            metrics.sample({'uptime': 86405, 'cpu_total': 100, 'cpu_idle': 90, 'rx_bytes': 105, 'tx_bytes': 207}, now=100 + 24 * 60 * 60 + 20)
+            self.assertEqual(metrics.snapshot(now=100 + 24 * 60 * 60 + 20)['peaks']['observed_since'], 100 + 24 * 60 * 60 + 20)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -65,14 +65,14 @@ def main():
     pages = render_pages()
     if arguments.crm_embed:
         pages = {route: app.crm_embed(content) for route, content in pages.items()}
-    preview = pages['/happ-server'].replace('/panel.css?v=20', '../server/panel/static/panel.css').replace('/favicon.png', '../server/panel/static/favicon.png').replace('/panel.js?v=17', '../server/panel/static/panel.js').replace('/happ-actions.js?v=7', '../server/panel/static/happ-actions.js')
+    preview = pages['/happ-server'].replace('/panel.css?v=26', '../server/panel/static/panel.css').replace('/favicon.svg?v=1', '../server/panel/static/favicon.svg').replace('/favicon.png', '../server/panel/static/favicon.png').replace('/panel.js?v=20', '../server/panel/static/panel.js').replace('/happ-actions.js?v=9', '../server/panel/static/happ-actions.js')
     if arguments.output_dir:
         arguments.output_dir.mkdir(parents=True, exist_ok=True)
         for route, content in pages.items():
             (arguments.output_dir / (route.strip('/') + '.html')).write_text(content, encoding='utf-8')
     else:
         (ROOT / 'docs' / 'ui-preview.html').write_text(preview, encoding='utf-8')
-    assert 'v2.0' in preview and 'data-happ-account="personal-demo-a"' in preview
+    assert 'v2.1' in preview and 'data-happ-account="personal-demo-a"' in preview
     assert '03.10.2026 09:15:23' in pages['/happ-history']
     print('safe renderer previews generated', flush=True)
     if not arguments.serve:

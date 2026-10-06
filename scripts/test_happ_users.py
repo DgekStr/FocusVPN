@@ -201,12 +201,22 @@ class HappUserTests(unittest.TestCase):
         urls = self.manager.subscription_urls('http://127.0.0.1:9443')
         self.assertEqual(happ_add_link(urls[user_id]), 'happ://add/' + urls[user_id])
         with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
-            page = happ_server_ui.page(self.manager.users(), traffic={'personal-' + user_id: {'download': '64.0 MB', 'upload': '8.0 MB'}}, subscriptions=urls)
+            page = happ_server_ui.page(self.manager.users(), traffic={'personal-' + user_id: {'download': '64.0 MB', 'upload': '8.0 MB'}}, subscriptions=urls, endpoint_host='subscriptions.example.net')
         self.assertIn('data-happ-link="happ://add/' + urls[user_id] + '"', page)
         self.assertIn('data-happ-link="happ://add/' + urls['VIP'] + '"', page)
-        self.assertIn('Открыть HAPP</a><span', page)
+        self.assertIn('Открыть HAPP</a><div class="happ-account-traffic">', page)
         self.assertIn('data-account-download>64.0 MB', page)
         self.assertIn('data-account-upload>8.0 MB', page)
+        self.assertIn('action="/happ-users/traffic/reset"', page)
+        self.assertIn('data-happ-traffic-reset', page)
+        self.assertIn('Нарастающий итог с момента включения накопительной статистики', page)
+        self.assertIn('Endpoint: subscriptions.example.net:9445', page)
+        self.assertGreater(page.index('VIP VLESS · существующая ссылка'), page.index('Журнал персонального доступа'))
+
+    def test_happ_server_vip_endpoint_brackets_ipv6_subscription_host(self):
+        with patch.object(happ_server_ui, 'load_state', return_value={'server': 'old.example.net'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
+            page = happ_server_ui.page([], endpoint_host='2001:db8::10')
+        self.assertIn('Endpoint: [2001:db8::10]:9445', page)
 
     def test_subscription_origin_prefers_settings_then_env_then_public_host(self):
         with patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(app, 'PORT', 9443):

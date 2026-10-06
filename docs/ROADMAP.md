@@ -1,6 +1,6 @@
 # Roadmap
 
-Версия: **v2.0**. Дата среза: **2026-10-05**.
+Версия: **v2.1**. Дата среза: **2026-10-06**.
 
 ## Закрыто
 
@@ -29,13 +29,18 @@
 - [x] Выравнять Settings панели в равные responsive 2-column rows; вынести gateway selector наверх.
 - [x] Добавить bootstrap с temporary Git clone, dependency downloads, secure password prompt и полным unit validation.
 - [x] Настроить HTTPS reverse proxy `vpn.focuslens.dev` с real-client session binding и обновляемым subscription origin.
+- [x] Добавить HAPP lifetime traffic totals отдельно от retention истории, TOP-5 и адресный reset конкретного профиля.
+- [x] Сгруппировать live HAPP connections по IP/protocol с summed duration/bytes и destination последнего соединения.
+- [x] Добавить `/happ-history` traffic chart с per-client download/upload, числами и descending order.
+- [x] Добавить host OS/LAN IP, uptime, 24h CPU/LAN peaks и boot network totals в Settings.
+- [x] Перенести VIP VLESS endpoint в конец `/happ-server` и связать его hostname с public subscription URL.
+- [x] Добавить анимированный зелёный favicon, совместимый с Chromium через Canvas frames.
+- [x] Проверить Git-clone installer path: 105 Python tests, две Node UI suites, publication validation и `install.sh --help`.
 
 ## Следующие вехи
 
 - [ ] Включить HTTPS для панели и подписок перед использованием в недоверенных сетях.
 - [ ] Подтвердить импорт, emoji, announce, infinity и автообновление на реальных Windows/Android/iOS клиентах HAPP.
-- [ ] При необходимости отделить пожизненные traffic totals от retention подробной истории.
-
 - [ ] Добавить автоматические smoke-тесты для всех systemd units.
 - [ ] Добавить CI-проверку Python, JavaScript и конфигурационных примеров.
 - [ ] Расширить текущие live результаты агрегированным health dashboard и метриками длительной доступности.
@@ -66,4 +71,4 @@
 - Безопасный deploy script с dry-run/rollback и schema/config migration versioning.
 - Authenticated health/latency dashboard и ручная проверка Mattermost доставки после настройки действующего webhook.
 
-Текущая версия FocusVPN остаётся `v2.0`; CRM release `1.0.0.0.9` не меняет версию VPN. Новый default gateway mode развёрнут, но production оставлен в VLESS. Standalone bootstrap и clean-clone source/tests проверены; полноценный `apt/systemd` first-boot требуется дополнительно прогнать в disposable Debian/Ubuntu VM.
+Текущая версия FocusVPN — `v2.1`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway оставлен в VLESS. Standalone bootstrap и clean-clone source/tests проверены; полноценный privileged `apt/systemd` first-boot требуется отдельно прогнать в disposable Debian/Ubuntu VM. Host metrics peaks покрывают период с запуска collector, network totals сбрасываются при reboot.

@@ -64,6 +64,7 @@ class HappStatsTests(unittest.TestCase):
         items = [connection_item(self.live(40001, download=2048, upload=128), peers), connection_item(self.live(40002, download=1024, upload=64), peers), connection_item(self.live(40003, download=100, upload=50), peers)]
         groups = summarize_users(items)
         alice = next(item for item in groups if item['user_name'] == 'Alice')
+        self.assertEqual(alice['user_key'], 'personal-a')
         self.assertEqual(alice['connections'], 2)
         self.assertEqual(alice['download_bytes'], 3072)
         self.assertEqual(alice['upload_bytes'], 192)

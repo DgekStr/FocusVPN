@@ -58,6 +58,38 @@ class HistoryTests(unittest.TestCase):
         self.assertTrue(totals['personal-a']['download'])
         self.assertNotIn('personal-missing', totals)
 
+    def test_lifetime_totals_accumulate_reset_per_user_and_survive_retention_cleanup(self):
+        bob = self.row(key='bob', user='personal-b', name='Bob', download=500, upload=60)
+        self.history.ingest({'connections': [self.row(), bob]}, self.at)
+        self.history.ingest({'connections': [self.row(), bob]}, self.at + dt.timedelta(seconds=2))
+        self.history.ingest({'connections': [self.row(download=180, upload=80), bob]}, self.at + dt.timedelta(seconds=4))
+        totals = self.history.user_totals()
+        self.assertEqual((totals['personal-a']['download_bytes'], totals['personal-a']['upload_bytes']), (180, 80))
+        self.assertEqual((totals['personal-b']['download_bytes'], totals['personal-b']['upload_bytes']), (500, 60))
+        self.assertEqual(self.history.top_users()[0]['user_key'], 'personal-b')
+
+        self.assertTrue(self.history.reset_user_totals('personal-a'))
+        self.assertNotIn('personal-a', self.history.user_totals())
+        self.assertEqual(self.history.user_totals()['personal-b']['download_bytes'], 500)
+        self.history.ingest({'connections': [self.row(download=200, upload=100), bob]}, self.at + dt.timedelta(seconds=6))
+        totals = self.history.user_totals()
+        self.assertEqual((totals['personal-a']['download_bytes'], totals['personal-a']['upload_bytes']), (20, 20))
+
+        self.history.ingest({'connections': []}, self.at + dt.timedelta(seconds=8))
+        self.history.cleanup(at=self.at + dt.timedelta(days=61))
+        totals = self.history.user_totals()
+        self.assertEqual((totals['personal-a']['download_bytes'], totals['personal-a']['upload_bytes']), (20, 20))
+        self.assertEqual((totals['personal-b']['download_bytes'], totals['personal-b']['upload_bytes']), (500, 60))
+
+    def test_lifetime_totals_backfill_existing_retained_connections_once(self):
+        self.history.ingest({'connections': [self.row(download=321, upload=123)]}, self.at)
+        with self.history.connect() as database:
+            database.execute('DROP TABLE user_traffic_totals')
+            database.execute("DELETE FROM settings WHERE key='lifetime_totals_initialized'")
+        migrated = HappHistory(self.directory.name)
+        totals = migrated.user_totals()
+        self.assertEqual((totals['personal-a']['download_bytes'], totals['personal-a']['upload_bytes']), (321, 123))
+
     def test_journal_only_visit_keeps_unknown_bytes(self):
         visit = self.row()
         self.history.ingest({'connections': [], 'visits': [visit]}, self.at)
@@ -107,6 +139,18 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(result['count'], 1)
         self.assertEqual(self.history.query("' OR 1=1 --")['count'], 0)
         self.assertEqual(self.history.query()['count'], 2)
+
+    def test_traffic_chart_aggregates_all_matching_rows_per_user(self):
+        self.history.ingest({'connections': [self.row(download=100, upload=20), self.row(key='alice-2', download=300, upload=40), self.row(key='bob', user='personal-b', name='Bob', download=50, upload=80, started=self.at + dt.timedelta(days=1))]}, self.at)
+        chart = self.history.traffic_chart(since='2026-10-02', until='2026-10-02')
+        self.assertEqual(len(chart), 1)
+        self.assertEqual(chart[0]['user_key'], 'personal-a')
+        self.assertEqual(chart[0]['download_bytes'], 400)
+        self.assertEqual(chart[0]['upload_bytes'], 60)
+        ranked = self.history.traffic_chart()
+        self.assertEqual([item['user_key'] for item in ranked], ['personal-a', 'personal-b'])
+        self.assertGreaterEqual(ranked[0]['download_bytes'] + ranked[0]['upload_bytes'], ranked[1]['download_bytes'] + ranked[1]['upload_bytes'])
+        self.assertEqual(self.history.traffic_chart('personal-b')[0]['download_bytes'], 50)
         with self.assertRaises(ValueError):
             self.history.query(since='not-a-date')
 
@@ -206,10 +250,68 @@ class HistoryTests(unittest.TestCase):
             server.server_close()
             worker.join(timeout=2)
 
+    def test_happ_profile_traffic_reset_endpoint_clears_only_selected_user(self):
+        self.history.ingest({'connections': [self.row(), self.row(key='bob', user='personal-b', name='Bob', download=900, upload=90)]}, self.at)
+        users = types.SimpleNamespace(registry=lambda: {'users': [{'id': 'a'}]})
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+        try:
+            with patch.object(app, 'HAPP_HISTORY', self.history), patch.object(app, 'HAPP_USERS', users), patch.object(app.Handler, 'require_access', return_value=True):
+                connection.request('POST', '/happ-users/traffic/reset', urlencode({'csrf': app.CSRF_TOKEN, 'id': 'a'}), {'Content-Type': 'application/x-www-form-urlencoded'})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 303)
+                self.assertEqual(urlparse(response.getheader('Location')).path, '/happ-server')
+                response.read()
+                self.assertNotIn('personal-a', self.history.user_totals())
+                self.assertEqual(self.history.user_totals()['personal-b']['download_bytes'], 900)
+
+                connection.request('POST', '/happ-users/traffic/reset', urlencode({'csrf': app.CSRF_TOKEN, 'id': 'missing'}), {'Content-Type': 'application/x-www-form-urlencoded'})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 303)
+                self.assertEqual(self.history.user_totals()['personal-b']['download_bytes'], 900)
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
+    def test_happ_live_endpoint_returns_lifetime_user_totals_and_top_five(self):
+        self.history.ingest({'connections': [self.row(download=321, upload=123), self.row(key='bob', user='personal-b', name='Bob', download=900, upload=90)]}, self.at)
+        live = {'online_count': 1, 'download': '10 B', 'upload': '5 B', 'connections': [], 'users': [{'user_key': 'personal-a', 'user_name': 'Renamed Alice', 'connections': 1, 'download_bytes': 10, 'upload_bytes': 5, 'download': '10 B', 'upload': '5 B'}], 'top_users': []}
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+        try:
+            with patch.object(app, 'HAPP_HISTORY', self.history), patch.object(app, 'happ_live_connections', return_value=live), patch.object(app.Handler, 'require_access', return_value=True):
+                connection.request('GET', '/happ-server/live')
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                payload = json.loads(response.read())
+                self.assertEqual(payload['account_traffic']['personal-a']['download_bytes'], 321)
+                self.assertEqual(payload['top_users'][0]['user_key'], 'personal-b')
+                self.assertEqual(payload['top_users'][1]['user_name'], 'Renamed Alice')
+                self.assertEqual(payload['top_users'][1]['download_bytes'], 321)
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
     def test_display_and_xls_dates_do_not_modify_storage(self):
         self.history.ingest({'connections': [self.row()]}, self.at)
         expected = '02.10.2026 18:00:00'
         page = render_history(self.history, {})
+        self.assertIn('history-chart-panel', page)
+        self.assertIn('history-chart-client', page)
+        self.assertIn('history-chart-bar download', page)
+        self.assertIn('history-chart-bar upload', page)
+        self.assertIn('history-chart-values', page)
+        self.assertIn('100 B', page)
+        self.assertIn('50 B', page)
+        self.assertLess(page.index('history-chart-panel'), page.index('Начало UTC'))
         self.assertIn(expected, page)
         self.assertNotIn('2026-10-02T18:00:00.000000+00:00', page)
         self.assertEqual(self.history.query()['rows'][0]['started_at'], self.at.isoformat(timespec='microseconds'))

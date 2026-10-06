@@ -45,7 +45,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <title>{esc(title)} | FOCUSLENS.DEV</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=23">
+<link rel="stylesheet" href="/panel.css?v=26">
 </head>
 <body>
 <div class="app-shell">
@@ -69,6 +69,6 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
   <div class="app-content"><main class="main">{body}</main></div>
 </div>
   <script src="/panel.js?v=20" defer></script>
-<script src="/happ-actions.js?v=8" defer></script>
+<script src="/happ-actions.js?v=9" defer></script>
 </body>
 </html>'''

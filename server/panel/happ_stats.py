@@ -207,7 +207,7 @@ def summarize_users(items):
     grouped = {}
     for item in items:
         key = item['user_key']
-        group = grouped.setdefault(key, {'user_name': item['user_name'], 'connections': 0, 'download_bytes': 0, 'upload_bytes': 0})
+        group = grouped.setdefault(key, {'user_key': key, 'user_name': item['user_name'], 'connections': 0, 'download_bytes': 0, 'upload_bytes': 0})
         group['connections'] += 1
         group['download_bytes'] += item['download_bytes']
         group['upload_bytes'] += item['upload_bytes']

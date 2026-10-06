@@ -1,10 +1,18 @@
-# FocusVPN v2.0
+# FocusVPN v2.1
 
 Единый VPN-шлюз и административная панель для WireGuard, sing-box и HAPP.
 
-Состояние проекта зафиксировано: **2026-10-05**.
+Состояние проекта зафиксировано: **2026-10-06**.
 
-Текущая версия: **v2.0**. Базовая версия **v1.0** соответствует ранее опубликованному коммиту `3f48b16`; история Git не переписывается.
+Текущая версия: **v2.1**. Базовая версия **v1.0** соответствует ранее опубликованному коммиту `3f48b16`; история Git не переписывается.
+
+## Новое в v2.1
+
+- В Settings добавлены локальные метрики VPN-хоста: LAN IP и ОС, uptime, пик CPU и LAN за rolling 24 часа, RX/TX с начала загрузки. Collector читает системные `/proc` counters раз в 5 секунд и сохраняет samples в `/mnt/stat/server-metrics.sqlite3`.
+- `/happ-history` показывает per-client график download/upload с числовыми значениями, фильтрами периода и сортировкой по суммарному трафику.
+- HAPP lifetime download/upload counters сохраняются отдельно от retention истории; есть TOP-5 и адресный сброс статистики профиля.
+- Live HAPP connections агрегируются по IP и протоколу: длительность и байты суммируются, destination соответствует последнему соединению. VIP Endpoint берётся из настроенного публичного URL подписки.
+- В Chrome/Chromium favicon панели анимируется Canvas-кадрами с пульсирующим зелёным индикатором.
 
 ## Что готово
 
@@ -28,9 +36,12 @@
 - Исходный WireGuard-конфиг сохраняется с правами `0600` и повторно заполняет поле в авторизованных Settings; рабочий профиль не меняет DNS хоста. Выбранный режим восстанавливается после перезагрузки.
 - Public-only HAPP `vless://` и QR-модальное окно.
 - Персональные пользователи HAPP получают отдельные UUID, ссылки и QR на существующем входе `9445`; доступны включение, отзыв, удаление и срок действия UTC. Общая VIP-ссылка сохраняется в Settings и не ротируется; применение пользователей может кратко переподключить сессии.
-- Статистика HAPP показывает подтверждённое имя, скачано/отправлено по соединению и live-сумму по пользователям. Сопоставление использует журнал аутентификации, не один IP; VIP и неопределённые записи показываются отдельно. Счётчики относятся только к активным соединениям.
+- Live-подключения HAPP группируются по IP и протоколу; duration, скачано и отправлено суммируются, назначение берётся из последнего соединения.
+- TOP-5 и счётчики рядом с персональными профилями показывают нарастающие download/upload итоги. Итоги хранятся отдельно от retention истории и не исчезают при её очистке; кнопку «Сбросить» можно нажать у конкретного профиля.
+- `/happ-history` показывает общий график per-client traffic по убыванию суммы download+upload, с отдельными вертикальными столбцами и числами для каждого клиента.
+- Settings содержит серверные метрики VPN-хоста: ОС/LAN IP, uptime, rolling CPU/LAN peaks до 24 часов и system RX/TX с начала загрузки.
 - История HAPP хранится в приватной SQLite-базе `/mnt/stat/`: фоновый сбор соединений/посещений и максимальных наблюдаемых счётчиков, фильтры по пользователю и датам, очистка по сроку из Settings (60 дней по умолчанию), экспорт настоящего XLS. В HTTPS доступен домен/IP и порт, не полный путь страницы; неизвестные финальные байты не подменяются нулём.
-- После «Открыть HAPP» в строке персонального пользователя показаны скачано/отправлено по сохранённой истории, включая закрытые соединения; счётчики обновляются в браузере. Это наблюдаемый трафик за срок хранения, не пожизненный биллинг.
+- После «Открыть HAPP» в строке персонального пользователя показаны lifetime скачано/отправлено, включая закрытые соединения; счётчики обновляются в браузере. При первом включении накопительного счётчика выполняется backfill из ещё сохранённой истории; ранее удалённые retention записи восстановить нельзя. Это наблюдаемый трафик, не точный billing.
 - «Открыть HAPP» добавляет персональную HTTP-подписку со статистикой `subscription-userinfo`, безлимитом `total=0` и запросом обновления раз в час. Название начинается с «🖧 FocusVPN» и имени пользователя как при копировании подписки, так и при открытии HAPP. HAPP показывает сумму upload + download / безлимит. Копирование исходного VLESS сохранено; QR для мобильного HAPP теперь содержит WAN/DNS URL подписки с уведомлением и метрикой скачивания. Сканировать его следует внутри HAPP; старые VLESS-профили автоматически не превращаются в подписки. Секретный токен даёт доступ только к своему аккаунту и отзывается при отключении/удалении/истечении срока.
 - Подписки передают короткое уведомление о частном VPN для команды focuslens.dev через `announce`, сохраняя эмодзи и лимит HAPP. `/happ-info` показывает уведомление с выравниванием по ширине; выравнивание внутри самого HAPP задаёт клиент.
 - Даты истории, XLS и проверки отклика отображаются как `dd.mm.yyyy HH:MM:SS` в UTC; исходные timestamps в базе/API остаются ISO.
@@ -66,7 +77,7 @@
 Для чистого Debian 12+/Ubuntu 22.04+ (`amd64`/`arm64`) доступен one-command bootstrap. Он при необходимости устанавливает Git, клонирует выбранную ветку/тег во временный каталог `0700`, запускает installer, скачивает нужные системные зависимости и sing-box с проверкой SHA-256, устанавливает панель/VERSION/templates/все systemd units и интерактивно создаёт пароль Basic Auth. Bootstrap удаляет временный clone после установки; секреты остаются только в `/etc` с root-only permissions.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/master/scripts/bootstrap.sh | sudo bash -s -- master
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1/scripts/bootstrap.sh | sudo bash -s -- v2.1
 ```
 
 Для первичной настройки контейнера wg-easy добавьте `--start-wg-easy`; создание контейнера не настраивает его admin/API автоматически. Если реальные runtime-конфиги уже подготовлены, добавьте `--enable`; иначе installer намеренно оставит VPN-службы остановленными, пока placeholders не заменены и wg-easy API не настроен. Это предотвращает запуск некорректного VPN. Повторный вызов bootstrap с `--enable` сохраняет существующие конфиги/auth. Для проверяемого исходного дерева можно выполнить обычный `git clone`, затем `sudo ./scripts/install.sh`.
@@ -176,12 +187,13 @@ py -3 scripts/test_vless_monitor.py
 py -3 scripts/test_happ_users.py
 py -3 scripts/test_happ_stats.py
 py -3 scripts/test_happ_history.py
+py -3 scripts/test_server_metrics.py
 node scripts/test_panel_checks.js
 node scripts/test_happ_stats_ui.js
 .\scripts\validate.ps1
 ```
 
-88 Python-тестов и две Node UI suites покрывают gateway/HAPP transitions и rollback, default-route preflight, proxy IP/session binding, password bootstrap, пакетный импорт, VLESS monitoring/webhook, HAPP users/subscriptions/history/XLS и browser polling. Публичный `master` прошёл clean-clone validation. Полный privileged apt/systemd first boot требует disposable Debian/Ubuntu VM; конфигурационный check или статус `active` не заменяют успешный HTTPS-тест.
+105 Python-тестов и две Node UI suites покрывают gateway/HAPP transitions и rollback, default-route preflight, proxy IP/session binding, password bootstrap, пакетный импорт, VLESS monitoring/webhook, HAPP users/subscriptions/lifetime traffic/history/XLS, host metrics collector и browser polling. Installer проверяется из Git clone через `scripts/validate.ps1`, suite tests и `scripts/install.sh --help`; полный privileged apt/systemd first boot требует disposable Debian/Ubuntu VM.
 
 ## Репозиторий
 
@@ -193,7 +205,7 @@ node scripts/test_happ_stats_ui.js
 - `docs/OPERATIONS.md` — эксплуатация и деплой.
 - `docs/PROJECT_STATUS.md` — закрытые вехи и текущий статус.
 - `docs/ROADMAP.md` — следующие этапы.
-- `docs/CHANGELOG.md` — изменения v2.0 и базовой v1.0.
+- `docs/CHANGELOG.md` — изменения v2.1, v2.0 и базовой v1.0.
 - `VERSION` — единый номер версии runtime и релиза.
 - `scripts/render_previews.py` — безопасные актуальные renderer для скриншотов.
 - `docs/screenshots/` — обезличенные preview UI.
@@ -201,17 +213,17 @@ node scripts/test_happ_stats_ui.js
 
 ## Screenshots
 
-Скриншоты v2.0 сняты с текущих серверных renderer и обезличенных fixtures, не с реальных пользовательских данных. Они не подтверждают доступность демонстрационных VPN-профилей или импорт внутри Windows HAPP.
+Скриншоты сняты с серверных renderer и обезличенных fixtures, не с реальных пользовательских данных. UI-снимки отражают v2.0 и не включают последние карточки host metrics и историю chart; они не подтверждают доступность VPN-профилей или импорт внутри Windows HAPP.
 
 ![Project overview](docs/screenshots/project-overview.png)
 
 ![WireGuard and HAPP preview](docs/screenshots/wireguard-and-happ-preview.png)
 
-![VPN servers v2.0](docs/screenshots/vpn-servers.png)
+![VPN servers preview](docs/screenshots/vpn-servers.png)
 
-![HAPP history v2.0](docs/screenshots/happ-history.png)
+![HAPP history preview](docs/screenshots/happ-history.png)
 
-![HAPP mobile v2.0](docs/screenshots/happ-mobile.png)
+![HAPP mobile preview](docs/screenshots/happ-mobile.png)
 
 ## Важно по секретам
 

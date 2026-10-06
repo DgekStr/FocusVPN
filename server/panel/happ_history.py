@@ -42,7 +42,21 @@ class HappHistory:
                 CREATE INDEX IF NOT EXISTS connection_user_time ON connections (user_key, started_at);
                 CREATE INDEX IF NOT EXISTS connection_last_seen ON connections (last_seen_at);
                 CREATE INDEX IF NOT EXISTS connection_live_id ON connections (live_id);
+                CREATE TABLE IF NOT EXISTS user_traffic_totals (
+                    user_key TEXT PRIMARY KEY,
+                    user_name TEXT NOT NULL,
+                    download_bytes INTEGER NOT NULL DEFAULT 0,
+                    upload_bytes INTEGER NOT NULL DEFAULT 0
+                );
             ''')
+            initialized = database.execute("SELECT 1 FROM settings WHERE key='lifetime_totals_initialized'").fetchone()
+            if not initialized:
+                database.execute('''
+                    INSERT OR IGNORE INTO user_traffic_totals (user_key,user_name,download_bytes,upload_bytes)
+                    SELECT user_key,MAX(user_name),COALESCE(SUM(download_bytes),0),COALESCE(SUM(upload_bytes),0)
+                    FROM connections GROUP BY user_key
+                ''')
+                database.execute("INSERT OR REPLACE INTO settings VALUES ('lifetime_totals_initialized','1')")
         self.secure_files()
 
     @contextmanager
@@ -87,6 +101,17 @@ class HappHistory:
         self.secure_files()
         return count
 
+    @staticmethod
+    def add_user_traffic(database, user_key, user_name, download_delta, upload_delta):
+        database.execute('''
+            INSERT INTO user_traffic_totals (user_key,user_name,download_bytes,upload_bytes)
+            VALUES (?,?,MAX(0,?),MAX(0,?))
+            ON CONFLICT(user_key) DO UPDATE SET
+                user_name=CASE WHEN excluded.user_name!='Не определён' THEN excluded.user_name ELSE user_traffic_totals.user_name END,
+                download_bytes=MAX(0,user_traffic_totals.download_bytes+?),
+                upload_bytes=MAX(0,user_traffic_totals.upload_bytes+?)
+        ''', (user_key, user_name, download_delta, upload_delta, download_delta, upload_delta))
+
     def ingest(self, payload, at=None):
         observed = utc_text(at)
         items = payload.get('connections', [])
@@ -108,17 +133,32 @@ class HappHistory:
                 key = item.get('connection_key')
                 if not key or not item.get('started_at'):
                     continue
-                previous = database.execute('SELECT download_bytes,upload_bytes FROM connections WHERE connection_key=?', (key,)).fetchone()
+                previous = database.execute('SELECT connection_key,user_key,user_name,download_bytes,upload_bytes FROM connections WHERE connection_key=?', (key,)).fetchone()
                 live_id = str(item.get('id') or '')
-                legacy = database.execute('SELECT connection_key,download_bytes,upload_bytes FROM connections WHERE live_id=?', (live_id,)).fetchone() if live_id else None
-                download = max(0, int(item.get('download_bytes', 0)))
-                upload = max(0, int(item.get('upload_bytes', 0)))
+                legacy = database.execute('SELECT connection_key,user_key,user_name,download_bytes,upload_bytes FROM connections WHERE live_id=?', (live_id,)).fetchone() if live_id else None
+                prior_rows = [row for row in (previous, legacy) if row is not None]
+                previous_download = max((row['download_bytes'] or 0 for row in prior_rows), default=0)
+                previous_upload = max((row['upload_bytes'] or 0 for row in prior_rows), default=0)
+                download = max(0, int(item.get('download_bytes', 0)), previous_download)
+                upload = max(0, int(item.get('upload_bytes', 0)), previous_upload)
+                old_identity = next((row for row in prior_rows if row['user_key'] != 'unknown'), prior_rows[0] if prior_rows else None)
+                old_user_key = old_identity['user_key'] if old_identity else 'unknown'
+                old_user_name = old_identity['user_name'] if old_identity else 'Не определён'
+                user_key = str(item.get('user_key') or 'unknown')
+                user_name = str(item.get('user_name') or 'Не определён')
+                if user_key == 'unknown' and old_user_key != 'unknown':
+                    user_key, user_name = old_user_key, old_user_name
+                if old_user_key != user_key and (previous_download or previous_upload):
+                    self.add_user_traffic(database, old_user_key, old_user_name, -previous_download, -previous_upload)
+                    self.add_user_traffic(database, user_key, user_name, previous_download, previous_upload)
+                self.add_user_traffic(database, user_key, user_name, download - previous_download, upload - previous_upload)
                 if previous is not None:
                     download = max(download, previous['download_bytes'] or 0)
                     upload = max(upload, previous['upload_bytes'] or 0)
-                if legacy is not None and legacy['connection_key'] != key:
+                if legacy is not None:
                     download = max(download, legacy['download_bytes'] or 0)
                     upload = max(upload, legacy['upload_bytes'] or 0)
+                if legacy is not None and legacy['connection_key'] != key:
                     database.execute('DELETE FROM connections WHERE connection_key=?', (legacy['connection_key'],))
                 database.execute('''
                     INSERT INTO connections (connection_key,user_key,user_name,started_at,last_seen_at,source_ip,source_port,destination,network,download_bytes,upload_bytes,active,live_id)
@@ -129,7 +169,7 @@ class HappHistory:
                         last_seen_at=excluded.last_seen_at,download_bytes=excluded.download_bytes,
                         upload_bytes=excluded.upload_bytes,active=1,live_id=excluded.live_id,
                         network=excluded.network,source_ip=excluded.source_ip,source_port=excluded.source_port
-                    ''', (key, item.get('user_key', 'unknown'), item.get('user_name', 'Не определён'), item['started_at'], observed, item.get('ip', '—'), item.get('source_port'), item.get('destination', '—'), item.get('network', ''), download, upload, live_id or None))
+                    ''', (key, user_key, user_name, item['started_at'], observed, item.get('ip', '—'), item.get('source_port'), item.get('destination', '—'), item.get('network', ''), download, upload, live_id or None))
             database.execute("INSERT OR REPLACE INTO settings VALUES ('last_collected_at', ?)", (observed,))
             database.execute("DELETE FROM settings WHERE key='last_error'")
         self.secure_files()
@@ -164,14 +204,55 @@ class HappHistory:
             error = database.execute("SELECT value FROM settings WHERE key='last_error'").fetchone()
         return {'rows': [dict(row) for row in rows], 'count': count, 'page': page, 'download_bytes': totals['download'], 'upload_bytes': totals['upload'], 'unknown_traffic': totals['unknown'] or 0, 'last_collected_at': collected[0] if collected else None, 'collector_error': error[0] if error else None}
 
+    def traffic_chart(self, user_key='', since='', until=''):
+        where, values = self.filters(user_key, since, until)
+        with self.connect() as database:
+            rows = database.execute('''
+                SELECT user_key,MAX(user_name) AS user_name,
+                    COALESCE(SUM(download_bytes),0) AS download_bytes,
+                    COALESCE(SUM(upload_bytes),0) AS upload_bytes
+                FROM connections
+            ''' + where + ''' GROUP BY user_key
+                ORDER BY SUM(COALESCE(download_bytes,0)) + SUM(COALESCE(upload_bytes,0)) DESC,MAX(user_name) COLLATE NOCASE
+            ''', values).fetchall()
+        return [dict(row) for row in rows]
+
     def user_totals(self):
         with self.connect() as database:
             rows = database.execute('''
-                SELECT user_key, COALESCE(SUM(download_bytes),0) AS download_bytes,
-                    COALESCE(SUM(upload_bytes),0) AS upload_bytes
-                FROM connections GROUP BY user_key
+                SELECT user_key,user_name,download_bytes,upload_bytes
+                FROM user_traffic_totals
             ''').fetchall()
         return {row['user_key']: {**dict(row), 'download': format_bytes(row['download_bytes']), 'upload': format_bytes(row['upload_bytes'])} for row in rows}
+
+    def top_users(self, live_users=(), limit=5):
+        live = {item['user_key']: item for item in live_users}
+        with self.connect() as database:
+            rows = database.execute('''
+                SELECT user_key,user_name,download_bytes,upload_bytes
+                FROM user_traffic_totals
+                WHERE download_bytes + upload_bytes > 0
+                ORDER BY download_bytes + upload_bytes DESC,user_name COLLATE NOCASE
+                LIMIT ?
+            ''', (max(0, min(5, int(limit))),)).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            active = live.get(item['user_key'], {})
+            item['user_name'] = active.get('user_name') or item['user_name']
+            item['connections'] = int(active.get('connections') or 0)
+            item['download'] = format_bytes(item['download_bytes'])
+            item['upload'] = format_bytes(item['upload_bytes'])
+            result.append(item)
+        return result
+
+    def reset_user_totals(self, user_key):
+        if not isinstance(user_key, str) or not user_key or len(user_key) > 128:
+            raise ValueError('Пользователь статистики указан некорректно.')
+        with self.lock, self.connect() as database:
+            cursor = database.execute('DELETE FROM user_traffic_totals WHERE user_key=?', (user_key,))
+        self.secure_files()
+        return cursor.rowcount > 0
 
     def user_options(self):
         with self.connect() as database:

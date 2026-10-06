@@ -35,6 +35,7 @@ from panel_ui import render_shell
 from happ_users import HappUsers, user_link, validate_subscription_base_url
 from happ_history import HappHistory
 from happ_history_ui import render_history
+from server_metrics import ServerMetrics, collect_metrics, render_metrics_panel
 from happ_stats import acknowledge_history_visits
 from vless_monitor import VlessMonitor, load_settings as load_monitor_settings
 from crm_bridge import authorized as crm_authorized, embed as crm_embed, panel_url as crm_panel_url
@@ -110,6 +111,8 @@ HAPP_USERS = None
 HAPP_EXPIRY_STOP = threading.Event()
 HAPP_HISTORY = None
 HAPP_HISTORY_STOP = threading.Event()
+SERVER_METRICS = None
+SERVER_METRICS_STOP = threading.Event()
 SESSIONS = {}
 WG_ADMIN = WgAdmin(WgEasyApi(WG_EASY_SECRET_PATH, os.environ.get('FOCUSVPN_WG_EASY_API_URL', 'http://127.0.0.1:51821')), CSRF_TOKEN)
 HOSTNAME_PATTERN = re.compile(r'(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?\Z')
@@ -1485,6 +1488,10 @@ def render_settings_page(config, query, message='', kind='success'):
             'happ': service_state('sing-box-happ-server'),
         }
         status_class = lambda value: 'ok' if value in ('active', 'running') else 'bad'
+        try:
+            server_metrics_markup = render_metrics_panel(SERVER_METRICS.snapshot() if SERVER_METRICS is not None else {})
+        except (OSError, sqlite3.Error, ValueError):
+            server_metrics_markup = render_metrics_panel({})
         gateway_mode_labels = {'vless': 'VLESS', 'wireguard': 'Внешний WireGuard', 'default': 'Шлюз по умолчанию'}
         gateway_mode_panel = f'''<section class="panel gateway-mode-panel"><h2>Режим работы VPN-шлюза</h2><p class="subtitle">Активный режим: <span class="badge {'ok' if active_gateway_mode == 'vless' else 'online'}">{esc(gateway_mode_labels[active_gateway_mode])}</span></p><div class="gateway-mode-actions">
         <form method="post" action="/settings/gateway/mode" data-gateway-mode="vless"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="vless"><button class="{'secondary' if active_gateway_mode != 'vless' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'vless' else ''}>VLESS-шлюз</button></form>
@@ -1494,6 +1501,7 @@ def render_settings_page(config, query, message='', kind='success'):
         body = f'''<section class="page-head">
     <div><p class="eyebrow">Service control</p><h1>Настройки</h1><p class="subtitle">VLESS, WireGuard, HAPP Server и доступ к панели.</p></div>
 </section>
+{server_metrics_markup}
 {message_banner(message, kind)}
 {wg_error}{happ_error}
 <div class="settings-layout">
@@ -2023,6 +2031,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = happ_live_connections()
                 payload['account_traffic'] = HAPP_HISTORY.user_totals() if HAPP_HISTORY is not None else {}
+                if HAPP_HISTORY is not None:
+                    payload['top_users'] = HAPP_HISTORY.top_users(payload.get('users', []))
                 self.send_json(HTTPStatus.OK, payload)
             except HappStatsError as error:
                 self.send_json(HTTPStatus.BAD_GATEWAY, {'error': str(error)})
@@ -2070,7 +2080,8 @@ class Handler(BaseHTTPRequestHandler):
                 vip_vless_link = vless_link_for_subscription(HAPP_USERS.vip()['link'], subscription_origin) if HAPP_USERS is not None else public_vless_link()
                 users = [{**user, 'link': vless_link_for_subscription(user['link'], subscription_origin)} for user in users]
             traffic = HAPP_HISTORY.user_totals() if HAPP_HISTORY is not None else {}
-            self.send_html(HTTPStatus.OK, happ_server_page(users, CSRF_TOKEN, form_value(query, 'message'), form_value(query, 'kind') or 'success', events, traffic=traffic, subscriptions=subscriptions, vip_vless_link=vip_vless_link))
+            subscription_host = urlsplit(subscription_origin).hostname or '—'
+            self.send_html(HTTPStatus.OK, happ_server_page(users, CSRF_TOKEN, form_value(query, 'message'), form_value(query, 'kind') or 'success', events, traffic=traffic, subscriptions=subscriptions, vip_vless_link=vip_vless_link, endpoint_host=subscription_host))
             return
         if parsed.path == '/settings':
             query = parse_qs(parsed.query)
@@ -2133,6 +2144,14 @@ class Handler(BaseHTTPRequestHandler):
                     elif path == '/happ-users/action':
                         HAPP_USERS.action(form_value(values, 'id'), form_value(values, 'operation'), form_value(values, 'name'), form_value(values, 'expires_at'))
                         message = 'Изменение пользователя применено; VIP-ссылка сохранена.'
+                    elif path == '/happ-users/traffic/reset':
+                        user_id = form_value(values, 'id')
+                        if not any(user.get('id') == user_id for user in HAPP_USERS.registry().get('users', [])):
+                            raise ValueError('Пользователь не найден.')
+                        if HAPP_HISTORY is None:
+                            raise RuntimeError('Хранилище статистики HAPP недоступно.')
+                        HAPP_HISTORY.reset_user_totals('personal-' + user_id)
+                        message = 'Накопительная статистика пользователя сброшена.'
                     else:
                         self.send_empty(HTTPStatus.NOT_FOUND)
                         return
@@ -2447,7 +2466,7 @@ def happ_history_worker():
 
 
 def main():
-    global VLESS_MONITOR, HAPP_USERS, HAPP_HISTORY
+    global VLESS_MONITOR, HAPP_USERS, HAPP_HISTORY, SERVER_METRICS
     if not AUTH_PATH.is_file():
         raise SystemExit(f'Authentication file missing: {AUTH_PATH}')
     try:
@@ -2458,6 +2477,9 @@ def main():
     HAPP_USERS = HappUsers(APP_DIR, HAPP_CONFIG_PATH, HAPP_STATE_PATH, apply_happ_configuration)
     HAPP_USERS.initialize()
     HAPP_HISTORY = HappHistory('/mnt/stat')
+    SERVER_METRICS = ServerMetrics('/mnt/stat/server-metrics.sqlite3')
+    SERVER_METRICS.sample()
+    threading.Thread(target=collect_metrics, args=(SERVER_METRICS_STOP, SERVER_METRICS), name='server-metrics', daemon=True).start()
     threading.Thread(target=happ_history_worker, name='happ-history', daemon=True).start()
     threading.Thread(target=happ_expiry_worker, name='happ-expiry', daemon=True).start()
     VLESS_MONITOR = VlessMonitor(APP_DIR, load_config, queue_server_checks, outbound_check_states, switch_monitored_route, gateway_mode)
@@ -2465,6 +2487,7 @@ def main():
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
+        SERVER_METRICS_STOP.set()
         HAPP_HISTORY_STOP.set()
         HAPP_EXPIRY_STOP.set()
         VLESS_MONITOR.stop()

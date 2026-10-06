@@ -24,6 +24,10 @@ systemctl is-enabled sing-box sing-box-admin sing-box-ru-zone-update.timer
 ss -ltnp | grep -E '9443|9445|12345'
 ```
 
+## VPN Host Metrics
+
+Settings shows the VPN host LAN address and OS, uptime, rolling 24-hour CPU/LAN peaks, and OS RX/TX byte counters since boot. The panel samples `/proc/stat`, `/proc/net/dev`, and `/proc/uptime` every five seconds; physical interfaces are preferred, with virtual interfaces excluded. Samples are stored in `/mnt/stat/server-metrics.sqlite3` (directory mode `0700`, database mode `0600`) and pruned after 24 hours. CPU/LAN peak history begins when this collector is installed; RX/TX totals reset when the operating system reboots. These are host metrics, not billing counters.
+
 ## Validation
 
 ```bash
@@ -38,17 +42,37 @@ systemd-analyze verify /etc/systemd/system/sing-box-admin.service
 For a clean Debian 12+/Ubuntu 22.04+ host, the standalone executable bootstrap entry point is:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/master/scripts/bootstrap.sh | sudo bash -s -- master
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1/scripts/bootstrap.sh | sudo bash -s -- v2.1
 ```
 
 `bootstrap.sh` accepts a Git branch/tag followed by installer options, for example `master --start-wg-easy`; if Git or OS packages are missing it installs them through apt, clones the requested ref into a temporary directory, and runs the same installer. It forwards password prompts to the controlling TTY even when invoked as `curl | sudo bash`. `scripts/create_panel_auth.py` confirms a 12+ character panel password, stores only a salted scrypt hash atomically with mode `0600`, and never sends the password through argv/environment. The installer writes every packaged systemd service/template and downloads sing-box after verifying its SHA-256 checksum. It does not start VPN services with placeholder configs. After entering real gateway/HAPP/wg-easy configs, run `sudo ./scripts/install.sh --enable` from a clone, or repeat the standalone bootstrap with `--enable`. wg-easy initial setup is optional and separately requested with `--start-wg-easy`; its admin/API configuration must be completed before `--enable`.
 
 For a clean-clone smoke without changing a server, clone the same public ref into a temporary directory, check that `VERSION`, `scripts/bootstrap.sh`, `scripts/install.sh`, panel/helper files and packaged systemd units exist, run the Python/Node/publication suites from that checkout, and invoke `scripts/install.sh --help`. A full OS/service startup test requires a disposable Debian/Ubuntu VM; unit tests on Windows do not emulate apt/systemd or start VPN networking.
 
+For the published v2.1 Git ref on Windows/PowerShell, run the smoke from a fresh clone:
+
+```powershell
+$clone = Join-Path $env:TEMP ('FocusVPN-v2.1-' + [guid]::NewGuid().ToString('N'))
+git clone --depth 1 --branch v2.1 https://github.com/DgekStr/FocusVPN.git $clone
+Push-Location $clone
+try {
+	.\scripts\validate.ps1
+	py -3 -m unittest discover -s scripts -p 'test_*.py' -q
+	node scripts\test_panel_checks.js
+	node scripts\test_happ_stats_ui.js
+	bash scripts/bootstrap.sh --help
+	bash scripts/install.sh --help
+} finally {
+	Pop-Location
+}
+```
+
+This validates the published Git ref and installer entry points without running privileged installation. A full apt/systemd first boot must still be checked in a disposable Debian/Ubuntu VM.
+
 For a clean Debian 12+/Ubuntu 22.04+ host, the standalone entry point is:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/master/scripts/bootstrap.sh | sudo bash -s -- master
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1/scripts/bootstrap.sh | sudo bash -s -- v2.1
 ```
 
 `bootstrap.sh` accepts a Git branch/tag followed by installer options, for example `master --start-wg-easy`; if packages need installation it downloads them through apt, clones the requested ref into a temporary directory, and runs the same installer. `scripts/create_panel_auth.py` prompts through the controlling TTY (so the command also works when bootstrap is piped), confirms a 12+ character panel password, stores only a salted scrypt hash atomically with mode `0600`, and never sends the password through argv/environment. The installer writes all service unit files but does not start VPN services with placeholder configs. After entering real gateway/HAPP/wg-easy configs, run `sudo ./scripts/install.sh --enable` from a clone, or repeat the standalone bootstrap with `--enable`. wg-easy initial setup is optional and separately requested with `--start-wg-easy`; its admin/API configuration must be completed before `--enable`.
@@ -90,13 +114,15 @@ Personal users are managed on `/happ-server`, with independent UUIDs, links/QR, 
 
 Clash API connection metadata does not directly identify users. The live view correlates its source IP, source port and start time with the authenticated VLESS journal request ID under the current HAPP PID. Binary/ANSI journal messages and Go RFC3339 nanosecond timestamps are normalized; ambiguous or missing identities are shown as `Не определён`, never assigned by IP alone. VIP is a separate shared-access group.
 
-The live connection table shows the user name, client download/upload counters and a grouped sum for active connections. These are not lifetime totals for closed sessions, and no traffic/bandwidth quotas are enforced. Identity data is cached with a journal cursor and bounded context; HAPP polling has a timeout and retries. Run `py -3 scripts/test_happ_stats.py` and `node scripts/test_happ_stats_ui.js` for identity/counter regressions, and `py -3 scripts/test_happ_users.py` for VIP-preservation and access lifecycle.
+The live connection table groups matching client IPs by protocol. Connection duration and download/upload counters are summed; destination follows the most recently started live connection. Usernames are correlated from the authenticated VLESS journal, never by IP alone. Run `py -3 scripts/test_happ_stats.py` and `node scripts/test_happ_stats_ui.js` for identity/counter regressions, and `py -3 scripts/test_happ_users.py` for VIP-preservation and access lifecycle.
 
 ## Persistent HAPP Statistics
 
 `/mnt/stat/happ-stat.sqlite3` stores observed HAPP connections and authenticated journal visits. The directory is mode `0700`, database/sidecar files mode `0600`; all persistent history settings and collector checkpoints live in the same database. The admin service sandbox permits writing `/mnt/stat`, and the installer creates the directory and installs `python3-xlwt` for BIFF XLS export.
 
 A background collector runs independently of browser polling, with a two-second pause between completed samples. Stable journal/live identifiers deduplicate snapshots; traffic is the maximum observed counter per connection, not a sum of repeated cumulative snapshots. Late user identification merges the prior live record. Closed connections remain stored, and journal-only visits preserve domain/IP, source and time with unknown final bytes. Reconnects/restarts and gaps can lose unsampled final traffic; do not treat observed totals as exact billing counters. Full HTTPS URL paths and page contents are unavailable.
+
+Separate `user_traffic_totals` in `/mnt/stat/happ-stat.sqlite3` accumulates only new per-connection byte deltas and is not pruned by history retention. Its first initialization backfills the history rows still present in SQLite; traffic deleted by an earlier retention cleanup cannot be recovered. The per-profile `Сбросить` action deletes only that user's cumulative total; active session counters remain as baselines so only subsequent byte deltas are added again.
 
 `/happ-history` provides user/date filters, UTC timestamps, source IP/port, destination domain/IP/port, protocol and observed bytes with pagination. `/happ-history.xls` exports all matching rows as actual XLS, splitting into additional sheets at the BIFF row limit; no server-side XLS archives are retained. Both endpoints require the normal private-network session authentication. Strings are written as XLS text, not formulas.
 
@@ -106,7 +132,7 @@ Local regression tests require `xlwt==1.3.0`: `py -3 -m pip install xlwt==1.3.0`
 
 ## HAPP Account Traffic And Subscriptions
 
-The personal user row shows observed download/upload after Open HAPP, including closed sessions in the retained history. Browser polling refreshes these account totals independently from the active-connection totals. Counters cover the configured history retention (60 days by default); pruning old records can reduce them. They are sampled lower bounds, not lifetime billing or enforced quotas.
+The personal user row and TOP-5 show cumulative observed download/upload after Open HAPP, including closed sessions. Browser polling refreshes these account totals independently from active-connection totals. Lifetime totals survive history retention cleanup and can be reset for one profile from its row. Existing retained rows are backfilled on first initialization; previously pruned data is unavailable. They are sampled lower bounds, not exact billing or enforced quotas.
 
 Open HAPP and Copy subscription use an account-specific HTTP subscription. VIP and personal QR codes now encode that same WAN/DNS subscription URL for mobile import, not a standalone VLESS URI. Scan inside HAPP to import the subscription and receive metadata. The original VLESS copy remains unchanged. Previously imported standalone configurations must be replaced or supplemented by importing the new subscription; they are not converted automatically. Responses carry `subscription-userinfo: upload=...; download=...; total=0`, optional UTC expiry, `profile-title`, and `profile-update-interval: 1`, also represented as metadata lines in the body. HAPP's standard usage bar shows upload plus download against an unlimited allowance, not download alone. Automatic refresh is requested hourly; execution depends on the client, and manual refresh retrieves current collected counters.
 

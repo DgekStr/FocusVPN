@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.1 - 2026-10-06
+
+- `/happ-server`: live-подключения группируются по IP и протоколу; duration, download/upload суммируются, destination берётся из последнего соединения.
+- HAPP lifetime traffic totals хранятся отдельно от retention истории. Добавлены TOP-5 и подтверждаемый per-profile reset; первоначальные totals backfill-ятся из ещё сохранённых rows.
+- `/happ-history`: верхний график per-client download/upload с числовыми значениями, фильтрами страницы и сортировкой по убыванию общего трафика.
+- VIP VLESS block перенесён вниз `/happ-server`; Endpoint host берётся из настроенного публичного URL подписки, порт Reality остаётся `9445`.
+- Settings показывает IP и ОС VPN-хоста, uptime, CPU/LAN peaks за rolling 24 часа и сетевые RX/TX counters. Локальный collector опрашивает `/proc` раз в 5 секунд и хранит samples в `/mnt/stat/server-metrics.sqlite3`.
+- Добавлен анимированный пульсирующий зелёный favicon для панели.
+- Installer copies all packaged panel Python files, including `server_metrics.py`; bootstrap runs it from the selected Git ref. Clean-clone/source validation: 105 Python tests, two Node UI regression suites, `scripts/validate.ps1` and installer `--help`.
+
+### Ограничения проверки
+
+- Полный privileged apt/systemd first boot не запускался в disposable Debian/Ubuntu VM.
+- Host traffic totals являются системными счётчиками с загрузки ОС; CPU/LAN peaks начинают наблюдаться с момента запуска collector и хранятся до 24 часов.
+- HAPP traffic является наблюдаемой оценкой; пропущенные финальные байты соединения восстановить нельзя. Мобильный импорт/refresh HAPP отдельно не сертифицировался этим набором тестов.
+
 ## v2.0 - 2026-10-03
 
 - Персональные HAPP аккаунты: независимые UUID/QR, срок UTC, включение, отзыв и удаление без ротации VIP.
@@ -16,6 +32,9 @@
 - 88 Python-тестов, два Node VM UI-сценария и локальные publication checks.
 
 ### Post-release updates — 2026-10-05
+
+- HAPP `/happ-server`: lifetime per-user traffic totals, TOP-5 ranking, and per-profile reset. Totals survive history retention and initialize from retained records.
+- Live connections aggregate by client IP and protocol; duration and byte counters sum, while destination follows the latest connection.
 
 - Добавлен opt-in default gateway mode для WireGuard-клиентов с проверкой main route, forwarding, FORWARD и NAT. Он оставляет системный route и HAPP inbound незатронутыми; активный production mode не меняется автоматически.
 - Settings перестроен в равные responsive две колонки; selector gateway вынесен наверх.

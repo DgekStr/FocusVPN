@@ -90,6 +90,23 @@
   });
 
   document.addEventListener('submit', (event) => {
+    const trafficForm = event.target.closest('form[data-happ-traffic-reset]');
+    if (trafficForm && trafficForm.dataset.confirmed !== 'true') {
+      event.preventDefault();
+      const dialog = document.querySelector('[data-happ-traffic-reset-dialog]');
+      if (!dialog) return;
+      const name = trafficForm.closest('tr')?.querySelector('td strong')?.textContent || 'пользователя';
+      const message = dialog.querySelector('[data-happ-traffic-reset-message]');
+      if (message) message.textContent = `Накопительные счётчики пользователя ${name} будут сброшены. Остальные профили не изменятся.`;
+      dialog.showModal();
+      const confirm = dialog.querySelector('[data-happ-traffic-reset-confirm]');
+      confirm.onclick = () => {
+        dialog.close();
+        trafficForm.dataset.confirmed = 'true';
+        trafficForm.requestSubmit();
+      };
+      return;
+    }
     const basePath = document.body?.dataset?.vpnBase || '';
     const form = event.target.closest(`form[action="${basePath}/happ-users/action"]`);
     if (!form || event.submitter?.value !== 'delete' || form.dataset.confirmed === 'true') return;

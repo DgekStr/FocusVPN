@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FocusVPN v2.0 | Project status</title>
+  <title>FocusVPN v2.1 | Project status</title>
   <style>
     :root { --bg:#050816; --surface:#111b34e8; --text:#f5f7ff; --muted:#8ea0be; --line:#ffffff1f; --cyan:#22d3ee; --violet:#7c3aed; --ok:#5eead4; }
     * { box-sizing:border-box; }
@@ -33,21 +33,21 @@
 <body>
   <main class="shell">
     <section class="hero">
-      <div class="eyebrow">FocusVPN / 2026-10-03</div>
-      <h1>FocusVPN v2.0</h1>
+      <div class="eyebrow">FocusVPN / 2026-10-06</div>
+      <h1>FocusVPN v2.1</h1>
       <p class="lead">Единый VPN-шлюз: управление серверами, внешним WireGuard, персональными HAPP аккаунтами, подписками и сохранённой историей трафика.</p>
       <div class="links"><a href="README.md">README</a><a href="docs/PROJECT_STATUS.md">Статус проекта</a><a href="docs/ROADMAP.md">Roadmap</a><a href="docs/OPERATIONS.md">Operations</a><a href="docs/CHANGELOG.md">Изменения</a></div>
     </section>
     <section class="grid">
-      <article class="card"><small>Версия</small><strong>v2.0</strong><span class="muted">база v1.0: 3f48b16</span></article>
-      <article class="card"><small>Admin</small><strong>9443</strong><span class="muted">вход и токены; HTTP без TLS</span></article>
+      <article class="card"><small>Версия</small><strong>v2.1</strong><span class="muted">база v1.0: 3f48b16</span></article>
+          <article class="card"><small>Admin</small><strong>9443</strong><span class="muted">backend HTTP через HTTPS proxy</span></article>
       <article class="card"><small>HAPP inbound</small><strong>9445</strong><span class="muted">VLESS Reality</span></article>
-      <article class="card"><small>Python-тесты</small><strong class="status">68</strong><span class="muted">и 2 Node UI-регрессии</span></article>
-      <article class="card wide"><small>Новое в v2.0</small><ul><li>Персональные HAPP пользователи с сохранением VIP.</li><li>SQLite история, retention, фильтры и настоящий XLS.</li><li>Подписки: трафик / безлимит, emoji, уведомление, часовое обновление.</li><li>UTC даты dd.mm.yyyy HH:MM:SS и настраиваемый IPv4-доступ.</li></ul></article>
+      <article class="card"><small>Python-тесты</small><strong class="status">105</strong><span class="muted">и 2 Node UI-регрессии</span></article>
+      <article class="card wide"><small>Новое в v2.1</small><ul><li>HAPP lifetime traffic, TOP-5 и per-profile reset.</li><li>История: сравнимые download/upload столбцы по клиентам.</li><li>Настройки: uptime, ОС, CPU/LAN peaks и сетевые totals VPN-хоста.</li><li>Агрегированные HAPP connections и анимированный favicon.</li></ul></article>
       <article class="card wide"><small>Publication boundary</small><p class="muted">Секреты, runtime базы, UUID и Reality keys не включены. В репозитории находятся рабочие скрипты и placeholders для controlled deployment.</p></article>
     </section>
-    <section class="section"><h2>Интерфейс v2.0</h2><p class="muted">Текущие renderer с синтетическими данными. Production credentials и история пользователей не публикуются.</p><img class="screenshot" src="docs/screenshots/wireguard-and-happ-preview.png" alt="Персональные пользователи HAPP и статистика v2.0"><img class="screenshot" src="docs/screenshots/happ-history.png" alt="История HAPP с фильтрами и экспортом XLS"></section>
-    <section class="section"><h2>Границы проверки</h2><p class="muted">Наблюдаемые счётчики не являются пожизненным биллингом. Импорт внутри Windows HAPP, доставка Mattermost и внешний WireGuard egress требуют отдельной клиентской или сетевой проверки. На текущем сервере явно разрешён IPv4-доступ к HTTP 9443 из 0.0.0.0/0; авторизация сохранена, HTTPS и NAT не настроены.</p></section>
+    <section class="section"><h2>Интерфейс</h2><p class="muted">Скриншоты v2.0 собраны с renderer и синтетических данных. Production credentials и пользовательская история не публикуются.</p><img class="screenshot" src="docs/screenshots/wireguard-and-happ-preview.png" alt="Персональные пользователи HAPP и статистика"><img class="screenshot" src="docs/screenshots/happ-history.png" alt="История HAPP с фильтрами и экспортом XLS"></section>
+    <section class="section"><h2>Границы проверки</h2><p class="muted">Наблюдаемые счётчики не являются точным биллингом. Импорт внутри Windows HAPP, доставка Mattermost и внешний WireGuard egress требуют отдельной клиентской или сетевой проверки. Публичная панель использует HTTPS proxy vpn.focuslens.dev; backend HTTP 9443 доступен по LAN и не шифруется. На текущем сервере на уровне приложения явно разрешён IPv4-доступ 0.0.0.0/0 с сохранением авторизации; NAT автоматически не меняется.</p></section>
   </main>
 </body>
 </html>

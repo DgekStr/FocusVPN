@@ -81,4 +81,4 @@
 - Безопасный deploy script с dry-run/rollback и schema/config migration versioning.
 - Authenticated health/latency dashboard и ручная проверка Mattermost доставки после настройки действующего webhook.
 
-Текущая версия FocusVPN — `v2.1.7`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway не менялся. HAPP-мастер/ключи проверены на тестовом хосте; строка кнопок проверена в браузере. Обновление `.41` через Git этого релиза проверяется после публикации. Смена служебного пароля через Settings остаётся отдельной задачей.
+Текущая версия FocusVPN — `v2.1.7`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway не менялся. Обновление `.41` из опубликованного Git-тега прошло: HAPP данные сохранены, строка кнопок и HTTPS/API проверены. Смена служебного пароля через Settings остаётся отдельной задачей.

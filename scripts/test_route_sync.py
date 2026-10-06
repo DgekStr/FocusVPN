@@ -145,6 +145,15 @@ class RouteSyncTests(unittest.TestCase):
         self.assertIn('>Редактировать</button>', page)
         self.assertNotIn('>Проверить соединение</button>', page)
 
+    def test_server_actions_share_one_table_cell_in_order(self):
+        self.patch('service_state', return_value='inactive')
+        page = app.render_outbounds_page(self.gateway, {})
+        rows = page.split('<tbody>', 1)[1].split('</tbody>', 1)[0]
+        self.assertEqual(rows.count('<td'), 9)
+        self.assertEqual(rows.count('class="outbound-actions"'), 1)
+        positions = [rows.index('>' + label + '</button>') for label in ('Использовать', 'Проверить', 'Редактировать', 'Удалить')]
+        self.assertEqual(positions, sorted(positions))
+
     def test_sidebar_has_one_server_link_without_profile_items(self):
         page = app.render_shell('VPN-серверы', '<p>content</p>', 'outbounds', ['auto-1', 'auto-2'], 'auto-1')
         self.assertEqual(page.count('data-panel-nav="outbounds"'), 1)
@@ -152,6 +161,7 @@ class RouteSyncTests(unittest.TestCase):
         self.assertNotIn('/outbounds?tag=', page)
         self.assertNotIn('auto-1', page)
         self.assertIn('data-panel-nav="wireguard"', page)
+        self.assertEqual(page.count('class="nav-section"'), 1)
 
     def test_editor_replacement_preserves_tag_route_and_nested_fields(self):
         config = {'outbounds': [{'type': 'vless', 'tag': 'auto-1', 'server': 'old.example.com'}], 'route': {'final': 'auto-1'}}
@@ -196,6 +206,9 @@ class RouteSyncTests(unittest.TestCase):
         self.assertNotIn('settings-wide', page)
         self.assertLess(page.index('Режим работы VPN-шлюза'), page.index('Публичный URL подписки HAPP'))
         self.assertEqual(page.count('data-gateway-mode='), 3)
+        self.assertIn('id="happ_public_key"', page)
+        self.assertIn('id="happ_vip_uuid"', page)
+        self.assertNotIn('Существующая общая ссылка', page)
         self.assertIn('data-gateway-mode="default"', page)
         self.assertIn('value="default"', page)
         self.assertIn('Шлюз по умолчанию', page)

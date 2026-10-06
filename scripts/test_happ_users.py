@@ -12,8 +12,9 @@ import threading
 import types
 import unittest
 from pathlib import Path
+from subprocess import CompletedProcess
 from unittest.mock import patch
-from urllib.parse import urlsplit, parse_qs, quote, unquote
+from urllib.parse import urlsplit, parse_qs, quote, unquote, urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
 from happ_users import HappUsers, build_user_config, user_link, now_utc, write_private_json
@@ -65,6 +66,110 @@ class HappUserTests(unittest.TestCase):
         if os.name == 'posix':
             self.assertEqual(self.manager.vip_path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(self.manager.registry_path.stat().st_mode & 0o777, 0o600)
+
+    def run_key_setup(self, restart_error=False, validation_error=False):
+        def command(arguments, **kwargs):
+            if arguments[1:3] == ['generate', 'reality-keypair']:
+                return CompletedProcess(arguments, 0, 'PrivateKey: ' + 'A' * 43 + '\nPublicKey: ' + 'B' * 43 + '\n')
+            return CompletedProcess(arguments, 0, '')
+
+        def backup(path, prefix):
+            destination = self.root / (prefix + '.backup')
+            destination.write_bytes(path.read_bytes())
+            return destination
+
+        with patch.object(app, 'HAPP_USERS', self.manager), patch.object(app, 'HAPP_CONFIG_PATH', self.config_path), patch.object(app, 'HAPP_STATE_PATH', self.public_path), patch.object(app, 'command', side_effect=command), patch.object(app, 'check_happ_candidate', side_effect=RuntimeError('invalid config') if validation_error else None) as check, patch.object(app, 'backup_file', side_effect=backup), patch.object(app, 'write_atomic_file', side_effect=lambda path, data, **kwargs: path.write_bytes(data)), patch.object(app, 'service_state', return_value='inactive'), patch.object(app, 'restart_happ_server', side_effect=RuntimeError('failed') if restart_error else None):
+            app.generate_and_apply_happ_keys('vpn.example.com', 'www.cloudflare.com', '9445')
+            check.assert_called_once()
+
+    def test_key_generation_updates_all_links_without_changing_user_ids(self):
+        self.manager.create('Alice')
+        before = self.manager.registry_path.read_bytes()
+        token = self.manager.subscription_token(self.manager.users()[0])
+        self.run_key_setup()
+        state = json.loads(self.public_path.read_text())
+        config = json.loads(self.config_path.read_text())
+        self.assertEqual(state['public_key'], 'B' * 43)
+        self.assertEqual(config['inbounds'][0]['tls']['reality']['private_key'], 'A' * 43)
+        self.manager.require_vip(config)
+        self.assertEqual(self.manager.registry_path.read_bytes(), before)
+        self.assertEqual(self.manager.subscription_token(self.manager.users()[0]), token)
+        self.assertEqual(parse_qs(urlsplit(self.manager.users()[0]['link']).query)['pbk'], ['B' * 43])
+
+    def test_failed_key_setup_restores_config_state_and_vip(self):
+        paths = [self.config_path, self.public_path, self.manager.vip_path]
+        original = [path.read_bytes() for path in paths]
+        with self.assertRaisesRegex(RuntimeError, 'восстановлены'):
+            self.run_key_setup(restart_error=True)
+        self.assertEqual([path.read_bytes() for path in paths], original)
+
+    def test_key_setup_replaces_demo_vip_uuid_and_keeps_personal_users(self):
+        demo_uuid = '00000000-0000-4000-8000-000000000001'
+        config = json.loads(self.config_path.read_text())
+        config['inbounds'][0]['users'][0]['uuid'] = demo_uuid
+        self.config_path.write_text(json.dumps(config))
+        state = json.loads(self.public_path.read_text())
+        state['link'] = self.link.replace(self.vip_uuid, demo_uuid)
+        self.public_path.write_text(json.dumps(state))
+        self.manager.vip_path.unlink()
+        self.manager.initialize()
+        self.manager.create('Alice')
+        registry_before = self.manager.registry_path.read_bytes()
+        token_before = self.manager.subscription_token(self.manager.users()[0])
+        self.run_key_setup()
+        state = json.loads(self.public_path.read_text())
+        self.assertNotEqual(state['uuid'], demo_uuid)
+        self.assertEqual(urlsplit(self.manager.vip()['link']).username, state['uuid'])
+        updated = json.loads(self.config_path.read_text())
+        self.assertEqual(updated['inbounds'][0]['users'][0]['uuid'], state['uuid'])
+        self.manager.require_vip(updated)
+        self.assertEqual(self.manager.registry_path.read_bytes(), registry_before)
+        self.assertEqual(self.manager.subscription_token(self.manager.users()[0]), token_before)
+
+    def test_invalid_generated_candidate_does_not_write_files(self):
+        paths = [self.config_path, self.public_path, self.manager.vip_path]
+        original = [path.read_bytes() for path in paths]
+        with self.assertRaisesRegex(RuntimeError, 'invalid config'):
+            self.run_key_setup(validation_error=True)
+        self.assertEqual([path.read_bytes() for path in paths], original)
+
+    def test_first_login_wizard_disappears_after_key_setup(self):
+        markup = app.render_shell('VPN', '<p>page</p>', 'outbounds', [])
+        with patch.object(app, 'HAPP_CONFIG_PATH', self.config_path), patch.object(app, 'HAPP_STATE_PATH', self.public_path):
+            self.assertTrue(app.happ_setup_needed())
+            page = app.add_happ_setup_dialog(markup, '192.0.2.1:7445')
+            self.assertIn('data-happ-setup-dialog', page)
+            self.assertIn('name="csrf"', page)
+            self.assertIn('action="/settings/happ/keys"', page)
+            self.run_key_setup()
+            self.assertFalse(app.happ_setup_needed())
+            self.assertEqual(app.add_happ_setup_dialog(markup), markup)
+
+    def test_key_form_does_not_include_private_key(self):
+        form = app.happ_key_form('vpn.example.com', 'www.cloudflare.com', 9445, initial=True)
+        self.assertIn('data-happ-setup-close', form)
+        self.assertIn('name="confirm_happ_keys"', form)
+        self.assertNotIn('private_key', form)
+
+    def test_key_setup_post_requires_confirmation_and_csrf(self):
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+        try:
+            with patch.object(app.Handler, 'require_access', return_value=True), patch.object(app, 'generate_and_apply_happ_keys') as generate:
+                for fields, expected in (({'csrf': 'invalid', 'confirm_happ_keys': 'generate'}, 0), ({'csrf': app.CSRF_TOKEN}, 0), ({'csrf': app.CSRF_TOKEN, 'confirm_happ_keys': 'generate', 'happ_server': 'vpn.example.com', 'happ_sni': 'www.cloudflare.com', 'happ_port': '9445'}, 1)):
+                    connection.request('POST', '/settings/happ/keys', urlencode(fields), {'Content-Type': 'application/x-www-form-urlencoded'})
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 303)
+                    response.read()
+                    self.assertEqual(generate.call_count, expected)
+                generate.assert_called_once_with('vpn.example.com', 'www.cloudflare.com', '9445')
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
 
     def test_happ_deep_link_preserves_raw_configuration_uri(self):
         link = self.link.replace('#VIP', '#Alice%20%26%20Bob')

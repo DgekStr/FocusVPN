@@ -79,6 +79,9 @@ input:focus, select:focus, textarea:focus { outline: 0; border-color: var(--acce
 option { background: #111b34; color: var(--text); }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .inline-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.outbound-actions { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; width: max-content; }
+.outbound-actions > form { flex: 0 0 auto; margin: 0; }
+.outbound-actions button { flex: 0 0 auto; width: auto; white-space: nowrap; }
 .happ-account-traffic { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .happ-account-traffic > span { font-size: 11px; }
 .happ-stat-reset { min-height: 30px; padding: 5px 8px; font-size: 11px; }

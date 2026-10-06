@@ -1040,6 +1040,120 @@ def apply_happ_configuration(raw):
         raise RuntimeError('Новая HAPP Server конфигурация не запустилась; предыдущая версия восстановлена.')
 
 
+def generate_and_apply_happ_keys(server, sni, port):
+    if HAPP_USERS is None:
+        raise RuntimeError('Управление пользователями HAPP недоступно.')
+    server = validate_server(str(server), 'Адрес HAPP')
+    sni = validate_server(str(sni), 'HAPP SNI')
+    port = require_port(str(port))
+    original_config = json.loads(HAPP_CONFIG_PATH.read_text(encoding='utf-8'))
+    HAPP_USERS.require_vip(original_config)
+    vip = HAPP_USERS.vip()
+    state = json.loads(HAPP_STATE_PATH.read_text(encoding='utf-8'))
+    generated = command([SING_BOX_BIN, 'generate', 'reality-keypair'], timeout=30)
+    private_match = re.search(r'^PrivateKey:\s*(\S+)', generated.stdout or '', re.MULTILINE)
+    public_match = re.search(r'^PublicKey:\s*(\S+)', generated.stdout or '', re.MULTILINE)
+    if generated.returncode != 0 or not private_match or not public_match:
+        raise RuntimeError('Не удалось сгенерировать Reality-ключи.')
+    private_key, public_key = private_match.group(1), public_match.group(1)
+    if not PUBLIC_KEY_PATTERN.fullmatch(private_key) or not PUBLIC_KEY_PATTERN.fullmatch(public_key):
+        raise RuntimeError('sing-box вернул некорректную пару Reality-ключей.')
+    short_id = secrets.token_hex(4)
+    candidate = json.loads(json.dumps(original_config))
+    inbound = next(item for item in candidate['inbounds'] if item.get('tag') == vip['inbound_tag'])
+    inbound['listen_port'] = port
+    tls = inbound.setdefault('tls', {})
+    tls.update(enabled=True, server_name=sni)
+    reality = tls.setdefault('reality', {})
+    reality.update(enabled=True, private_key=private_key, short_id=[short_id])
+    reality['handshake'] = {'server': sni, 'server_port': 443}
+    outbounds = candidate.get('outbounds', [])
+    if len(outbounds) == 1 and outbounds[0].get('server') == '<provider-host>' and outbounds[0].get('uuid') == '<provider-vless-uuid>':
+        candidate = synchronized_happ_config(load_config(), candidate, gateway_mode())
+    parsed = urlsplit(vip['link'])
+    vip_uuid = parsed.username
+    if vip_uuid == '00000000-0000-4000-8000-000000000001':
+        vip_uuid = str(uuid.uuid4())
+        for credential in inbound.get('users', []):
+            if credential.get('uuid') == parsed.username:
+                credential['uuid'] = vip_uuid
+        for credential in vip['users']:
+            if credential.get('uuid') == parsed.username:
+                credential['uuid'] = vip_uuid
+        for candidate_inbound in candidate.get('inbounds', []):
+            if candidate_inbound.get('tag') == vip['inbound_tag']:
+                for credential in candidate_inbound.get('users', []):
+                    if credential.get('uuid') == parsed.username:
+                        credential['uuid'] = vip_uuid
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(security='reality', sni=sni, pbk=public_key, sid=short_id)
+    host = f'[{server}]' if ':' in server else server
+    link = urlunsplit(('vless', f'{vip_uuid}@{host}:{port}', '', urlencode(query, safe='-_'), parsed.fragment))
+    state.update(server=server, port=port, sni=sni, uuid=vip_uuid, public_key=public_key, short_id=short_id, link=link)
+    state.pop('local_link', None)
+    vip.update(link=link, inbound_fields={key: inbound.get(key) for key in ('listen', 'listen_port', 'tls', 'transport')})
+    config_data = (json.dumps(candidate, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
+    check_happ_candidate(config_data)
+    paths = [(HAPP_CONFIG_PATH, 'happ-server-config', 0o640, 'sing-box'), (HAPP_STATE_PATH, 'happ-server-state', 0o600, None), (HAPP_USERS.vip_path, 'happ-vip', 0o600, None)]
+    backups = [(path, backup_file(path, prefix), mode, group) for path, prefix, mode, group in paths]
+    was_active = service_state('sing-box-happ-server') == 'active'
+    was_enabled = command([SYSTEMCTL_BIN, 'is-enabled', 'sing-box-happ-server'], timeout=10).returncode == 0
+    try:
+        write_atomic_file(HAPP_CONFIG_PATH, config_data, mode=0o640, group_name='sing-box')
+        write_atomic_file(HAPP_STATE_PATH, (json.dumps(state, indent=2, ensure_ascii=False) + '\n').encode('utf-8'), mode=0o600)
+        write_atomic_file(HAPP_USERS.vip_path, (json.dumps(vip, indent=2, ensure_ascii=False) + '\n').encode('utf-8'), mode=0o600)
+        restart_happ_server()
+        if command([SYSTEMCTL_BIN, 'enable', 'sing-box-happ-server'], timeout=30).returncode != 0:
+            raise RuntimeError('Не удалось включить автозапуск HAPP Server.')
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        for path, backup, mode, group in backups:
+            write_atomic_file(path, backup.read_bytes(), mode=mode, group_name=group)
+        if not was_enabled:
+            command([SYSTEMCTL_BIN, 'disable', 'sing-box-happ-server'], timeout=30)
+        if was_active:
+            restart_happ_server()
+        else:
+            command([SYSTEMCTL_BIN, 'stop', 'sing-box-happ-server'], timeout=30)
+        raise RuntimeError('Настройка HAPP не применена; конфигурация и ссылки восстановлены.')
+
+
+def happ_setup_needed():
+    try:
+        config = json.loads(HAPP_CONFIG_PATH.read_text(encoding='utf-8'))
+        state = json.loads(HAPP_STATE_PATH.read_text(encoding='utf-8'))
+        inbound = next(item for item in config.get('inbounds', []) if item.get('type') == 'vless')
+        private_key = inbound.get('tls', {}).get('reality', {}).get('private_key', '')
+        return not (PUBLIC_KEY_PATTERN.fullmatch(str(private_key)) and PUBLIC_KEY_PATTERN.fullmatch(str(state.get('public_key', ''))))
+    except (OSError, ValueError, StopIteration, TypeError, AttributeError):
+        return True
+
+
+def happ_key_form(server='', sni='www.cloudflare.com', port=9445, initial=False):
+    if '<' in str(server):
+        server = ''
+    if '<' in str(sni) or sni == 'localhost':
+        sni = 'www.cloudflare.com'
+    label = 'Сгенерировать и запустить HAPP' if initial else 'Сгенерировать и применить ключи'
+    return f'''<form method="post" action="/settings/happ/keys"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label>Адрес HAPP-сервера<input name="happ_server" value="{esc(server)}" required></label></div><div class="field"><label>Порт<input name="happ_port" type="number" min="1" max="65535" value="{esc(port)}" required></label></div><div class="field full"><label>Reality SNI<input name="happ_sni" value="{esc(sni)}" required></label></div></div><label><input class="inline-checkbox" name="confirm_happ_keys" type="checkbox" value="generate" required> Применить ключи ко всем ссылкам и запустить HAPP. Старые ссылки потребуют обновления.</label><div class="actions">{'<button class="secondary" type="button" data-happ-setup-close>Позже</button>' if initial else ''}<button type="submit">{label}</button></div></form>'''
+
+
+def add_happ_setup_dialog(content, request_host=''):
+    if 'class="app-shell"' not in content or not happ_setup_needed():
+        return content
+    try:
+        state = json.loads(HAPP_STATE_PATH.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        state = {}
+    server = str(state.get('server', ''))
+    if not server or '<' in server:
+        server = urlsplit('//' + request_host).hostname or ''
+    sni = str(state.get('sni', 'www.cloudflare.com'))
+    if not sni or '<' in sni or sni == 'localhost':
+        sni = 'www.cloudflare.com'
+    modal = f'<dialog class="gateway-dialog" data-happ-setup-dialog aria-labelledby="happ-setup-title"><h2 id="happ-setup-title">Первоначальная настройка HAPP</h2>{happ_key_form(server, sni, state.get("port", 9445), initial=True)}</dialog>'
+    return content.replace('</main>', modal + '</main>', 1)
+
+
 def resolve_happ_subscription_base_url(state=None):
     state = load_happ_state() if state is None else state
     explicit = state.get('subscription_base_url') or HAPP_SUBSCRIPTION_BASE_URL
@@ -1184,7 +1298,7 @@ def render_page(config, selected_tag, message='', kind='success'):
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="apple-touch-icon" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=2.1.6">
+<link rel="stylesheet" href="/panel.css?v=2.1.7">
 <style>
 :root {{
   --paper: #f4f2ea;
@@ -1381,7 +1495,7 @@ button.danger {{ border-color: rgba(251, 113, 133, .48); color: #fda4af; }}
   </div>
 </main>
 </div>
-<script src="/panel.js?v=2.1.6" defer></script>
+<script src="/panel.js?v=2.1.7" defer></script>
 <script src="/happ-actions.js" defer></script>
 </body>
 </html>'''
@@ -1473,6 +1587,7 @@ def render_settings_page(config, query, message='', kind='success'):
         except (OSError, ValueError) as error:
                 happ_config = '{}'
                 happ_state = '{}'
+                happ_state_payload = {}
                 happ_subscription_setting = ''
                 happ_subscription_origin = ''
                 happ_error = message_banner(f'HAPP Server: {error}', 'error')
@@ -1512,7 +1627,7 @@ def render_settings_page(config, query, message='', kind='success'):
     {gateway_mode_panel}
     <section class="panel"><h2>Публичный URL подписки HAPP</h2><form method="post" action="/settings/happ/subscription"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_subscription_base_url">WAN / DNS URL · пусто = публичный адрес HAPP</label><input id="happ_subscription_base_url" name="subscription_base_url" type="url" value="{esc(happ_subscription_setting)}" placeholder="{esc(happ_subscription_origin)}"></div><p class="muted">Текущий адрес: {esc(happ_subscription_origin)}. Внешний порт должен быть доступен клиенту; HTTPS задаётся только для настроенного TLS endpoint.</p><div class="actions"><button type="submit">Сохранить URL подписки</button></div></form></section>
     <section class="panel"><h2>Хранение статистики HAPP</h2><form method="post" action="/settings/happ-history"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_retention_days">Хранить дней · старые записи очищаются автоматически</label><input id="happ_retention_days" name="retention_days" type="number" min="1" max="3650" step="1" value="{history_days}" required></div><div class="actions"><button type="submit">Сохранить срок хранения</button><a class="button secondary" href="/happ-history">История HAPP</a></div></form><p class="muted">База хранится в /mnt/stat/. По умолчанию 60 дней; уменьшение срока сразу удалит записи старше выбранного периода.</p></section>
-    <section class="panel"><h2>VIP-ссылка HAPP</h2><div class="field"><label for="happ_vip_link">Существующая общая ссылка · сохранена без изменения</label><textarea id="happ_vip_link" class="public-link-field" readonly spellcheck="false">{esc(vip_link)}</textarea></div></section>
+    <section class="panel"><h2>VIP-ссылка HAPP</h2><div class="field"><label for="happ_vip_link">Ссылка подключения</label><textarea id="happ_vip_link" class="public-link-field" readonly spellcheck="false">{esc(vip_link)}</textarea></div></section>
     <section class="panel"><h2>Автопроверка VLESS</h2><form method="post" action="/settings/vless-monitor"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label><input class="inline-checkbox" type="checkbox" name="monitor_enabled"{' checked' if monitor_settings['enabled'] else ''}> Проверять VLESS по расписанию</label></div><div class="field"><label for="monitor_interval_minutes">Интервал между циклами, минуты</label><input id="monitor_interval_minutes" name="interval_minutes" type="number" min="1" max="60" step="1" value="{monitor_settings['interval_minutes']}" required></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="auto_switch"{' checked' if monitor_settings['auto_switch'] else ''}> Автовыбор: минимальная задержка в трёх циклах подряд</label></div><div class="field"><label><input class="inline-checkbox" type="checkbox" name="mattermost_enabled"{' checked' if monitor_settings['mattermost_enabled'] else ''}> Уведомлять Mattermost о смене шлюза</label></div><div class="field"><label for="mattermost_webhook">Webhook Mattermost{' · сохранён' if monitor_settings['webhook_url'] else ''}</label><input id="mattermost_webhook" name="webhook_url" type="password" autocomplete="new-password" placeholder="{'Оставьте пустым для сохранения webhook' if monitor_settings['webhook_url'] else 'https://mattermost.example/hooks/...'}"></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="clear_webhook"> Удалить сохранённый webhook</label></div></div><div class="actions"><button type="submit">Сохранить автоматизацию</button><a class="button secondary" href="/gateway-journal">Журнал переключений</a></div></form><form method="post" action="/settings/vless-monitor/test-webhook"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit"{' disabled' if not monitor_settings['webhook_url'] else ''}>Проверить webhook</button></div></form><p class="muted">Последняя проверка: {esc(monitor_state.get('last_checked_at', 'ещё не выполнялась'))}. Кандидат: {esc(monitor_state.get('candidate') or 'нет')} · {monitor_state.get('streak', 0)}/3.</p></section>
     <section class="panel"><h2>Клиент внешнего WireGuard</h2><p class="muted">Последняя сохранённая конфигурация показывается только в этой авторизованной панели. На диске исходный текст и рабочий конфиг хранятся с правами 0600.</p><form method="post" action="/settings/gateway/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="wireguard_client_config">Конфигурация клиента</label><textarea id="wireguard_client_config" name="wireguard_client_config" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.0.0.2/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = vpn.example.com:51820&#10;AllowedIPs = 0.0.0.0/0" required>{esc(wireguard_client_text)}</textarea></div><div class="actions"><button type="submit">{'Обновить конфигурацию' if client_configured else 'Сохранить конфигурацию'}</button><span class="service-status">{'Конфигурация сохранена' if client_configured else 'Конфигурация ещё не задана'}</span></div></form></section>
     <dialog class="gateway-dialog" data-gateway-dialog aria-labelledby="gateway-dialog-title"><form method="dialog"><h2 id="gateway-dialog-title" data-gateway-dialog-title>Сменить шлюз?</h2><p data-gateway-dialog-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-gateway-dialog-confirm>Переключить</button></div></form></dialog>
@@ -1523,7 +1638,8 @@ def render_settings_page(config, query, message='', kind='success'):
         <div class="service-control-item"><h3>Сервер</h3><p class="service-status">Перезагрузка отключит панель и сервисы на короткое время.</p><form method="post" action="/settings/system/reboot" autocomplete="off"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="reboot_confirmation">Введите REBOOT для подтверждения</label><input id="reboot_confirmation" name="reboot_confirmation" pattern="REBOOT" required></div><div class="actions"><button class="danger" type="submit">Перезагрузить сервер</button></div></form></div>
     </div></section>
     <section class="panel"><h2>WireGuard</h2><div class="settings-grid"><form method="post" action="/settings/wireguard/general"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="general_json">General JSON</label><textarea id="general_json" name="general_json" spellcheck="false">{esc(wg_general)}</textarea></div><div class="actions"><button type="submit">Сохранить General</button></div></form><form method="post" action="/settings/wireguard/interface"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="interface_json">Interface JSON</label><textarea id="interface_json" name="interface_json" spellcheck="false">{esc(wg_interface)}</textarea></div><div class="actions"><button type="submit">Сохранить Interface</button></div></form></div><form method="post" action="/settings/wireguard/restart"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit">Перезапустить интерфейс WireGuard</button></div></form></section>
-    <section class="panel"><h2>HAPP Server</h2><div class="settings-grid"><form method="post" action="/settings/happ/state"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_state_json">Public link JSON</label><textarea id="happ_state_json" name="happ_state_json" spellcheck="false">{esc(happ_state)}</textarea></div><div class="actions"><button type="submit">Сохранить Public link</button></div></form><form method="post" action="/settings/happ/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_config_json">sing-box HAPP Server JSON</label><textarea id="happ_config_json" name="happ_config_json" spellcheck="false">{esc(happ_config)}</textarea></div><div class="actions"><button class="danger" type="submit">Проверить и применить HAPP config</button></div></form></div><form method="post" action="/settings/happ/restart"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit">Перезапустить HAPP Server</button></div></form></section>
+    <section class="panel"><h2>Reality-ключи HAPP</h2><div class="form-grid"><div class="field"><label for="happ_vip_uuid">UUID VIP</label><input id="happ_vip_uuid" value="{esc(happ_state_payload.get('uuid', ''))}" readonly></div><div class="field"><label for="happ_public_key">Публичный Reality-ключ</label><input id="happ_public_key" value="{esc(happ_state_payload.get('public_key', '')) if PUBLIC_KEY_PATTERN.fullmatch(str(happ_state_payload.get('public_key', ''))) else ''}" readonly placeholder="Не сгенерирован"></div></div>{happ_key_form(happ_state_payload.get('server', ''), happ_state_payload.get('sni', 'www.cloudflare.com'), happ_state_payload.get('port', 9445))}</section>
+    <section class="panel"><h2>HAPP Server</h2><div class="settings-grid"><form method="post" action="/settings/happ/state"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_state_json">JSON публичной ссылки</label><textarea id="happ_state_json" name="happ_state_json" spellcheck="false">{esc(happ_state)}</textarea></div><div class="actions"><button type="submit">Сохранить публичную ссылку</button></div></form><form method="post" action="/settings/happ/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_config_json">sing-box HAPP Server JSON</label><textarea id="happ_config_json" name="happ_config_json" spellcheck="false">{esc(happ_config)}</textarea></div><div class="actions"><button class="danger" type="submit">Проверить и применить HAPP config</button></div></form></div><form method="post" action="/settings/happ/restart"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit">Перезапустить HAPP Server</button></div></form></section>
     <section class="panel"><h2>Доступ к панели</h2><form method="post" action="/settings/password" autocomplete="new-password"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="new_password">Новый пароль</label><input id="new_password" name="new_password" type="password" minlength="12" required></div><div class="field"><label for="confirm_password">Повторите пароль</label><input id="confirm_password" name="confirm_password" type="password" minlength="12" required></div></div><div class="actions"><button class="danger" type="submit">Обновить пароль</button></div></form></section>
 </div>'''
         return render_shell('Настройки', body, 'settings', [item.get('tag', '') for item in managed_server_outbounds(config)], selected_tag)
@@ -1576,17 +1692,17 @@ def render_outbounds_page(config, query, message='', kind='success'):
             f'<td data-outbound-check-tag="{esc(tag)}" role="status">{esc(checks[tag]["message"])}</td>'
             f'<td data-outbound-latency>{latency_text}</td>'
             f'<td data-outbound-checked-at>{esc(format_datetime(checks[tag].get("checked_at")))}</td>'
-            f'<td><form method="post" action="/outbounds/route"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit"{ " disabled" if current_route == tag else ""}>Использовать</button></form></td>'
-            f'<td><div class="inline-actions"><form method="post" action="/outbounds/check"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit">Проверить</button></form><button class="secondary" type="button" data-outbound-edit="{esc(json.dumps(outbound, ensure_ascii=False))}">Редактировать</button></div></td>'
-            f'<td><form method="post" action="/outbounds/delete" data-outbound-delete><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="danger" type="submit"{ " disabled" if len(servers) <= 1 else ""}>Удалить</button></form></td>'
+            f'<td><div class="outbound-actions"><form method="post" action="/outbounds/route"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit"{ " disabled" if current_route == tag else ""}>Использовать</button></form>'
+            f'<form method="post" action="/outbounds/check"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit">Проверить</button></form><button class="secondary" type="button" data-outbound-edit="{esc(json.dumps(outbound, ensure_ascii=False))}">Редактировать</button>'
+            f'<form method="post" action="/outbounds/delete" data-outbound-delete><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="danger" type="submit"{ " disabled" if len(servers) <= 1 else ""}>Удалить</button></form></div></td>'
             '</tr>'
         )
     if not rows:
-        rows.append('<tr><td class="empty" colspan="11">Нет импортированных серверов.</td></tr>')
+        rows.append('<tr><td class="empty" colspan="9">Нет импортированных серверов.</td></tr>')
     body = f'''<section class="page-head"><div><p class="eyebrow">Outbound manager</p><h1>VPN-серверы</h1></div><div class="status" role="status"><span class="status-dot {status_class}"></span>sing-box: {esc(sing_box_state)}</div></section>
 {notice}
 <div class="panel-stack">
-    <section class="panel" data-outbound-checks><h2>Настроенные серверы</h2><div class="table-wrap"><table><thead><tr><th>Tag</th><th>Тип</th><th>Сервер</th><th>Порт</th><th>Маршрут</th><th>Проверка</th><th>Пинг, мс</th><th>Проверен UTC</th><th></th><th></th><th></th></tr></thead><tbody>{''.join(rows)}</tbody></table></div><p class="muted">Текущий маршрут: <strong>{esc(current_route)}</strong></p></section>
+    <section class="panel" data-outbound-checks><h2>Настроенные серверы</h2><div class="table-wrap"><table><thead><tr><th>Tag</th><th>Тип</th><th>Сервер</th><th>Порт</th><th>Маршрут</th><th>Проверка</th><th>Пинг, мс</th><th>Проверен UTC</th><th>Действия</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div><p class="muted">Текущий маршрут: <strong>{esc(current_route)}</strong></p></section>
     <section class="panel"><h2>Импорт JSON</h2><form method="post" action="/outbounds/import"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="import_replace_tag">Заменить один существующий сервер</label><select id="import_replace_tag" name="replace_tag"><option value="">Добавить новые auto-N</option>{server_options}</select></div><div class="field"><label for="import_tag">Tag для одного профиля</label><input id="import_tag" name="import_tag" placeholder="Для массива оставьте пустым"></div><div class="field full"><label for="outbound_json">JSON sing-box / Xray: объект или массив конфигураций</label><textarea id="outbound_json" name="outbound_json" spellcheck="false" required placeholder="Вставьте JSON VPN-профиля или массив профилей"></textarea></div></div><div class="actions"><button type="submit">Проверить и импортировать</button></div></form></section>
 </div><dialog class="gateway-dialog" data-outbound-edit-dialog aria-labelledby="outbound-edit-title"><form method="post" action="/outbounds/import" data-outbound-edit-form><h2 id="outbound-edit-title">Редактировать VPN-сервер</h2><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="replace_tag" data-outbound-edit-tag><div class="field"><label for="outbound_edit_json">Конфигурация сервера</label><textarea id="outbound_edit_json" name="outbound_json" spellcheck="false" required data-outbound-edit-json></textarea></div><div class="actions"><button class="secondary" type="button" data-outbound-edit-cancel>Отмена</button><button type="submit">Сохранить</button></div></form></dialog><dialog class="gateway-dialog" data-outbound-delete-dialog><form method="dialog"><h2>Удалить VPN-сервер?</h2><p data-outbound-delete-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-outbound-delete-confirm>Удалить</button></div></form></dialog>'''
     return render_shell('VPN-серверы', body, 'outbounds', [item.get('tag', '') for item in servers], '')
@@ -1626,6 +1742,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Security-Policy', f"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors {ancestors}")
 
     def send_html(self, status, content):
+        if status == HTTPStatus.OK:
+            content = add_happ_setup_dialog(content, self.headers.get('Host', ''))
         if self.crm_authenticated():
             content = crm_embed(content)
         payload = content.encode('utf-8')
@@ -2161,7 +2279,8 @@ class Handler(BaseHTTPRequestHandler):
                         return
                 self.redirect_to('/happ-server?' + urlencode({'message': message, 'kind': 'success'}))
             except (ValueError, RuntimeError, OSError, json.JSONDecodeError, subprocess.SubprocessError):
-                self.redirect_to('/happ-server?' + urlencode({'message': 'Пользователь не изменён. Проверьте имя, срок доступа и конфигурацию HAPP.', 'kind': 'error'}))
+                message = 'Сначала завершите первоначальную настройку HAPP: сгенерируйте и примените Reality-ключи в мастере или Настройках.' if happ_setup_needed() else 'Пользователь не изменён. Проверьте имя, срок доступа и конфигурацию HAPP.'
+                self.redirect_to('/happ-server?' + urlencode({'message': message, 'kind': 'error'}))
             return
         if path.startswith('/settings/'):
             try:
@@ -2287,6 +2406,13 @@ class Handler(BaseHTTPRequestHandler):
                     with HAPP_LOCK:
                         save_happ_subscription_base_url(form_value(values, 'subscription_base_url'))
                     self.redirect_settings('', 'Публичный адрес подписки сохранён; VIP-ссылка не изменена.')
+                    return
+                if path == '/settings/happ/keys':
+                    if form_value(values, 'confirm_happ_keys') != 'generate':
+                        raise ValueError('Подтвердите применение ключей и обновление всех ссылок.')
+                    with CONFIG_LOCK, HAPP_LOCK:
+                        generate_and_apply_happ_keys(form_value(values, 'happ_server'), form_value(values, 'happ_sni'), form_value(values, 'happ_port'))
+                    self.redirect_settings('', 'Reality-ключи применены ко всем ссылкам; HAPP Server запущен. Обновите подписки клиентов.')
                     return
                 if path == '/settings/happ/state':
                     with HAPP_LOCK:

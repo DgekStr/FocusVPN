@@ -39,17 +39,15 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <title>{esc(title)} | FOCUSLENS.DEV</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=2.1.6">
+<link rel="stylesheet" href="/panel.css?v=2.1.7">
 </head>
 <body>
 <div class="app-shell">
   <aside class="app-sidebar">
     <a class="app-brand" href="/outbounds"><img src="/favicon.png" alt=""><span>FOCUSLENS.DEV<small>VPN GATEWAY</small></span></a>
     <nav class="app-nav" aria-label="Управление VPN">
-      <section class="nav-section nav-vless">
-        <a class="nav-link{outbounds_active}" data-panel-nav="outbounds" href="/outbounds"><span class="nav-dot"></span>VPN-серверы</a>
-      </section>
       <section class="nav-section">
+        <a class="nav-link{outbounds_active}" data-panel-nav="outbounds" href="/outbounds"><span class="nav-dot"></span>VPN-серверы</a>
         <a class="nav-link{wireguard_active}" data-panel-nav="wireguard" href="/wireguard"><span class="nav-dot"></span>WireGuard</a>
         <a class="nav-link{happ_active}" data-panel-nav="happ-server" href="/happ-server"><span class="nav-dot"></span>HAPP Server</a>
         <a class="nav-link{history_active}" data-panel-nav="happ-history" href="/happ-history"><span class="nav-dot"></span>История HAPP</a>
@@ -61,7 +59,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
   </aside>
   <div class="app-content"><main class="main">{body}</main></div>
 </div>
-  <script src="/panel.js?v=2.1.6" defer></script>
+  <script src="/panel.js?v=2.1.7" defer></script>
 <script src="/happ-actions.js?v=9" defer></script>
 </body>
 </html>'''

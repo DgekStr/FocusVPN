@@ -54,6 +54,7 @@ class InstallerUtilsTests(unittest.TestCase):
         self.assertIn('create_wg_easy_container', main)
         self.assertIn('systemctl enable --now sing-box-admin.service nginx.service', main)
         self.assertIn('https://$server_ip:7445', main)
+        self.assertIn('install -d -m 0750 -o root -g sing-box "$SING_BOX_ROOT" "$HAPP_ROOT"', installer)
 
     def test_legacy_wireguard_configs_are_backed_up_only_after_confirmation(self):
         installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')

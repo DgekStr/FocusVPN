@@ -1,6 +1,6 @@
 # Project status
 
-Версия: **v2.1.6**. Дата фиксации: **2026-10-06**.
+Версия: **v2.1.7**. Дата фиксации: **2026-10-06**.
 
 ## Вехи
 
@@ -19,16 +19,16 @@
 | M11. JSON server manager | Done | Объект/массив sing-box/Xray, flat VLESS settings, VLESS TCP/gRPC, Hysteria2, Trojan и Shadowsocks; import/replace/delete синхронизируют selector и HAPP |
 | M12. Background checks | Done | POST не ждёт сеть; последовательная очередь, fingerprint-bound результаты, timeout/retry polling, стартовый баннер заменяется итогом |
 | M13. VLESS automation | Done, opt-in | Интервал 1-60 минут, HTTPS задержка, 3 последовательные победы, journal, фоновые Mattermost уведомления |
-| M14. Regression coverage | Done | 122 Python-теста и 2 Node VM UI-сценария; local/clean-clone publication gates |
+| M14. Regression coverage | Done | 130 Python-тестов и 2 Node VM UI-сценария; local/clean-clone publication gates |
 | M15. Персональные HAPP аккаунты | Done | UUID/QR, включение, отзыв, удаление, срок UTC; VIP сохраняется |
 | M16. Статистика и история | Done | Lifetime totals отдельно от 60-дневной SQLite history, TOP-5, per-user reset, `/happ-history` chart, XLS |
 | M17. Подписки HAPP | Done server-side | Секретный токен аккаунта, трафик / безлимит, часовое обновление, название с emoji и короткое announce |
 | M18. Сетевой доступ | Done, explicit opt-in | `FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0` поддерживается конфигурацией; auth/token checks и защита 51821 сохранены |
-| M19. Версия и публикация | v2.1.6 | VERSION, README/changelog/status/roadmap обновлены; v1.0 закрепляет ранее опубликованную базу |
+| M19. Версия и публикация | v2.1.7 | VERSION, README/changelog/status/roadmap обновлены; v1.0 закрепляет ранее опубликованную базу |
 | M20. Default gateway mode | Done, opt-in | Прямой egress через основной gateway для WG-клиентов; route/FORWARD/NAT preflight, LAN deny сохранён |
 | M21. Standalone bootstrap | Done | Git-clone bootstrap, checksum-verified sing-box, интерактивный scrypt auth, все systemd units |
 | M22. HTTPS panel entry | Done | `vpn.focuslens.dev` Nginx proxy, trusted-proxy IP/session binding, Secure cookie, subscription origin |
-| M23. Clean-clone verification | Done | Git update v2.1.6 проверен на Ubuntu 22.04: восемь placeholders удалены с backup, установленный renderer содержит редактор и один пункт VPN-серверы, config check/API wg-easy проходят, HTTPS :7445 доступен; 122 Python-теста и Node/publication checks прошли |
+| M23. Clean-clone verification | In progress | HAPP/меню проверены на `.41`; строка четырёх кнопок проверена браузером на 1440/390 px. Обновление из опубликованного Git-тега v2.1.7 ожидает проверки |
 | M24. Host metrics | Done | Settings показывает LAN IP/OS, uptime, CPU/LAN peaks за 24 часа и boot RX/TX; local collector сохраняет samples в `/mnt/stat/` |
 | M25. HAPP live/history UI | Done | Группировка IP/protocol, per-profile lifetime reset, history traffic chart, VIP endpoint из subscription URL |
 | M26. Panel favicon | Done | Зелёная Canvas-анимация; сохраняется PNG fallback |
@@ -39,7 +39,7 @@
 - sing-box: 1.14.2.
 - HAPP inbound: `0.0.0.0:9445`.
 - Admin panel: `0.0.0.0:9443`.
-- Test deployment `192.168.0.41`: Nginx HTTPS proxy `:7445` использует self-signed сертификат; backend `sing-box-admin` слушает только `127.0.0.1:9443`, `FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0`, trusted proxy `127.0.0.1/32`; login возвращает Basic Auth challenge. wg-easy `15.4.0` запускается с `unless-stopped`, setup доступен только через loopback/SSH tunnel, HAPP и sing-box units не включались.
+- Test deployment `192.168.0.41`: Nginx HTTPS `:7445` использует self-signed сертификат; backend слушает `127.0.0.1:9443`, wg-easy API закрыт извне и работает. HAPP запущен/включён на `9445` после подтверждённой генерации ключей, JSON/ссылки согласованы, персональные пользователи создаются. Gateway sing-box отдельно не включался.
 - Installer v2.1.5 перечисляет пакеты/службы до подтверждения, автоматически создаёт служебного администратора wg-easy и проверяет API панели. Credentials имеют права `0600 root:root`, пароль не остаётся в container environment и сохраняется при upgrade; HTTPS `:7445` отвечает, прямой `:51821` закрыт. Legacy backup/cancel ветка на `.41` не выполнялась.
 - Server metrics use `/proc` counters; rolling peaks retain up to 24 hours, network byte totals reset at OS boot. Peaks start accumulating after the metrics collector is installed.
 - Admin UI is reached externally at `https://vpn.focuslens.dev` via the TLS Nginx gateway. Direct WAN mapping to `37.208.69.6:9443` is closed; private HTTP remains the gateway upstream.

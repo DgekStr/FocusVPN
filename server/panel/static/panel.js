@@ -12,6 +12,7 @@
   let outboundCheckTimer = null;
   let outboundCheckLoading = false;
   let pendingGatewayForm = null;
+  let happSetupDeferred = false;
 
   function animateFavicon() {
     const icons = [...document.querySelectorAll('link[rel~="icon"]')];
@@ -52,6 +53,18 @@
   }
 
   animateFavicon();
+
+  function showHappSetup() {
+    const dialog = document.querySelector('[data-happ-setup-dialog]');
+    if (dialog && !dialog.open && !happSetupDeferred) dialog.showModal();
+  }
+
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('[data-happ-setup-close]')) {
+      happSetupDeferred = true;
+      document.querySelector('[data-happ-setup-dialog]')?.close();
+    }
+  });
 
   function formatDateTime(value, missing = '—') {
     if (!value) return missing;
@@ -547,6 +560,7 @@
         return;
       }
       currentMain.replaceWith(nextMain);
+      showHappSetup();
       document.title = nextDocument.title;
       updateMenu(target.pathname);
       syncWireGuardLive();
@@ -574,4 +588,5 @@
   syncWireGuardLive();
   syncHappLive();
   syncOutboundChecks();
+  showHappSetup();
 })();

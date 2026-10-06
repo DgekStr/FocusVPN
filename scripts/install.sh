@@ -236,7 +236,8 @@ ensure_sing_box_account() {
 
 install_tree() {
   install -d -m 0755 "$APP_ROOT/static" /usr/local/libexec /etc/systemd/system/sing-box.service.d
-  install -d -m 0750 "$CONFIG_ROOT" "$SING_BOX_ROOT" "$HAPP_ROOT" "$ADMIN_ROOT"
+  install -d -m 0750 "$CONFIG_ROOT" "$ADMIN_ROOT"
+  install -d -m 0750 -o root -g sing-box "$SING_BOX_ROOT" "$HAPP_ROOT"
   install -d -m 0700 "$ADMIN_ROOT/backups" /etc/wg-easy /etc/wireguard /mnt/stat
 
   find "$REPO_ROOT/server/panel" -maxdepth 1 -type f -name '*.py' -exec install -m 0644 {} "$APP_ROOT/" \;

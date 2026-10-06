@@ -20,6 +20,11 @@ async function main() {
   const row = { classList: classList(), querySelector: (selector) => selector.includes('button') ? button : selector === '[data-outbound-checked-at]' ? checkedAt : { textContent: '' } };
   const documentEvents = new Map();
   const clickHandlers = [];
+  const setupDialog = {
+    open: false,
+    showModal() { this.open = true; },
+    close() { this.open = false; },
+  };
   const editTag = { value: '' };
   const editButton = { disabled: false, textContent: 'Сохранить' };
   const editJson = {
@@ -78,6 +83,7 @@ async function main() {
         if (selector.startsWith('[data-outbound-checks]')) return {};
         if (selector === '[data-gateway-dialog]') return gatewayDialog;
         if (selector === '[data-outbound-edit-dialog]') return editDialog;
+        if (selector === '[data-happ-setup-dialog]') return setupDialog;
         return null;
       },
       querySelectorAll: (selector) => selector === 'link[rel~="icon"]' ? faviconLinks : selector === '[data-outbound-check-tag]' ? [cell] : [],
@@ -110,6 +116,12 @@ async function main() {
   };
   const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'panel', 'static', 'panel.js'), 'utf8');
   vm.runInNewContext(source, sandbox);
+  assert.equal(setupDialog.open, true);
+  for (const callback of clickHandlers) {
+    callback({ target: { closest: (selector) => selector === '[data-happ-setup-close]' ? {} : null } });
+  }
+  assert.equal(setupDialog.open, false);
+  console.log('PASS: first-login HAPP wizard opens automatically and can be deferred');
   const firstFaviconFrame = faviconLinks[0].href;
   renderFaviconFrame();
   assert.notEqual(faviconLinks[0].href, firstFaviconFrame);

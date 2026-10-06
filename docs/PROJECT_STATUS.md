@@ -28,7 +28,7 @@
 | M20. Default gateway mode | Done, opt-in | Прямой egress через основной gateway для WG-клиентов; route/FORWARD/NAT preflight, LAN deny сохранён |
 | M21. Standalone bootstrap | Done | Git-clone bootstrap, checksum-verified sing-box, интерактивный scrypt auth, все systemd units |
 | M22. HTTPS panel entry | Done | `vpn.focuslens.dev` Nginx proxy, trusted-proxy IP/session binding, Secure cookie, subscription origin |
-| M23. Clean-clone verification | In progress | Новый auto-admin installer проверен на Ubuntu 22.04: API авторизация проходит до и после удаления INIT-переменных; публикация и повторный запуск v2.1.5 ожидают проверки |
+| M23. Clean-clone verification | Done | Auto-admin установка и повторный Git clone install v2.1.5 прошли на Ubuntu 22.04: API авторизация успешна, пароль сохранён при upgrade, INIT_PASSWORD отсутствует в контейнере; 114 Python-тестов и Node/publication checks прошли |
 | M24. Host metrics | Done | Settings показывает LAN IP/OS, uptime, CPU/LAN peaks за 24 часа и boot RX/TX; local collector сохраняет samples в `/mnt/stat/` |
 | M25. HAPP live/history UI | Done | Группировка IP/protocol, per-profile lifetime reset, history traffic chart, VIP endpoint из subscription URL |
 | M26. Panel favicon | Done | Зелёная Canvas-анимация; сохраняется PNG fallback |
@@ -40,7 +40,7 @@
 - HAPP inbound: `0.0.0.0:9445`.
 - Admin panel: `0.0.0.0:9443`.
 - Test deployment `192.168.0.41`: Nginx HTTPS proxy `:7445` использует self-signed сертификат; backend `sing-box-admin` слушает только `127.0.0.1:9443`, `FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0`, trusted proxy `127.0.0.1/32`; login возвращает Basic Auth challenge. wg-easy `15.4.0` запускается с `unless-stopped`, setup доступен только через loopback/SSH tunnel, HAPP и sing-box units не включались.
-- Installer v2.1.4 после подтверждения перечисляет пакеты/службы, запускает Nginx и wg-easy с автоперезапуском, ограничивает setup API localhost и выводит URL панели/SSH-туннель. На `.41` старых WireGuard конфигов/units не было, поэтому backup/cancel ветка проверена контрактным тестом, но не выполнялась на сервере.
+- Installer v2.1.5 перечисляет пакеты/службы до подтверждения, автоматически создаёт служебного администратора wg-easy и проверяет API панели. Credentials имеют права `0600 root:root`, пароль не остаётся в container environment и сохраняется при upgrade; HTTPS `:7445` отвечает, прямой `:51821` закрыт. Legacy backup/cancel ветка на `.41` не выполнялась.
 - Server metrics use `/proc` counters; rolling peaks retain up to 24 hours, network byte totals reset at OS boot. Peaks start accumulating after the metrics collector is installed.
 - Admin UI is reached externally at `https://vpn.focuslens.dev` via the TLS Nginx gateway. Direct WAN mapping to `37.208.69.6:9443` is closed; private HTTP remains the gateway upstream.
 - WireGuard network: `10.8.0.0/24`.

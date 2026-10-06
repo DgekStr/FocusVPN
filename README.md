@@ -1,6 +1,6 @@
-# FocusVPN v2.1.1
+# FocusVPN v2.1.2
 
-Единый VPN-шлюз и административная панель для WireGuard, sing-box и HAPP. Документ описывает релиз `v2.1.1`; базовый релиз `v1.0` закреплён коммитом `3f48b16`, история Git не переписывается.
+Единый VPN-шлюз и административная панель для WireGuard, sing-box и HAPP. Документ описывает релиз `v2.1.2`; базовый релиз `v1.0` закреплён коммитом `3f48b16`, история Git не переписывается.
 
 ## Новое в v2.1
 
@@ -15,6 +15,10 @@
 ## Исправления v2.1.1
 
 - Установщик получает SHA-256 архива sing-box из GitHub Release API и проверяет его до распаковки. Если контрольная сумма отсутствует или некорректна, установка останавливается; проверка не отключается.
+
+## Исправления v2.1.2
+
+- В шаблонах установки используется согласованный синтаксически корректный UUID VIP-пользователя HAPP. Это позволяет панели создать начальное состояние и запуститься до настройки реальных VPN-ключей; тестовые параметры не дают рабочее VPN-подключение.
 
 ## Возможности
 
@@ -53,10 +57,10 @@
 
 ## Установка
 
-Для новой установки на Debian 12+ или Ubuntu 22.04+ используйте опубликованный тег `v2.1.1`:
+Для новой установки на Debian 12+ или Ubuntu 22.04+ используйте опубликованный тег `v2.1.2`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1.1/scripts/bootstrap.sh | sudo bash -s -- v2.1.1
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1.2/scripts/bootstrap.sh | sudo bash -s -- v2.1.2
 ```
 
 Bootstrap клонирует выбранную ветку или тег во временный каталог с правами `0700`, запускает `scripts/install.sh` и удаляет копию после завершения. Для интерактивного ввода пароля требуется терминал. Пароль не передаётся в аргументах командной строки или переменных окружения; в `/etc/sing-box-admin/auth.json` сохраняется хеш scrypt с солью и правами `0600`.
@@ -69,7 +73,7 @@ Bootstrap клонирует выбранную ветку или тег во в
 Установка из уже клонированного репозитория:
 
 ```bash
-git clone --branch v2.1.1 https://github.com/DgekStr/FocusVPN.git
+git clone --branch v2.1.2 https://github.com/DgekStr/FocusVPN.git
 cd FocusVPN
 sudo ./scripts/install.sh
 ```
@@ -81,8 +85,8 @@ sudo ./scripts/install.sh
 Проверка опубликованного тега из PowerShell без установки с правами администратора:
 
 ```powershell
-$clone = Join-Path $env:TEMP ('FocusVPN-v2.1.1-' + [guid]::NewGuid().ToString('N'))
-git clone --depth 1 --branch v2.1.1 https://github.com/DgekStr/FocusVPN.git $clone
+$clone = Join-Path $env:TEMP ('FocusVPN-v2.1.2-' + [guid]::NewGuid().ToString('N'))
+git clone --depth 1 --branch v2.1.2 https://github.com/DgekStr/FocusVPN.git $clone
 Push-Location $clone
 try {
     .\scripts\validate.ps1
@@ -96,7 +100,7 @@ try {
 }
 ```
 
-В Linux вместо `C:\Program Files\Git\bin\bash.exe` используйте `bash`. Опубликованный тег `v2.1.1` проверяется из чистого клона: 107 тестов Python, два набора проверок пользовательского интерфейса на Node.js, `scripts/validate.ps1`, справка bootstrap и установщика, а также проверка официальной контрольной суммы SHA-256 sing-box. Полную установку с apt, systemd и изменением сетевых настроек в рамках этой проверки не выполняли; для неё нужна отдельная одноразовая виртуальная машина Debian или Ubuntu.
+В Linux вместо `C:\Program Files\Git\bin\bash.exe` используйте `bash`. Опубликованный тег `v2.1.2` проверяется из чистого клона: 108 тестов Python, два набора проверок пользовательского интерфейса на Node.js, `scripts/validate.ps1`, справка bootstrap и установщика, а также проверка официальной контрольной суммы SHA-256 sing-box. Полная установка на тестовом Ubuntu 22.04 дополнительно проверена; VPN-службы не включались без реальных конфигураций.
 
 ## Репозиторий
 
@@ -107,7 +111,7 @@ try {
 - `scripts/` — установщик, bootstrap, тесты и средство предварительного просмотра.
 - `docs/OPERATIONS.md` — эксплуатация и развертывание.
 - `docs/PROJECT_STATUS.md` и `docs/ROADMAP.md` — статус и следующие задачи.
-- `docs/CHANGELOG.md` — изменения v2.1.1, v2.1 и более ранних релизов.
+- `docs/CHANGELOG.md` — изменения v2.1.2, v2.1.1, v2.1 и более ранних релизов.
 - `VERSION` — версия установленной системы.
 
 Секреты, реальные UUID и VLESS-ссылки, ключи Reality, данные Basic Auth, секрет API wg-easy, рабочие базы и введённые администраторами конфигурации в Git не включаются. Скриншоты в `docs/screenshots/` сделаны на синтетических данных и показывают интерфейс v2.0 без новых карточек метрик и графика из v2.1.

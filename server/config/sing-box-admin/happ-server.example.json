@@ -4,6 +4,6 @@
   "sni": "<reality-server-name>",
   "public_key": "<happ-reality-public-key>",
   "short_id": "<happ-reality-short-id>",
-  "uuid": "<happ-client-uuid>",
-  "link": "vless://<happ-client-uuid>@<public-ip-or-domain>:9445?type=tcp&security=reality&sni=<reality-server-name>&pbk=<happ-reality-public-key>&sid=<happ-reality-short-id>&flow=xtls-rprx-vision#FOCUSVPN"
+  "uuid": "00000000-0000-4000-8000-000000000001",
+  "link": "vless://00000000-0000-4000-8000-000000000001@<public-ip-or-domain>:9445?type=tcp&security=reality&sni=<reality-server-name>&pbk=<happ-reality-public-key>&sid=<happ-reality-short-id>&flow=xtls-rprx-vision#FOCUSVPN"
 }

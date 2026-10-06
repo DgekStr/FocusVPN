@@ -42,18 +42,18 @@ systemd-analyze verify /etc/systemd/system/sing-box-admin.service
 For a clean Debian 12+/Ubuntu 22.04+ host, the standalone executable bootstrap entry point is:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1.5/scripts/bootstrap.sh | sudo bash -s -- v2.1.5
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1.6/scripts/bootstrap.sh | sudo bash -s -- v2.1.6
 ```
 
 До любых изменений `bootstrap.sh` показывает пакеты и службы и требует явного подтверждения. Недостающие пакеты устанавливаются только после согласия; далее bootstrap клонирует выбранный ref и запускает installer. Пароль панели FocusVPN подтверждается через TTY и хранится как scrypt hash с правами `0600`. Installer проверяет sing-box по SHA-256 точного release asset, настраивает Nginx HTTPS `:7445`, запускает панель и wg-easy. Служебный администратор wg-easy создаётся автоматически, без ввода пароля; API проверяется установщиком, прямой доступ к `51821` извне запрещён. При старой WireGuard-установке показывается отдельное предупреждение: согласие сохраняет конфиги в приватную резервную копию, отказ отменяет установку без очистки. Sing-box/HAPP запускаются только с `--enable` после настройки реальных конфигураций.
 
 For a clean-clone smoke without changing a server, clone the same public ref into a temporary directory, check that `VERSION`, `scripts/bootstrap.sh`, `scripts/install.sh`, panel/helper files and packaged systemd units exist, run the Python/Node/publication suites from that checkout, and invoke `scripts/install.sh --help`. A full OS/service startup test requires a disposable Debian/Ubuntu VM; unit tests on Windows do not emulate apt/systemd or start VPN networking.
 
-For the published v2.1.5 Git ref on Windows/PowerShell, run the smoke from a fresh clone:
+For the published v2.1.6 Git ref on Windows/PowerShell, run the smoke from a fresh clone:
 
 ```powershell
-$clone = Join-Path $env:TEMP ('FocusVPN-v2.1.5-' + [guid]::NewGuid().ToString('N'))
-git clone --depth 1 --branch v2.1.5 https://github.com/DgekStr/FocusVPN.git $clone
+$clone = Join-Path $env:TEMP ('FocusVPN-v2.1.6-' + [guid]::NewGuid().ToString('N'))
+git clone --depth 1 --branch v2.1.6 https://github.com/DgekStr/FocusVPN.git $clone
 Push-Location $clone
 try {
 	.\scripts\validate.ps1
@@ -72,7 +72,7 @@ This validates the published Git ref and installer entry points without running 
 For a clean Debian 12+/Ubuntu 22.04+ host, the standalone entry point is:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1.5/scripts/bootstrap.sh | sudo bash -s -- v2.1.5
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1.6/scripts/bootstrap.sh | sudo bash -s -- v2.1.6
 ```
 
 Начиная с v2.1.5, первоначальная настройка wg-easy выполняется автоматически через официальный `INIT_*` механизм. Служебный администратор `focusvpn-service` получает уникальный пароль, сохранённый в `/etc/sing-box-admin/wg-easy-api.json` с правами `0600`. Installer проверяет `/api/client`, пересоздаёт контейнер без INIT-переменных и снова проверяет API. Пароль не печатается и не включается в Git; уже настроенная база не сбрасывается, и несовпадение существующих credentials останавливает установку. Вход в панель FocusVPN остаётся отдельным и интерактивным. Для удалённых WireGuard клиентов проверьте публичный endpoint и проброс UDP `51820`.

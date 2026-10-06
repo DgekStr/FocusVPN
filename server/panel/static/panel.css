@@ -138,6 +138,8 @@ button:disabled { cursor: default; filter: none; opacity: .72; }
 .gateway-dialog h2 { margin: 0 0 10px; font-size: 19px; }
 .gateway-dialog p { color: var(--muted); }
 .gateway-dialog .actions { justify-content: flex-end; }
+[data-outbound-edit-dialog] { width: min(100% - 32px, 760px); max-height: calc(100dvh - 32px); overflow: auto; }
+[data-outbound-edit-json] { min-height: min(420px, 50dvh); font-family: Consolas, monospace; }
 
 .metrics { display: grid; gap: 0; }
 .metric { display: grid; gap: 4px; padding: 12px 0; border-bottom: 1px solid var(--line); }

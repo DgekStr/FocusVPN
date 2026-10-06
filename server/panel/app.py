@@ -905,6 +905,10 @@ def synchronized_happ_config(config, happ_config, mode):
         raise ValueError('Tag VPN-сервера конфликтует со служебным outbound HAPP.')
     candidate['outbounds'] = preserved + json.loads(json.dumps(shared))
     final = 'focusvpn-wg-direct' if mode == 'wireguard' else config.get('route', {}).get('final')
+    if not any(item.get('tag') == final for item in candidate['outbounds']):
+        direct = next((item for item in config.get('outbounds', []) if item.get('tag') == final and item.get('type') == 'direct'), None)
+        if direct is not None:
+            candidate['outbounds'].append(json.loads(json.dumps(direct)))
     candidate.setdefault('route', {})['final'] = final
     return candidate
 
@@ -1180,7 +1184,7 @@ def render_page(config, selected_tag, message='', kind='success'):
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="apple-touch-icon" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=2">
+<link rel="stylesheet" href="/panel.css?v=2.1.6">
 <style>
 :root {{
   --paper: #f4f2ea;
@@ -1377,7 +1381,7 @@ button.danger {{ border-color: rgba(251, 113, 133, .48); color: #fda4af; }}
   </div>
 </main>
 </div>
-<script src="/panel.js" defer></script>
+<script src="/panel.js?v=2.1.6" defer></script>
 <script src="/happ-actions.js" defer></script>
 </body>
 </html>'''
@@ -1573,7 +1577,7 @@ def render_outbounds_page(config, query, message='', kind='success'):
             f'<td data-outbound-latency>{latency_text}</td>'
             f'<td data-outbound-checked-at>{esc(format_datetime(checks[tag].get("checked_at")))}</td>'
             f'<td><form method="post" action="/outbounds/route"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit"{ " disabled" if current_route == tag else ""}>Использовать</button></form></td>'
-            f'<td><form method="post" action="/outbounds/check"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit">Проверить соединение</button></form></td>'
+            f'<td><div class="inline-actions"><form method="post" action="/outbounds/check"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit">Проверить</button></form><button class="secondary" type="button" data-outbound-edit="{esc(json.dumps(outbound, ensure_ascii=False))}">Редактировать</button></div></td>'
             f'<td><form method="post" action="/outbounds/delete" data-outbound-delete><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="danger" type="submit"{ " disabled" if len(servers) <= 1 else ""}>Удалить</button></form></td>'
             '</tr>'
         )
@@ -1584,7 +1588,7 @@ def render_outbounds_page(config, query, message='', kind='success'):
 <div class="panel-stack">
     <section class="panel" data-outbound-checks><h2>Настроенные серверы</h2><div class="table-wrap"><table><thead><tr><th>Tag</th><th>Тип</th><th>Сервер</th><th>Порт</th><th>Маршрут</th><th>Проверка</th><th>Пинг, мс</th><th>Проверен UTC</th><th></th><th></th><th></th></tr></thead><tbody>{''.join(rows)}</tbody></table></div><p class="muted">Текущий маршрут: <strong>{esc(current_route)}</strong></p></section>
     <section class="panel"><h2>Импорт JSON</h2><form method="post" action="/outbounds/import"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="import_replace_tag">Заменить один существующий сервер</label><select id="import_replace_tag" name="replace_tag"><option value="">Добавить новые auto-N</option>{server_options}</select></div><div class="field"><label for="import_tag">Tag для одного профиля</label><input id="import_tag" name="import_tag" placeholder="Для массива оставьте пустым"></div><div class="field full"><label for="outbound_json">JSON sing-box / Xray: объект или массив конфигураций</label><textarea id="outbound_json" name="outbound_json" spellcheck="false" required placeholder="Вставьте JSON VPN-профиля или массив профилей"></textarea></div></div><div class="actions"><button type="submit">Проверить и импортировать</button></div></form></section>
-</div><dialog class="gateway-dialog" data-outbound-delete-dialog><form method="dialog"><h2>Удалить VPN-сервер?</h2><p data-outbound-delete-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-outbound-delete-confirm>Удалить</button></div></form></dialog>'''
+</div><dialog class="gateway-dialog" data-outbound-edit-dialog aria-labelledby="outbound-edit-title"><form method="post" action="/outbounds/import" data-outbound-edit-form><h2 id="outbound-edit-title">Редактировать VPN-сервер</h2><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="replace_tag" data-outbound-edit-tag><div class="field"><label for="outbound_edit_json">Конфигурация сервера</label><textarea id="outbound_edit_json" name="outbound_json" spellcheck="false" required data-outbound-edit-json></textarea></div><div class="actions"><button class="secondary" type="button" data-outbound-edit-cancel>Отмена</button><button type="submit">Сохранить</button></div></form></dialog><dialog class="gateway-dialog" data-outbound-delete-dialog><form method="dialog"><h2>Удалить VPN-сервер?</h2><p data-outbound-delete-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-outbound-delete-confirm>Удалить</button></div></form></dialog>'''
     return render_shell('VPN-серверы', body, 'outbounds', [item.get('tag', '') for item in servers], '')
 
 

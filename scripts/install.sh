@@ -270,6 +270,8 @@ initialize_runtime_files() {
   install_if_missing "$REPO_ROOT/server/config/sing-box-admin/wg-easy-api.example.json" "$ADMIN_ROOT/wg-easy-api.json" 0600 root root
   install_if_missing "$REPO_ROOT/server/config/sing-box-admin/wg-lan-deny.example.json" "$ADMIN_ROOT/wg-lan-deny.json" 0600 root root
 
+  python3 "$REPO_ROOT/scripts/installer_utils.py" remove-placeholders "$SING_BOX_ROOT/config.json" "$ADMIN_ROOT/backups"
+
   set -a
   source "$CONFIG_ROOT/focusvpn.env"
   set +a

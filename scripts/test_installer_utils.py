@@ -1,15 +1,50 @@
 import json
 import sys
+import tempfile
 import unittest
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from installer_utils import release_asset_sha256
+from installer_utils import release_asset_sha256, remove_placeholder_servers, migrate_placeholder_file
 
 
 class InstallerUtilsTests(unittest.TestCase):
+    def placeholder_config(self):
+        tags = [f'auto-{index}' for index in range(1, 9)]
+        return {'outbounds': [{'type': 'vless', 'tag': tag, 'server': '<provider-host>', 'uuid': '<vless-uuid>'} for tag in tags] + [{'type': 'urltest', 'tag': 'vless-auto', 'outbounds': tags}], 'route': {'final': 'auto-4'}}
+
+    def test_new_install_has_no_empty_vless_profiles(self):
+        path = Path(__file__).resolve().parents[1] / 'server' / 'config' / 'sing-box' / 'config.example.json'
+        config = json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(config['outbounds'], [{'type': 'direct', 'tag': 'direct'}])
+        self.assertEqual(config['route']['final'], 'direct')
+
+    def test_upgrade_cleans_only_complete_placeholder_set(self):
+        config = self.placeholder_config()
+        self.assertTrue(remove_placeholder_servers(config))
+        self.assertEqual(config['outbounds'], [{'type': 'direct', 'tag': 'direct'}])
+        self.assertEqual(config['route']['final'], 'direct')
+        self.assertFalse(remove_placeholder_servers(config))
+
+    def test_upgrade_keeps_config_if_any_profile_is_real(self):
+        config = self.placeholder_config()
+        config['outbounds'][0]['server'] = 'vpn.example.com'
+        before = json.dumps(config)
+        self.assertFalse(remove_placeholder_servers(config))
+        self.assertEqual(json.dumps(config), before)
+
+    def test_placeholder_file_migration_preserves_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+            original = json.dumps(self.placeholder_config()).encode('utf-8')
+            path.write_bytes(original)
+            backups = Path(directory) / 'backups'
+            self.assertTrue(migrate_placeholder_file(path, backups))
+            self.assertEqual(next(backups.iterdir()).read_bytes(), original)
+            self.assertFalse(migrate_placeholder_file(path, backups))
+
     def test_install_flow_confirms_before_changes_and_starts_panel_and_wg_easy(self):
         installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')
         main = installer.rsplit('\nmain() {', 1)[1]

@@ -424,12 +424,48 @@
     if (event.key === 'Escape') closeWireGuardQr();
   });
 
+  document.addEventListener('click', (event) => {
+    const dialog = document.querySelector('[data-outbound-edit-dialog]');
+    if (!dialog) return;
+    const opener = event.target.closest('[data-outbound-edit]');
+    if (opener) {
+      const profile = JSON.parse(opener.dataset.outboundEdit);
+      dialog.querySelector('[data-outbound-edit-tag]').value = profile.tag;
+      const editor = dialog.querySelector('[data-outbound-edit-json]');
+      editor.value = JSON.stringify(profile, null, 2);
+      editor.setCustomValidity('');
+      const submit = dialog.querySelector('button[type="submit"]');
+      submit.disabled = false;
+      submit.textContent = 'Сохранить';
+      dialog.showModal();
+      editor.focus();
+    } else if (event.target.closest('[data-outbound-edit-cancel]')) {
+      dialog.close();
+    }
+  });
+
+  document.addEventListener('input', (event) => {
+    if (event.target.matches('[data-outbound-edit-json]')) event.target.setCustomValidity('');
+  });
+
   document.addEventListener('submit', (event) => {
+    if (event.target.matches('[data-outbound-edit-form]')) {
+      const editor = event.target.querySelector('[data-outbound-edit-json]');
+      try {
+        const profile = JSON.parse(editor.value);
+        if (!profile || Array.isArray(profile) || typeof profile !== 'object') throw new Error();
+      } catch (_) {
+        event.preventDefault();
+        editor.setCustomValidity('Введите корректный JSON одного сервера.');
+        editor.reportValidity();
+        return;
+      }
+    }
     if (event.target.matches(formSelector('/outbounds/import'))) {
       const button = event.target.querySelector('button[type="submit"]');
       if (button) {
         button.disabled = true;
-        button.textContent = 'Импортируется…';
+        button.textContent = event.target.matches('[data-outbound-edit-form]') ? 'Сохраняется…' : 'Импортируется…';
       }
       return;
     }

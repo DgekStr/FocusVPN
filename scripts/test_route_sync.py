@@ -134,6 +134,41 @@ class RouteSyncTests(unittest.TestCase):
         self.assertNotIn('data-panel-nav="vless"', page)
         self.assertFalse(hasattr(app, 'update_hysteria2_auto8'))
 
+    def test_manager_renders_edit_modal_and_short_check_button(self):
+        self.patch('service_state', return_value='inactive')
+        page = app.render_outbounds_page(self.gateway, {})
+        self.assertIn('data-outbound-edit=', page)
+        self.assertIn('data-outbound-edit-dialog', page)
+        self.assertIn('data-outbound-edit-form', page)
+        self.assertIn('name="replace_tag" data-outbound-edit-tag', page)
+        self.assertIn('>Проверить</button>', page)
+        self.assertIn('>Редактировать</button>', page)
+        self.assertNotIn('>Проверить соединение</button>', page)
+
+    def test_sidebar_has_one_server_link_without_profile_items(self):
+        page = app.render_shell('VPN-серверы', '<p>content</p>', 'outbounds', ['auto-1', 'auto-2'], 'auto-1')
+        self.assertEqual(page.count('data-panel-nav="outbounds"'), 1)
+        self.assertNotIn('class="profile-list"', page)
+        self.assertNotIn('/outbounds?tag=', page)
+        self.assertNotIn('auto-1', page)
+        self.assertIn('data-panel-nav="wireguard"', page)
+
+    def test_editor_replacement_preserves_tag_route_and_nested_fields(self):
+        config = {'outbounds': [{'type': 'vless', 'tag': 'auto-1', 'server': 'old.example.com'}], 'route': {'final': 'auto-1'}}
+        replacement = {'type': 'vless', 'tag': 'ignored-new-tag', 'server': 'new.example.com', 'server_port': 443, 'uuid': '00000000-0000-4000-8000-000000000001', 'tls': {'enabled': True, 'server_name': 'example.com'}, 'transport': {'type': 'grpc', 'service_name': 'test-service'}}
+        imported, skipped = app.import_server_batch(json.dumps(replacement), config, replace_tag='auto-1', validator=Mock())
+        self.assertEqual(imported, ['auto-1'])
+        self.assertEqual(skipped, [])
+        self.assertEqual(config['route']['final'], 'auto-1')
+        self.assertEqual(config['outbounds'][0], {**replacement, 'tag': 'auto-1'})
+
+    def test_empty_install_direct_route_stays_valid_when_syncing_happ(self):
+        config = {'outbounds': [{'type': 'direct', 'tag': 'direct'}], 'route': {'final': 'direct'}}
+        result = app.synchronized_happ_config(config, self.happ, 'vless')
+        self.assertEqual(result['route']['final'], 'direct')
+        self.assertIn({'type': 'direct', 'tag': 'direct'}, result['outbounds'])
+        self.assertEqual(result['inbounds'], self.happ['inbounds'])
+
     def test_settings_shows_gateway_modes_first_in_two_column_layout(self):
         api = types.SimpleNamespace(general=Mock(return_value={}), interface=Mock(return_value={}))
         self.patch('WG_ADMIN', types.SimpleNamespace(api=api))

@@ -19,6 +19,24 @@ async function main() {
   const checkedAt = { textContent: '' };
   const row = { classList: classList(), querySelector: (selector) => selector.includes('button') ? button : selector === '[data-outbound-checked-at]' ? checkedAt : { textContent: '' } };
   const documentEvents = new Map();
+  const clickHandlers = [];
+  const editTag = { value: '' };
+  const editButton = { disabled: false, textContent: 'Сохранить' };
+  const editJson = {
+    value: '',
+    setCustomValidity(value) { this.validationMessage = value; },
+    reportValidity() { this.reported = true; },
+    focus() { this.focused = true; },
+  };
+  const editDialog = {
+    showModal() { this.open = true; },
+    close() { this.open = false; },
+    querySelector(selector) {
+      if (selector === '[data-outbound-edit-tag]') return editTag;
+      if (selector === '[data-outbound-edit-json]') return editJson;
+      return editButton;
+    },
+  };
   const dialogTitle = { textContent: '' };
   const dialogMessage = { textContent: '' };
   const gatewayDialog = {
@@ -43,7 +61,10 @@ async function main() {
     console,
     document: {
       hidden: false,
-      addEventListener(name, callback) { documentEvents.set(name, callback); },
+      addEventListener(name, callback) {
+        documentEvents.set(name, callback);
+        if (name === 'click') clickHandlers.push(callback);
+      },
       createElement(name) {
         assert.equal(name, 'canvas');
         const context = new Proxy({}, { get: () => () => {} });
@@ -56,6 +77,7 @@ async function main() {
         if (selector === '[data-outbound-summary]') return summary;
         if (selector.startsWith('[data-outbound-checks]')) return {};
         if (selector === '[data-gateway-dialog]') return gatewayDialog;
+        if (selector === '[data-outbound-edit-dialog]') return editDialog;
         return null;
       },
       querySelectorAll: (selector) => selector === 'link[rel~="icon"]' ? faviconLinks : selector === '[data-outbound-check-tag]' ? [cell] : [],
@@ -126,6 +148,36 @@ async function main() {
   assert.equal(dialogTitle.textContent, 'Переключить на шлюз по умолчанию?');
   assert.match(dialogMessage.textContent, /основной шлюз сервера/);
   console.log('PASS: default gateway confirmation explains direct server-default egress');
+
+  const profile = { type: 'vless', tag: 'auto-1', server: 'vpn.example.com', tls: { enabled: true } };
+  const opener = { dataset: { outboundEdit: JSON.stringify(profile) } };
+  for (const callback of clickHandlers) {
+    callback({ target: { closest: (selector) => selector === '[data-outbound-edit]' ? opener : null } });
+  }
+  assert.equal(editDialog.open, true);
+  assert.equal(editTag.value, 'auto-1');
+  assert.deepEqual(JSON.parse(editJson.value), profile);
+  assert.equal(editJson.focused, true);
+  for (const callback of clickHandlers) {
+    callback({ target: { closest: (selector) => selector === '[data-outbound-edit-cancel]' ? {} : null } });
+  }
+  assert.equal(editDialog.open, false);
+  let prevented = false;
+  const editForm = {
+    matches(selector) { return selector === '[data-outbound-edit-form]' || selector.includes('/outbounds/import'); },
+    querySelector: (selector) => selector === '[data-outbound-edit-json]' ? editJson : editButton,
+  };
+  editJson.value = 'invalid JSON';
+  documentEvents.get('submit')({ target: editForm, preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(editJson.reported, true);
+  editJson.value = JSON.stringify(profile);
+  prevented = false;
+  documentEvents.get('submit')({ target: editForm, preventDefault() { prevented = true; } });
+  assert.equal(prevented, false);
+  assert.equal(editButton.disabled, true);
+  assert.equal(editButton.textContent, 'Сохраняется…');
+  console.log('PASS: outbound editor opens existing JSON, cancels and validates before replace-submit');
 }
 
 main().catch((error) => {

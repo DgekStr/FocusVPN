@@ -1,6 +1,6 @@
 # Roadmap
 
-Версия: **v2.1.2**. Дата среза: **2026-10-06**.
+Версия: **v2.1.3**. Дата среза: **2026-10-06**.
 
 ## Закрыто
 
@@ -35,9 +35,11 @@
 - [x] Добавить host OS/LAN IP, uptime, 24h CPU/LAN peaks и boot network totals в Settings.
 - [x] Перенести VIP VLESS endpoint в конец `/happ-server` и связать его hostname с public subscription URL.
 - [x] Добавить анимированный зелёный favicon, совместимый с Chromium через Canvas frames.
-- [x] Проверить Git-clone installer path: 108 Python tests, две Node UI suites, publication validation и installer help.
+- [x] Проверить локальный Git-clone installer path: 110 Python tests, две Node UI suites, publication validation и installer help.
 - [x] Исправить sing-box installer checksum: использовать SHA-256 asset digest из GitHub Release API с fail-closed проверкой.
 - [x] Повторить Git bootstrap на Ubuntu 22.04 amd64, задать доступ панели `0.0.0.0/0`, поднять TLS proxy `:7445` с Basic Auth; VPN-службы оставить остановленными до заполнения реальных конфигураций.
+- [x] Перед apt показывать список пакетов и служб и требовать подтверждение; запускать Nginx и wg-easy автоматически с защищённым setup-портом.
+- [x] Обнаруживать legacy WireGuard и после отдельного согласия сохранять старые настройки в резервную копию.
 
 ## Следующие вехи
 
@@ -73,4 +75,4 @@
 - Безопасный deploy script с dry-run/rollback и schema/config migration versioning.
 - Authenticated health/latency dashboard и ручная проверка Mattermost доставки после настройки действующего webhook.
 
-Текущая версия FocusVPN — `v2.1.2`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway оставлен в VLESS. Git bootstrap проверен на Ubuntu 22.04 amd64; HTTPS endpoint использует самоподписанный сертификат, реальные VPN-конфигурации не установлены, `--enable` не запускался. Host metrics peaks покрывают период с запуска collector, network totals сбрасываются при reboot.
+Текущая версия FocusVPN — `v2.1.3`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway оставлен в VLESS. Установочный поток теперь подтверждает пакеты/службы и автоматически запускает защищённый wg-easy setup и Nginx HTTPS endpoint. Развёртывание v2.1.3 на Ubuntu 22.04 ещё требуется проверить. Host metrics peaks покрывают период с запуска collector, network totals сбрасываются при reboot.

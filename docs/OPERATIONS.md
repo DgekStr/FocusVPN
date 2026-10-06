@@ -42,18 +42,18 @@ systemd-analyze verify /etc/systemd/system/sing-box-admin.service
 For a clean Debian 12+/Ubuntu 22.04+ host, the standalone executable bootstrap entry point is:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1.2/scripts/bootstrap.sh | sudo bash -s -- v2.1.2
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1.3/scripts/bootstrap.sh | sudo bash -s -- v2.1.3
 ```
 
-`bootstrap.sh` accepts a Git branch/tag followed by installer options, for example `v2.1.1 --start-wg-easy`; if Git or OS packages are missing it installs them through apt, clones the requested ref into a temporary directory, and runs the same installer. It forwards password prompts to the controlling TTY even when invoked as `curl | sudo bash`. `scripts/create_panel_auth.py` confirms a 12+ character panel password, stores only a salted scrypt hash atomically with mode `0600`, and never sends the password through argv/environment. The installer writes every packaged systemd service/template and downloads sing-box only after verifying the archive against the SHA-256 digest published for that exact asset in GitHub Release API. It does not start VPN services with placeholder configs. After entering real gateway/HAPP/wg-easy configs, run `sudo ./scripts/install.sh --enable` from a clone, or repeat the standalone bootstrap with `--enable`. wg-easy initial setup is optional and separately requested with `--start-wg-easy`; its admin/API configuration must be completed before `--enable`.
+До любых изменений `bootstrap.sh` показывает пакеты и службы и требует явного подтверждения. Если Git или системные пакеты отсутствуют, они устанавливаются через apt только после согласия; далее bootstrap клонирует выбранный ref и запускает тот же installer. Ввод паролей и подтверждения передаётся на управляющий TTY даже при `curl | sudo bash`. Пароль панели подтверждается, хранится только как salted scrypt hash с правами `0600` и не передаётся через argv/environment. Installer проверяет sing-box по SHA-256 digest точного asset из GitHub Release API, настраивает Nginx HTTPS `:7445`, запускает панель и wg-easy автоматически. Setup API wg-easy доступен только на localhost: используйте `ssh -L 51821:127.0.0.1:51821 root@<server-ip>`, затем откройте `http://127.0.0.1:51821`. При старых WireGuard units/container/configs показывается отдельное предупреждение; согласие перемещает конфиги в приватный backup, отказ отменяет установку без очистки. Остальные VPN-службы запускаются только с `--enable` после настройки реальных конфигураций.
 
 For a clean-clone smoke without changing a server, clone the same public ref into a temporary directory, check that `VERSION`, `scripts/bootstrap.sh`, `scripts/install.sh`, panel/helper files and packaged systemd units exist, run the Python/Node/publication suites from that checkout, and invoke `scripts/install.sh --help`. A full OS/service startup test requires a disposable Debian/Ubuntu VM; unit tests on Windows do not emulate apt/systemd or start VPN networking.
 
-For the published v2.1.2 Git ref on Windows/PowerShell, run the smoke from a fresh clone:
+For the published v2.1.3 Git ref on Windows/PowerShell, run the smoke from a fresh clone:
 
 ```powershell
-$clone = Join-Path $env:TEMP ('FocusVPN-v2.1.2-' + [guid]::NewGuid().ToString('N'))
-git clone --depth 1 --branch v2.1.2 https://github.com/DgekStr/FocusVPN.git $clone
+$clone = Join-Path $env:TEMP ('FocusVPN-v2.1.3-' + [guid]::NewGuid().ToString('N'))
+git clone --depth 1 --branch v2.1.3 https://github.com/DgekStr/FocusVPN.git $clone
 Push-Location $clone
 try {
 	.\scripts\validate.ps1
@@ -72,7 +72,7 @@ This validates the published Git ref and installer entry points without running 
 For a clean Debian 12+/Ubuntu 22.04+ host, the standalone entry point is:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1.2/scripts/bootstrap.sh | sudo bash -s -- v2.1.2
+curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/v2.1.3/scripts/bootstrap.sh | sudo bash -s -- v2.1.3
 ```
 
 `bootstrap.sh` accepts a Git branch/tag followed by installer options, for example `v2.1.1 --start-wg-easy`; if packages need installation it downloads them through apt, clones the requested ref into a temporary directory, and runs the same installer. `scripts/create_panel_auth.py` prompts through the controlling TTY (so the command also works when bootstrap is piped), confirms a 12+ character panel password, stores only a salted scrypt hash atomically with mode `0600`, and never sends the password through argv/environment. The installer writes all service unit files and verifies sing-box against the official GitHub Release API asset digest, but does not start VPN services with placeholder configs. After entering real gateway/HAPP/wg-easy configs, run `sudo ./scripts/install.sh --enable` from a clone, or repeat the standalone bootstrap with `--enable`. wg-easy initial setup is optional and separately requested with `--start-wg-easy`; its admin/API configuration must be completed before `--enable`.

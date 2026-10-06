@@ -14,9 +14,9 @@ usage() {
 Usage:
   curl -fsSL https://raw.githubusercontent.com/DgekStr/FocusVPN/master/scripts/bootstrap.sh | sudo bash -s -- master [installer-options]
 
-The bootstrapper clones the selected branch/tag into a private temporary directory,
-then runs scripts/install.sh. It forwards stdin to /dev/tty so the installer can
-securely prompt for the panel password even when bootstrap.sh is piped to bash.
+The bootstrapper confirms the package/service plan before installing dependencies,
+then clones the selected branch/tag into a private temporary directory and runs
+scripts/install.sh. Prompts are read from /dev/tty when bootstrap.sh is piped.
 
 Installer options: --start-wg-easy, --enable
 EOF
@@ -48,19 +48,32 @@ for option in "$@"; do
 done
 
 export DEBIAN_FRONTEND=noninteractive
+if [[ -r /dev/tty && -w /dev/tty ]]; then
+  installer_tty=/dev/tty
+else
+  [[ -t 0 ]] || fail 'interactive terminal required for install confirmation and panel password'
+  installer_tty=/dev/stdin
+fi
+
+cat <<'EOF'
+[focusvpn-bootstrap] WARNING: installation will make system-level changes.
+Packages: Git/curl if missing, Docker, Nginx, OpenSSL, nftables, Python 3, sing-box and panel dependencies.
+Services/container: Docker, Nginx HTTPS panel on :7445, sing-box-admin, restricted wg-easy setup container.
+Other VPN services remain stopped unless --enable is requested with real configurations.
+Existing WireGuard runtime will trigger a separate warning and backup-or-cancel prompt.
+EOF
+read -r -p 'Install this package/service plan? [y/N] ' answer < "$installer_tty"
+case "$answer" in
+  y|Y|yes|YES) export FOCUSVPN_INSTALL_PLAN_CONFIRMED=1 ;;
+  *) fail 'installation cancelled before package changes' ;;
+esac
+
 if ! command -v git >/dev/null 2>&1; then
   apt-get update
   apt-get install -y --no-install-recommends ca-certificates git
 fi
 command -v git >/dev/null 2>&1 || fail 'Git installation failed'
 command -v curl >/dev/null 2>&1 || { apt-get update; apt-get install -y --no-install-recommends ca-certificates curl; }
-
-if [[ -r /dev/tty && -w /dev/tty ]]; then
-  installer_tty=/dev/tty
-else
-  [[ -t 0 ]] || fail 'interactive terminal required for the initial panel password prompt'
-  installer_tty=/dev/stdin
-fi
 
 temporary="$(mktemp -d /tmp/focusvpn-bootstrap.XXXXXX)"
 chmod 0700 "$temporary"

@@ -10,6 +10,24 @@ from installer_utils import release_asset_sha256
 
 
 class InstallerUtilsTests(unittest.TestCase):
+    def test_install_flow_confirms_before_changes_and_starts_panel_and_wg_easy(self):
+        installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')
+        main = installer.rsplit('\nmain() {', 1)[1]
+        self.assertLess(main.index('confirm_install_plan'), main.index('check_legacy_wireguard'))
+        self.assertLess(main.index('check_legacy_wireguard'), main.index('install_packages'))
+        self.assertIn('configure_nginx_proxy', main)
+        self.assertIn('create_wg_easy_container', main)
+        self.assertIn('systemctl enable --now sing-box-admin.service nginx.service', main)
+        self.assertIn('https://$server_ip:7445', main)
+
+    def test_legacy_wireguard_configs_are_backed_up_only_after_confirmation(self):
+        installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')
+        legacy_check = installer.split('check_legacy_wireguard() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('read -r -p "Move old WireGuard data to backup and continue? [y/N] "', legacy_check)
+        self.assertIn('installation cancelled; existing WireGuard installation was not changed', legacy_check)
+        self.assertIn('cp -a /etc/wireguard/wg-client.conf', legacy_check)
+        self.assertIn('docker cp wg-easy:/etc/wireguard/.', legacy_check)
+
     def test_default_happ_template_uses_matching_valid_vip_uuid(self):
         config_root = Path(__file__).resolve().parents[1] / 'server' / 'config'
         public_state = json.loads((config_root / 'sing-box-admin' / 'happ-server.example.json').read_text(encoding='utf-8'))

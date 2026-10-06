@@ -11,7 +11,6 @@ readonly HAPP_ROOT="/etc/sing-box-happ-server"
 readonly ADMIN_ROOT="/etc/sing-box-admin"
 
 ENABLE_SERVICES=0
-START_WG_EASY=0
 
 log() {
   printf '[focusvpn] %s\n' "$*"
@@ -24,17 +23,17 @@ fail() {
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./scripts/install.sh [--start-wg-easy] [--enable]
+Usage: sudo ./scripts/install.sh [--enable]
 
 Installs FocusVPN runtime files on a supported Debian or Ubuntu server.
 
 Options:
-  --start-wg-easy  Create and start the wg-easy container for its initial setup.
   --enable  Validate completed runtime configuration and enable FocusVPN services.
   -h, --help  Show this help.
 
 The default mode installs dependencies, code, systemd units and safe templates,
-but does not start VPN services until all real runtime configs are provided.
+then starts the wg-easy setup container with its web UI restricted to localhost.
+Other VPN services stay stopped until all real runtime configs are provided.
 For a one-command GitHub bootstrap, see scripts/bootstrap.sh.
 EOF
 }
@@ -42,7 +41,7 @@ EOF
 while (($#)); do
   case "$1" in
     --enable) ENABLE_SERVICES=1 ;;
-    --start-wg-easy) START_WG_EASY=1 ;;
+    --start-wg-easy) log "--start-wg-easy is deprecated; wg-easy starts automatically" ;;
     -h|--help) usage; exit 0 ;;
     *) fail "unknown option: $1" ;;
   esac
@@ -69,8 +68,126 @@ esac
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y --no-install-recommends ca-certificates curl docker.io nftables python3 python3-xlwt qrencode tar wireguard-tools
+  apt-get install -y --no-install-recommends ca-certificates curl docker.io nftables nginx openssl python3 python3-xlwt qrencode tar wireguard-tools
+  systemctl stop nginx.service 2>/dev/null || true
   systemctl enable --now docker
+}
+
+confirm_install_plan() {
+  local answer
+  [[ "${FOCUSVPN_INSTALL_PLAN_CONFIRMED:-}" == "1" ]] && return 0
+  cat <<'EOF'
+[focusvpn] WARNING: installation will make system-level changes.
+Packages: ca-certificates, curl, Docker, nftables, Nginx, OpenSSL, Python 3, python3-xlwt, qrencode, tar, wireguard-tools, sing-box.
+Services/container to enable: docker, nginx, sing-box-admin, wg-easy-private-ui, wg-easy.
+Admin panel: https://<server-ip>:7445 (self-signed certificate; browser warning expected).
+wg-easy setup is restricted to localhost; use an SSH tunnel for initial setup.
+Other VPN services remain stopped unless --enable is requested with real configurations.
+EOF
+  [[ -r /dev/tty && -w /dev/tty ]] || fail "interactive confirmation is required before installation"
+  read -r -p "Install these packages and services? [y/N] " answer < /dev/tty
+  case "$answer" in
+    y|Y|yes|YES) ;;
+    *) fail "installation cancelled before system changes" ;;
+  esac
+  export FOCUSVPN_INSTALL_PLAN_CONFIRMED=1
+}
+
+check_legacy_wireguard() {
+  local managed_container=0
+  local container_label=""
+  local answer backup_root unit interface
+  local -a legacy_details=()
+  local -a wireguard_configs=()
+  local -a legacy_configs=()
+  local -a legacy_interfaces=()
+
+  if command -v docker >/dev/null 2>&1 && docker inspect wg-easy >/dev/null 2>&1; then
+    container_label="$(docker inspect --format '{{ index .Config.Labels "com.focusvpn.managed" }}' wg-easy 2>/dev/null || true)"
+    if [[ "$container_label" == "true" ]]; then
+      managed_container=1
+    else
+      legacy_details+=("unmanaged Docker container named wg-easy")
+    fi
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    while IFS= read -r unit; do
+      [[ "$unit" == "wg-quick@wg-client.service" ]] && continue
+      [[ -n "$unit" ]] && legacy_details+=("active service $unit")
+    done < <(systemctl list-units --type=service --state=running --no-legend 'wg-quick@*.service' 2>/dev/null | awk '{print $1}')
+  fi
+
+  shopt -s nullglob
+  wireguard_configs=(/etc/wireguard/*.conf)
+  shopt -u nullglob
+  for answer in "${wireguard_configs[@]}"; do
+    [[ "${answer##*/}" == "wg-client.conf" ]] || legacy_configs+=("$answer")
+  done
+  if ((${#legacy_configs[@]})); then
+    legacy_details+=("existing /etc/wireguard configuration files")
+  fi
+
+  if (( ! managed_container )) && [[ -d /etc/wg-easy ]] && find /etc/wg-easy -mindepth 1 -print -quit | grep -q .; then
+    legacy_details+=("existing /etc/wg-easy data")
+  fi
+
+  if command -v ip >/dev/null 2>&1; then
+    while IFS= read -r interface; do
+      [[ -z "$interface" ]] && continue
+      if (( managed_container )) && [[ "$interface" == "wg0" ]]; then
+        continue
+      fi
+      [[ "$interface" == "wg-client" ]] && continue
+      legacy_interfaces+=("$interface")
+      legacy_details+=("active WireGuard interface $interface")
+    done < <(ip -o link show type wireguard 2>/dev/null | awk -F ': ' '{print $2}' | cut -d@ -f1)
+  fi
+
+  ((${#legacy_details[@]})) || return 0
+  log "WARNING: an existing WireGuard installation was detected:"
+  for answer in "${legacy_details[@]}"; do
+    printf '  - %s\n' "$answer" >&2
+  done
+  log "Continuing will stop/remove the detected legacy runtime and move its config data to a private backup."
+  [[ -t 0 ]] || fail "interactive confirmation required; rerun from a terminal to remove the old installation or cancel"
+  read -r -p "Move old WireGuard data to backup and continue? [y/N] " answer < /dev/tty
+  case "$answer" in
+    y|Y|yes|YES) ;;
+    *) fail "installation cancelled; existing WireGuard installation was not changed" ;;
+  esac
+
+  backup_root="/root/focusvpn-wireguard-backup-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  install -d -m 0700 "$backup_root"
+  if [[ -f /etc/wireguard/wg-client.conf ]]; then
+    install -d -m 0700 "$backup_root/managed"
+    cp -a /etc/wireguard/wg-client.conf "$backup_root/managed/wg-client.conf"
+  fi
+  if command -v docker >/dev/null 2>&1 && docker inspect wg-easy >/dev/null 2>&1 && (( ! managed_container )); then
+    install -d -m 0700 "$backup_root/docker-wg-easy"
+    docker inspect wg-easy > "$backup_root/docker-wg-easy/container-inspect.json"
+    docker cp wg-easy:/etc/wireguard/. "$backup_root/docker-wg-easy/"
+    docker rm -f wg-easy
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    while IFS= read -r unit; do
+      [[ "$unit" == "wg-quick@wg-client.service" ]] && continue
+      [[ -z "$unit" ]] || systemctl disable --now "$unit"
+    done < <(systemctl list-units --type=service --state=running --no-legend 'wg-quick@*.service' 2>/dev/null | awk '{print $1}')
+  fi
+  for path in /etc/wireguard /etc/wg-easy; do
+    if [[ -d "$path" ]] && find "$path" -mindepth 1 -print -quit | grep -q .; then
+      mv "$path" "$backup_root/${path##*/}"
+    fi
+  done
+  if [[ -f "$backup_root/managed/wg-client.conf" ]]; then
+    install -d -m 0700 /etc/wireguard
+    cp -a "$backup_root/managed/wg-client.conf" /etc/wireguard/wg-client.conf
+  fi
+  for interface in "${legacy_interfaces[@]}"; do
+    ip link delete dev "$interface" 2>/dev/null || log "could not remove WireGuard interface $interface; check it manually"
+  done
+  log "legacy WireGuard data was preserved in $backup_root"
 }
 
 install_sing_box() {
@@ -195,17 +312,99 @@ initialize_auth() {
   log "created $ADMIN_ROOT/auth.json"
 }
 
+configure_nginx_proxy() {
+  local server_ip certificate key site
+  server_ip="$(ip -4 route show default | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+  [[ "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "could not determine the server IPv4 address for the panel URL"
+  certificate="/etc/ssl/certs/focusvpn-panel.crt"
+  key="/etc/ssl/private/focusvpn-panel.key"
+  site="/etc/nginx/sites-available/focusvpn-7445"
+  install -d -m 0755 /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/ssl/certs /etc/ssl/private
+  if [[ ! -s "$certificate" || ! -s "$key" ]] || ! openssl x509 -in "$certificate" -noout -ext subjectAltName 2>/dev/null | grep -Fq "IP Address:$server_ip"; then
+    openssl req -x509 -nodes -days 365 -newkey rsa:3072 \
+      -keyout "$key" -out "$certificate" -subj "/CN=$server_ip" \
+      -addext "subjectAltName=IP:$server_ip" >/dev/null 2>&1
+    chmod 0600 "$key"
+    chmod 0644 "$certificate"
+  fi
+
+  python3 - "$CONFIG_ROOT/focusvpn.env" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+lines = path.read_text(encoding='utf-8').splitlines()
+updated = []
+found_host = False
+found_proxy = False
+for line in lines:
+    if line.startswith('SING_BOX_ADMIN_HOST='):
+        updated.append('SING_BOX_ADMIN_HOST=127.0.0.1')
+        found_host = True
+    elif line.startswith('FOCUSVPN_TRUSTED_PROXY_NETWORKS='):
+        current = line.split('=', 1)[1].strip().strip('"\'')
+        networks = [item.strip() for item in current.split(',') if item.strip()]
+        if '127.0.0.1/32' not in networks:
+            networks.append('127.0.0.1/32')
+        updated.append('FOCUSVPN_TRUSTED_PROXY_NETWORKS=' + ','.join(networks))
+        found_proxy = True
+    else:
+        updated.append(line)
+if not found_host:
+    updated.append('SING_BOX_ADMIN_HOST=127.0.0.1')
+if not found_proxy:
+    updated.append('FOCUSVPN_TRUSTED_PROXY_NETWORKS=127.0.0.1/32')
+path.write_text('\n'.join(updated) + '\n', encoding='utf-8')
+os.chmod(path, 0o600)
+PY
+
+  cat > "$site" <<EOF
+server {
+    listen 7445 ssl;
+    listen [::]:7445 ssl;
+    server_name $server_ip;
+
+    ssl_certificate $certificate;
+    ssl_certificate_key $key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass http://127.0.0.1:9443;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header Connection "";
+        proxy_read_timeout 120s;
+        proxy_redirect off;
+    }
+}
+EOF
+  ln -sfn "$site" /etc/nginx/sites-enabled/focusvpn-7445
+  if [[ -L /etc/nginx/sites-enabled/default ]] && [[ "$(readlink -f /etc/nginx/sites-enabled/default)" == "/etc/nginx/sites-available/default" ]]; then
+    rm -f /etc/nginx/sites-enabled/default
+  fi
+  nginx -t
+  log "configured HTTPS panel at https://$server_ip:7445"
+}
+
 contains_placeholder() {
   grep -Eq '<[A-Za-z0-9_.-]+>' "$1"
 }
 
 create_wg_easy_container() {
   if docker inspect wg-easy >/dev/null 2>&1; then
+    docker start wg-easy >/dev/null
+    log "started existing wg-easy container"
     return
   fi
   docker pull "$WG_EASY_IMAGE"
-  docker run --detach --name wg-easy --network host --cap-add NET_ADMIN --restart unless-stopped --volume /etc/wg-easy:/etc/wireguard "$WG_EASY_IMAGE"
-  log "created wg-easy container; finish its initial setup at http://<server-lan-ip>:51821 before exposing the panel"
+  docker run --detach --name wg-easy --label com.focusvpn.managed=true --network host --cap-add NET_ADMIN --restart unless-stopped --volume /etc/wg-easy:/etc/wireguard "$WG_EASY_IMAGE"
+  docker inspect --format '{{.State.Status}}' wg-easy | grep -Fxq running || fail "wg-easy container failed to start"
+  log "created and started wg-easy; complete its setup through an SSH tunnel to localhost:51821"
 }
 
 enable_services() {
@@ -234,28 +433,38 @@ enable_services() {
     /etc/systemd/system/focusvpn-service-control@.service \
     /etc/systemd/system/focusvpn-outbound-test@.service
   systemctl daemon-reload
-  systemctl enable --now sing-box sing-box-happ-server sing-box-admin wg-easy-private-ui sing-box-ru-zone-update.timer wg-peer-keepalive.timer focusvpn-gateway-mode.service
+  systemctl enable --now sing-box sing-box-happ-server sing-box-admin nginx wg-easy-private-ui sing-box-ru-zone-update.timer wg-peer-keepalive.timer focusvpn-gateway-mode.service
   systemctl is-active --quiet sing-box sing-box-gateway sing-box-happ-server sing-box-admin wg-easy-private-ui sing-box-ru-zone-update.timer wg-peer-keepalive.timer focusvpn-gateway-mode.service
   log "FocusVPN services are active"
 }
 
 main() {
+  confirm_install_plan
+  check_legacy_wireguard
   install_packages
   install_sing_box
   ensure_sing_box_account
   install_tree
   initialize_runtime_files
   initialize_auth
+  configure_nginx_proxy
   systemctl daemon-reload
-  if (( START_WG_EASY )); then
-    create_wg_easy_container
-  fi
+  systemctl enable --now wg-easy-private-ui.service
+  create_wg_easy_container
+  systemctl enable nginx.service wg-easy-private-ui.service
+  systemctl restart sing-box-admin.service
+  systemctl enable --now sing-box-admin.service nginx.service
   if (( ENABLE_SERVICES )); then
     enable_services
   else
     log "runtime installed without starting network services"
     log "complete configs, then run: sudo ./scripts/install.sh --enable"
   fi
+  server_ip="$(ip -4 route show default | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+  log "installed packages: Docker, Nginx, OpenSSL, Python 3, nftables, WireGuard tools, sing-box and panel dependencies"
+  log "started services: docker, nginx, sing-box-admin, wg-easy-private-ui, wg-easy container"
+  log "admin panel: https://$server_ip:7445 (self-signed certificate; browser warning expected)"
+  log "wg-easy setup: ssh -L 51821:127.0.0.1:51821 root@$server_ip, then open http://127.0.0.1:51821"
 }
 
 main "$@"

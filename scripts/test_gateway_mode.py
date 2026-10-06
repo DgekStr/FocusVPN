@@ -36,6 +36,76 @@ class GatewayModeTests(unittest.TestCase):
         self.assertEqual(route['gateway'], '192.168.0.6')
         self.assertEqual(route['dev'], 'eth0')
 
+    def test_default_preflight_installs_missing_subnet_scoped_rules_once(self):
+        checks = set()
+        insertions = []
+
+        def run(args, optional=False, input_text=None):
+            if args[0] == '/usr/sbin/iptables':
+                if '-C' in args:
+                    return subprocess.CompletedProcess(args, 0 if tuple(args) in checks else 1, '')
+                if '-I' in args:
+                    check = list(args)
+                    operation = check.index('-I')
+                    check[operation] = '-C'
+                    del check[operation + 2]
+                    checks.add(tuple(check))
+                    insertions.append(args)
+                    return subprocess.CompletedProcess(args, 0, '')
+            return self.run_for(args, optional, input_text)
+
+        with patch.dict(self.namespace, {'run': run}):
+            result = self.namespace['verify_default_gateway_route'](require_selected=False, install_missing=True)
+            self.assertEqual(len(result['_added_forwarding']), 3)
+            repeated = self.namespace['verify_default_gateway_route'](require_selected=False, install_missing=True)
+            self.assertEqual(repeated['_added_forwarding'], [])
+        self.assertEqual(len(insertions), 3)
+        self.assertTrue(all('10.8.0.0/24' in rule for rule in insertions))
+        self.assertTrue(all('eth0' in rule for rule in insertions))
+
+    def test_failed_nat_creation_rolls_back_only_added_rules(self):
+        removed = []
+
+        def run(args, optional=False, input_text=None):
+            if args[0] == '/usr/sbin/iptables':
+                if '-C' in args:
+                    if '-d' in args:
+                        return subprocess.CompletedProcess(args, 0, '')
+                    if '-s' in args and 'FORWARD' in args and inserted:
+                        return subprocess.CompletedProcess(args, 0, '')
+                    return subprocess.CompletedProcess(args, 1, '')
+                if '-I' in args:
+                    if 'POSTROUTING' in args:
+                        raise RuntimeError('NAT insertion failed')
+                    inserted.append(args)
+                    return subprocess.CompletedProcess(args, 0, '')
+                if '-D' in args:
+                    removed.append(args)
+                    return subprocess.CompletedProcess(args, 0, '')
+            return self.run_for(args, optional, input_text)
+
+        inserted = []
+        with patch.dict(self.namespace, {'run': run}):
+            with self.assertRaisesRegex(RuntimeError, 'NAT insertion failed'):
+                self.namespace['verify_default_gateway_route'](require_selected=False, install_missing=True)
+        self.assertEqual(len(removed), 1)
+        self.assertIn('-s', removed[0])
+        self.assertNotIn('-d', removed[0])
+
+    def test_disabled_forwarding_does_not_install_firewall_rules(self):
+        commands = []
+
+        def run(args, optional=False, input_text=None):
+            commands.append(args)
+            if args[0] == '/usr/sbin/sysctl':
+                return subprocess.CompletedProcess(args, 0, '0\n')
+            return self.run_for(args, optional, input_text)
+
+        with patch.dict(self.namespace, {'run': run}):
+            with self.assertRaisesRegex(RuntimeError, 'forwarding выключен'):
+                self.namespace['verify_default_gateway_route'](install_missing=True)
+        self.assertFalse(any('-I' in command for command in commands))
+
     def test_default_route_rejects_a_different_client_egress(self):
         def different_route(args, optional=False, input_text=None):
             if args[:4] == ['/usr/sbin/ip', '-j', '-4', 'route'] and args[4] == 'show':
@@ -91,7 +161,7 @@ class GatewayModeTests(unittest.TestCase):
         cleanup.assert_called_once_with()
         systemctl.assert_has_calls([unittest.mock.call('stop', 'sing-box.service'), unittest.mock.call('start', 'sing-box-happ-server.service')])
         configure_happ.assert_called_once_with('vless', 'auto-10')
-        verify_route.assert_has_calls([unittest.mock.call(require_selected=False), unittest.mock.call()])
+        verify_route.assert_has_calls([unittest.mock.call(require_selected=False, install_missing=True), unittest.mock.call()])
         save_mode.assert_called_once_with('default')
 
     def test_default_mode_restarts_happ_when_restoring_provider_route(self):

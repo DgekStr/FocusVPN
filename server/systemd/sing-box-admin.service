@@ -18,6 +18,7 @@ PrivateDevices=yes
 ProtectSystem=full
 ProtectHome=true
 ProtectKernelTunables=true
+BindReadOnlyPaths=/proc/uptime
 ProtectControlGroups=true
 ProtectKernelModules=true
 RestrictSUIDSGID=true

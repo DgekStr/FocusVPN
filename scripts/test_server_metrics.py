@@ -9,7 +9,15 @@ from server_metrics import ServerMetrics, format_decimal, format_uptime, parse_c
 
 
 class ServerMetricsTests(unittest.TestCase):
+    def test_panel_service_preserves_container_uptime_mount(self):
+        path = Path(__file__).resolve().parents[1] / 'server' / 'systemd' / 'sing-box-admin.service'
+        unit = path.read_text(encoding='utf-8')
+        self.assertIn('BindReadOnlyPaths=/proc/uptime', unit)
+        self.assertIn('ProtectKernelTunables=true', unit)
+
     def test_formats_uptime_and_localized_decimal(self):
+        self.assertEqual(format_uptime(2 * 3600 + 41 * 60), '2ч 41м')
+        self.assertEqual(format_uptime(3599), '0ч 59м')
         self.assertEqual(format_uptime(17 * 86400 + 18 * 3600), '17дн 18ч')
         self.assertEqual(format_decimal(53.1), '53,1')
         self.assertEqual(format_decimal(811274, 0), '811 274')

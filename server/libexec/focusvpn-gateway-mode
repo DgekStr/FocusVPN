@@ -97,7 +97,14 @@ def configure_happ_outbound(mode, original_route=None):
     return previous_route
 
 
-def verify_default_gateway_route(require_selected=True):
+def remove_added_forwarding_rules(rules):
+    for rule in reversed(rules):
+        removal = list(rule)
+        removal[removal.index('-C')] = '-D'
+        run(removal, optional=True)
+
+
+def verify_default_gateway_route(require_selected=True, install_missing=False):
     defaults = json.loads(run(['/usr/sbin/ip', '-j', '-4', 'route', 'show', 'default']).stdout)
     if not defaults:
         raise RuntimeError('Основной IPv4-шлюз сервера не настроен.')
@@ -117,17 +124,35 @@ def verify_default_gateway_route(require_selected=True):
     if not device:
         raise RuntimeError('У основного шлюза сервера не определён сетевой интерфейс.')
     rules = (
-        [IPTABLES, '-C', 'FORWARD', '-i', SERVER_WG_INTERFACE, '-o', device, '-j', 'ACCEPT'],
-        [IPTABLES, '-C', 'FORWARD', '-i', device, '-o', SERVER_WG_INTERFACE, '-m', 'conntrack', '--ctstate', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'],
+        [IPTABLES, '-C', 'FORWARD', '-i', SERVER_WG_INTERFACE, '-o', device, '-s', str(VPN_NETWORK), '-j', 'ACCEPT'],
+        [IPTABLES, '-C', 'FORWARD', '-i', device, '-o', SERVER_WG_INTERFACE, '-d', str(VPN_NETWORK), '-m', 'conntrack', '--ctstate', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'],
         [IPTABLES, '-t', 'nat', '-C', 'POSTROUTING', '-s', str(VPN_NETWORK), '-o', device, '-j', 'MASQUERADE'],
     )
-    for rule in rules:
-        if run(rule, optional=True).returncode != 0:
-            raise RuntimeError('Не настроены FORWARD/NAT правила для выхода через основной шлюз сервера.')
     forwarding = run(['/usr/sbin/sysctl', '-n', 'net.ipv4.ip_forward'])
     if forwarding.stdout.strip() != '1':
         raise RuntimeError('IPv4 forwarding выключен на сервере.')
-    return selected[0] if require_selected else default
+    added = []
+    try:
+        for rule in rules:
+            if run(rule, optional=True).returncode == 0:
+                continue
+            if not install_missing:
+                raise RuntimeError('Не настроены FORWARD/NAT правила для выхода через основной шлюз сервера.')
+            insertion = list(rule)
+            operation = insertion.index('-C')
+            insertion[operation] = '-I'
+            insertion.insert(operation + 2, '1')
+            run(insertion)
+            added.append(rule)
+            if run(rule, optional=True).returncode != 0:
+                raise RuntimeError('Не удалось проверить добавленные FORWARD/NAT правила.')
+    except Exception:
+        remove_added_forwarding_rules(added)
+        raise
+    result = dict(selected[0] if require_selected else default)
+    if install_missing:
+        result['_added_forwarding'] = added
+    return result
 
 
 def save_mode(mode, happ_route=None):
@@ -209,9 +234,10 @@ def apply_default():
     previous_mode = previous_state.get('mode', 'vless')
     if previous_mode not in ('vless', 'wireguard', 'default'):
         previous_mode = 'vless'
-    verify_default_gateway_route(require_selected=False)
     previous_happ_bytes = HAPP_CONFIG_PATH.read_bytes()
     previous_happ = json.loads(previous_happ_bytes)
+    prepared_route = verify_default_gateway_route(require_selected=False, install_missing=True)
+    added_rules = prepared_route.get('_added_forwarding', [])
     original_happ_route = previous_state.get('happ_route') if previous_mode == 'wireguard' else None
     try:
         cleanup_wireguard()
@@ -223,6 +249,7 @@ def apply_default():
             systemctl('start', 'sing-box-happ-server.service')
         verify_default_gateway_route()
     except Exception:
+        remove_added_forwarding_rules(added_rules)
         write_json(HAPP_CONFIG_PATH, previous_happ, 0o640, 'sing-box')
         if previous_mode == 'wireguard':
             apply_wireguard()

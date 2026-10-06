@@ -20,7 +20,7 @@ def format_uptime(seconds):
     hours = remainder // 3600
     if days:
         return f'{days}дн {hours}ч'
-    minutes = remainder // 60
+    minutes = (remainder % 3600) // 60
     return f'{hours}ч {minutes}м'
 
 

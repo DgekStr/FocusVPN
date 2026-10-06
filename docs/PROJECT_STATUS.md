@@ -28,7 +28,7 @@
 | M20. Default gateway mode | Done, opt-in | Прямой egress через основной gateway для WG-клиентов; route/FORWARD/NAT preflight, LAN deny сохранён |
 | M21. Standalone bootstrap | Done | Git-clone bootstrap, checksum-verified sing-box, интерактивный scrypt auth, все systemd units |
 | M22. HTTPS panel entry | Done | `vpn.focuslens.dev` Nginx proxy, trusted-proxy IP/session binding, Secure cookie, subscription origin |
-| M23. Clean-clone verification | In progress | Git update v2.1.6 с очисткой восьми placeholders, редактором и единым пунктом меню ожидает smoke на Ubuntu 22.04; предыдущая установка/API wg-easy проверены |
+| M23. Clean-clone verification | Done | Git update v2.1.6 проверен на Ubuntu 22.04: восемь placeholders удалены с backup, установленный renderer содержит редактор и один пункт VPN-серверы, config check/API wg-easy проходят, HTTPS :7445 доступен; 122 Python-теста и Node/publication checks прошли |
 | M24. Host metrics | Done | Settings показывает LAN IP/OS, uptime, CPU/LAN peaks за 24 часа и boot RX/TX; local collector сохраняет samples в `/mnt/stat/` |
 | M25. HAPP live/history UI | Done | Группировка IP/protocol, per-profile lifetime reset, history traffic chart, VIP endpoint из subscription URL |
 | M26. Panel favicon | Done | Зелёная Canvas-анимация; сохраняется PNG fallback |

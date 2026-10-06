@@ -79,4 +79,4 @@
 - Безопасный deploy script с dry-run/rollback и schema/config migration versioning.
 - Authenticated health/latency dashboard и ручная проверка Mattermost доставки после настройки действующего webhook.
 
-Текущая версия FocusVPN — `v2.1.6`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway оставлен в VLESS. Редактор, единый пункт меню и безопасная миграция placeholders покрыты регрессионными проверками; Git update на тестовом хосте проверяется отдельно. Смена служебного пароля через Settings остаётся отдельной задачей.
+Текущая версия FocusVPN — `v2.1.6`; CRM release `1.0.0.0.9` не меняет версию VPN. Production gateway оставлен в VLESS. Git update на `.41` проверен: восемь placeholders очищены с backup, renderer меню/редактора и HTTPS-панель проверены, wg-easy API работает. Смена служебного пароля через Settings остаётся отдельной задачей.

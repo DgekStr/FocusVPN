@@ -116,6 +116,10 @@ check_legacy_wireguard() {
       [[ "$unit" == "wg-quick@wg-client.service" ]] && continue
       [[ -n "$unit" ]] && legacy_details+=("active service $unit")
     done < <(systemctl list-units --type=service --state=running --no-legend 'wg-quick@*.service' 2>/dev/null | awk '{print $1}')
+    while IFS= read -r unit; do
+      [[ "$unit" == "wg-quick@wg-client.service" ]] && continue
+      [[ -n "$unit" ]] && legacy_details+=("enabled service $unit")
+    done < <(systemctl list-unit-files --type=service --state=enabled --no-legend 2>/dev/null | awk '$1 ~ /^wg-quick@.+\.service$/ {print $1}')
   fi
 
   shopt -s nullglob
@@ -174,6 +178,10 @@ check_legacy_wireguard() {
       [[ "$unit" == "wg-quick@wg-client.service" ]] && continue
       [[ -z "$unit" ]] || systemctl disable --now "$unit"
     done < <(systemctl list-units --type=service --state=running --no-legend 'wg-quick@*.service' 2>/dev/null | awk '{print $1}')
+    while IFS= read -r unit; do
+      [[ "$unit" == "wg-quick@wg-client.service" ]] && continue
+      [[ -z "$unit" ]] || systemctl disable "$unit"
+    done < <(systemctl list-unit-files --type=service --state=enabled --no-legend 2>/dev/null | awk '$1 ~ /^wg-quick@.+\.service$/ {print $1}')
   fi
   for path in /etc/wireguard /etc/wg-easy; do
     if [[ -d "$path" ]] && find "$path" -mindepth 1 -print -quit | grep -q .; then

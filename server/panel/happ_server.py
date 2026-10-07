@@ -209,6 +209,7 @@ HAPP_DIRECT_SITES = (
     'domain:yappy.media',
     'domain:youdrive.today',
     'domain:zvuk.com',
+    'domain:focuslens.dev',
 )
 SUBSCRIPTION_ANNOUNCEMENT = (
     '🔒Это частный VPN сервер, для работы команды разработчиков focuslens.dev. '
@@ -260,7 +261,7 @@ def subscription_content(user, traffic, information_url=None):
     headers['announce'] = 'base64:' + base64.b64encode(announcement.encode('utf-8')).decode('ascii')
     if information_url:
         headers['profile-web-page-url'] = information_url
-    routing_profile = {'Name': 'FocusVPN Direct', 'GlobalProxy': 'true', 'LastUpdated': '1791417600', 'DirectSites': list(HAPP_DIRECT_SITES)}
+    routing_profile = {'Name': 'FocusVPN Direct', 'GlobalProxy': 'true', 'LastUpdated': '1791417601', 'DirectSites': list(HAPP_DIRECT_SITES)}
     routing_link = 'happ://routing/onadd/' + base64.b64encode(json.dumps(routing_profile, separators=(',', ':')).encode('utf-8')).decode('ascii')
     body = ''.join(f'#{key}: {value}\n' for key, value in headers.items()) + routing_link + '\n' + user['link'] + '\n'
     return body.encode('utf-8'), headers

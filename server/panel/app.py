@@ -1680,7 +1680,10 @@ def render_outbounds_page(config, query, message='', kind='success'):
     rows = []
     for outbound in servers:
         tag = outbound['tag']
-        selected = ' selected' if current_route == tag else ''
+        route_indicator = (
+            '<span class="status-dot route-active" role="img" aria-label="Маршрут по умолчанию" title="Маршрут по умолчанию"></span>'
+            if current_route == tag else ''
+        )
         latency = checks[tag].get('latency_ms')
         latency_text = f'{latency:.2f}' if isinstance(latency, (int, float)) else '—'
         failed_class = ' class="outbound-failed"' if checks[tag]['state'] == 'error' else ''
@@ -1690,7 +1693,7 @@ def render_outbounds_page(config, query, message='', kind='success'):
             f'<td>{esc(outbound["type"])}</td>'
             f'<td>{esc(outbound.get("server", ""))}</td>'
             f'<td>{esc(outbound.get("server_port", ""))}</td>'
-            f'<td>{"active" if current_route == tag else ""}</td>'
+            f'<td>{route_indicator}</td>'
             f'<td data-outbound-check-tag="{esc(tag)}" role="status">{esc(checks[tag]["message"])}</td>'
             f'<td data-outbound-latency>{latency_text}</td>'
             f'<td data-outbound-checked-at>{esc(format_datetime(checks[tag].get("checked_at")))}</td>'

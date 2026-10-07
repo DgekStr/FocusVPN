@@ -13,7 +13,57 @@ function element() {
   };
 }
 
+function testUserCreationDialog() {
+  const clickHandlers = [];
+  const keyHandlers = [];
+  const name = { value: 'draft', focus() { this.focused = true; } };
+  const expiry = { value: '2030-01-01T12:00' };
+  const form = { reset() { name.value = ''; expiry.value = ''; } };
+  const dialog = {
+    open: false,
+    showModal() { this.open = true; },
+    close() { this.open = false; },
+    closest() { return null; },
+    getBoundingClientRect() { return { left: 100, top: 100, right: 500, bottom: 400 }; },
+    querySelector(selector) { return selector === 'form' ? form : selector === '[name="name"]' ? name : null; },
+  };
+  const sandbox = {
+    document: {
+      addEventListener(type, handler) {
+        if (type === 'click') clickHandlers.push(handler);
+        if (type === 'keydown') keyHandlers.push(handler);
+      },
+      querySelector(selector) { return selector === '[data-happ-user-create-dialog]' ? dialog : null; },
+    },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'server', 'panel', 'static', 'happ-actions.js'), 'utf8'), sandbox);
+  function click(selector) {
+    for (const handler of clickHandlers) {
+      handler({ target: { closest(candidate) { return candidate === selector ? {} : null; } }, preventDefault() {} });
+    }
+  }
+  click('[data-happ-user-create-open]');
+  assert.equal(dialog.open, true);
+  assert.equal(name.value, '');
+  assert.equal(expiry.value, '');
+  assert.equal(name.focused, true);
+  click('[data-happ-user-create-cancel]');
+  assert.equal(dialog.open, false);
+  click('[data-happ-user-create-open]');
+  for (const handler of clickHandlers) handler({ target: dialog, clientX: 200, clientY: 200 });
+  assert.equal(dialog.open, true);
+  for (const handler of clickHandlers) handler({ target: dialog, clientX: 20, clientY: 20 });
+  assert.equal(dialog.open, false);
+  click('[data-happ-user-create-open]');
+  for (const handler of keyHandlers) handler({ key: 'Escape' });
+  assert.equal(dialog.open, false);
+  sandbox.document.querySelector = () => null;
+  click('[data-happ-user-create-open]');
+  console.log('PASS: HAPP user creation dialog opens, focuses, resets and cancels safely');
+}
+
 async function main() {
+  testUserCreationDialog();
   const connections = element();
   const users = element();
   const topUsers = element();

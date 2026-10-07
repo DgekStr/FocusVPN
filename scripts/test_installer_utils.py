@@ -1,4 +1,7 @@
 import json
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -48,6 +51,7 @@ class InstallerUtilsTests(unittest.TestCase):
     def test_install_flow_confirms_before_changes_and_starts_panel_and_wg_easy(self):
         installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')
         main = installer.rsplit('\nmain() {', 1)[1]
+        self.assertLess(main.index('validate_runtime_bundle'), main.index('confirm_install_plan'))
         self.assertLess(main.index('confirm_install_plan'), main.index('check_legacy_wireguard'))
         self.assertLess(main.index('check_legacy_wireguard'), main.index('install_packages'))
         self.assertIn('configure_nginx_proxy', main)
@@ -57,6 +61,35 @@ class InstallerUtilsTests(unittest.TestCase):
         self.assertIn("grep -q '^INIT_PASSWORD='", installer)
         self.assertIn('removing one-time wg-easy initialization credentials', installer)
         self.assertIn('install -d -m 0750 -o root -g sing-box "$SING_BOX_ROOT" "$HAPP_ROOT"', installer)
+        self.assertIn('python3 -m compileall -q "$APP_ROOT"', installer)
+
+    def test_runtime_bundle_preflight_rejects_missing_files(self):
+        bash = str(Path('C:/Program Files/Git/bin/bash.exe')) if os.name == 'nt' else shutil.which('bash')
+        if not bash or not Path(bash).is_file():
+            self.skipTest('Bash is required for installer preflight validation')
+        root = Path(__file__).resolve().parents[1]
+        installer = (root / 'scripts' / 'install.sh').read_text(encoding='utf-8')
+        function = 'validate_runtime_bundle() {' + installer.split('validate_runtime_bundle() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
+        script = 'fail() { printf "%s\\n" "$*" >&2; exit 1; }\n' + function + '\nvalidate_runtime_bundle\n'
+        complete = subprocess.run([bash], input=script, text=True, capture_output=True, env={**os.environ, 'REPO_ROOT': root.as_posix()})
+        self.assertEqual(complete.returncode, 0, complete.stderr)
+        with tempfile.TemporaryDirectory() as directory:
+            incomplete = Path(directory)
+            for source in ('VERSION', 'server/panel'):
+                destination = incomplete / source
+                if (root / source).is_dir():
+                    shutil.copytree(root / source, destination, ignore=shutil.ignore_patterns('__pycache__'))
+                else:
+                    shutil.copyfile(root / source, destination)
+            for missing in ('VERSION', 'server/panel/happ_server.py', 'server/panel/static/panel.css', 'server/panel/static/happ-actions.js'):
+                with self.subTest(missing=missing):
+                    path = incomplete / missing
+                    original = path.read_bytes()
+                    path.unlink()
+                    result = subprocess.run([bash], input=script, text=True, capture_output=True, env={**os.environ, 'REPO_ROOT': incomplete.as_posix()})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('runtime bundle is incomplete: ' + missing, result.stderr)
+                    path.write_bytes(original)
 
     def test_legacy_wireguard_configs_are_backed_up_only_after_confirmation(self):
         installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')

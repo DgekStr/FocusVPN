@@ -234,6 +234,19 @@ ensure_sing_box_account() {
   install -d -m 0750 -o sing-box -g sing-box /var/lib/sing-box /var/lib/sing-box-happ-server
 }
 
+validate_runtime_bundle() {
+  local path
+  for path in VERSION \
+    server/panel/app.py server/panel/panel_ui.py server/panel/crm_bridge.py \
+    server/panel/happ_server.py server/panel/happ_server_ui.py server/panel/happ_users.py \
+    server/panel/happ_stats.py server/panel/happ_history.py server/panel/happ_history_ui.py \
+    server/panel/server_metrics.py server/panel/vless_monitor.py \
+    server/panel/wg_admin.py server/panel/wg_easy_api.py \
+    server/panel/static/panel.css server/panel/static/panel.js server/panel/static/happ-actions.js; do
+    [[ -s "$REPO_ROOT/$path" ]] || fail "runtime bundle is incomplete: $path"
+  done
+}
+
 install_tree() {
   install -d -m 0755 "$APP_ROOT/static" /usr/local/libexec /etc/systemd/system/sing-box.service.d
   install -d -m 0750 "$CONFIG_ROOT" "$ADMIN_ROOT"
@@ -248,6 +261,7 @@ install_tree() {
   install -d -m 0755 /etc/systemd/system/sing-box.service.d
   install -m 0644 "$REPO_ROOT/server/systemd/sing-box.service.d/gateway.conf" /etc/systemd/system/sing-box.service.d/gateway.conf
   install -m 0644 "$REPO_ROOT/server/systemd/sing-box.service" /etc/systemd/system/sing-box.service
+  python3 -m compileall -q "$APP_ROOT"
 }
 
 install_if_missing() {
@@ -479,6 +493,7 @@ enable_services() {
 }
 
 main() {
+  validate_runtime_bundle
   confirm_install_plan
   check_legacy_wireguard
   install_packages
@@ -505,6 +520,7 @@ main() {
   log "started services: docker, nginx, sing-box-admin, wg-easy-private-ui, wg-easy container"
   log "admin panel: https://$server_ip:7445 (self-signed certificate; browser warning expected)"
   log "wg-easy API configured automatically; credentials stored privately in $ADMIN_ROOT/wg-easy-api.json"
+  log "HAPP subscriptions include FocusVPN Direct; refresh and reconnect the client after routing files are ready"
 }
 
 main "$@"

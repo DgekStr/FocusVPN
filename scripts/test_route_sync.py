@@ -134,6 +134,27 @@ class RouteSyncTests(unittest.TestCase):
         self.assertNotIn('data-panel-nav="vless"', page)
         self.assertFalse(hasattr(app, 'update_hysteria2_auto8'))
 
+    def test_manager_marks_only_default_route_with_green_indicator(self):
+        self.patch('service_state', return_value='inactive')
+        self.gateway['outbounds'].append({'type': 'vless', 'tag': 'auto-9'})
+        for selected_tag in ('auto-8', 'auto-9'):
+            with self.subTest(selected_tag=selected_tag):
+                self.gateway['route']['final'] = selected_tag
+                page = app.render_outbounds_page(self.gateway, {})
+                self.assertRegex(page, r'href="/panel\.css\?v=[^"]+"')
+                rows = page.split('<tbody>', 1)[1].split('</tbody>', 1)[0]
+                self.assertEqual(rows.count('class="status-dot route-active"'), 1)
+                self.assertNotIn('<td>active</td>', rows)
+                for row in rows.split('</tr>'):
+                    if '<strong>' not in row:
+                        continue
+                    if f'<strong>{selected_tag}</strong>' in row:
+                        self.assertIn('class="status-dot route-active"', row)
+                        self.assertIn('aria-label="Маршрут по умолчанию"', row)
+                        self.assertIn('title="Маршрут по умолчанию"', row)
+                    else:
+                        self.assertNotIn('route-active', row)
+
     def test_manager_renders_edit_modal_and_short_check_button(self):
         self.patch('service_state', return_value='inactive')
         page = app.render_outbounds_page(self.gateway, {})

@@ -1,4 +1,23 @@
 (() => {
+  document.addEventListener('click', (event) => {
+    const dialog = document.querySelector('[data-happ-user-create-dialog]');
+    if (!dialog) return;
+    if (event.target.closest('[data-happ-user-create-open]')) {
+      event.preventDefault();
+      dialog.querySelector('form')?.reset();
+      dialog.showModal();
+      dialog.querySelector('[name="name"]')?.focus();
+    } else if (event.target.closest('[data-happ-user-create-cancel]')) {
+      event.preventDefault();
+      dialog.close();
+    } else if (event.target === dialog) {
+      const bounds = dialog.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+        dialog.close();
+      }
+    }
+  });
+
   function copyLink(link, button, successText = 'Скопировано') {
     const originalText = button.textContent;
     const done = () => {
@@ -86,7 +105,11 @@
   });
 
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeQr();
+    if (event.key === 'Escape') {
+      const dialog = document.querySelector('[data-happ-user-create-dialog]');
+      if (dialog?.open) dialog.close();
+      closeQr();
+    }
   });
 
   document.addEventListener('submit', (event) => {

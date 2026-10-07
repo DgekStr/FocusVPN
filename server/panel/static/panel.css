@@ -58,6 +58,7 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); line-height: 1.1; letter-spac
 .status { display: inline-flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface); box-shadow: 0 10px 26px rgba(0, 0, 0, .2); color: #dfe9ff; font-size: 13px; white-space: nowrap; }
 .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); }
 .status-dot.ok { background: var(--ok); box-shadow: 0 0 0 4px rgba(94, 234, 212, .12); }
+.status-dot.route-active { display: inline-block; vertical-align: middle; background: #22c55e; }
 
 .panel-stack { display: grid; gap: 18px; }
 .settings-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: stretch; }
@@ -141,6 +142,11 @@ button:disabled { cursor: default; filter: none; opacity: .72; }
 .gateway-dialog h2 { margin: 0 0 10px; font-size: 19px; }
 .gateway-dialog p { color: var(--muted); }
 .gateway-dialog .actions { justify-content: flex-end; }
+[data-happ-user-create-dialog] { max-height: calc(100dvh - 32px); overflow: auto; }
+[data-happ-user-create-dialog] .form-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.happ-users-heading { flex-wrap: wrap; }
+.happ-users-heading h2 { margin: 0; }
+.happ-users-heading button { max-width: 100%; white-space: normal; }
 [data-outbound-edit-dialog] { width: min(100% - 32px, 760px); max-height: calc(100dvh - 32px); overflow: auto; }
 [data-outbound-edit-json] { min-height: min(420px, 50dvh); font-family: Consolas, monospace; }
 
@@ -178,6 +184,8 @@ th:last-child, td:last-child { padding-right: 0; }
 .qr { width: 100%; max-width: 260px; padding: 12px; background: #fff; }
 
 .status-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+[data-happ-live] { height: 560px; overflow-y: auto; scrollbar-width: none; overscroll-behavior-y: contain; }
+[data-happ-live]::-webkit-scrollbar { display: none; }
 .happ-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 18px 0; }
 .happ-connections { min-width: 840px; }
 .happ-traffic-top { display: grid; gap: 14px; }

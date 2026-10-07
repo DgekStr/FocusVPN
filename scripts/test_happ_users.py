@@ -18,7 +18,7 @@ from urllib.parse import urlsplit, parse_qs, quote, unquote, urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
 from happ_users import HappUsers, build_user_config, user_link, now_utc, write_private_json
-from happ_server import happ_add_link, subscription_content, SUBSCRIPTION_ANNOUNCEMENT, subscription_information_page, vless_link_for_subscription
+from happ_server import happ_add_link, subscription_content, HAPP_DIRECT_SITES, SUBSCRIPTION_ANNOUNCEMENT, subscription_information_page, vless_link_for_subscription
 from happ_history import HappHistory
 if sys.platform == 'win32':
     sys.modules.setdefault('grp', types.ModuleType('grp'))
@@ -229,6 +229,43 @@ class HappUserTests(unittest.TestCase):
         self.assertIn(b'#subscription-userinfo: upload=30; download=120; total=0', content)
         self.assertTrue(content.decode('utf-8').endswith(self.link + '\n'))
 
+    def test_subscription_routing_preserves_existing_access(self):
+        self.manager.create('Alice')
+        paths = (self.config_path, self.public_path, self.manager.registry_path, self.manager.subscription_key_path)
+        originals = {path: path.read_bytes() for path in paths}
+        applied_count = len(self.applied)
+        routing_links = []
+        vip_url = self.manager.subscription_urls('https://vpn.example.com')['VIP']
+        vip = self.manager.subscription_user(vip_url.rsplit('/', 1)[1])
+        for user in (vip, *self.manager.users()):
+            with self.subTest(user=user['id']):
+                token = self.manager.subscription_token(user)
+                for iteration in range(2):
+                    content, headers = subscription_content(user, {'download_bytes': iteration})
+                    lines = content.decode('utf-8').splitlines()
+                    self.assertEqual(lines[-1], user['link'])
+                    self.assertEqual(lines.count(user['link']), 1)
+                    routing = [line for line in lines if line.startswith('happ://routing/onadd/')]
+                    self.assertEqual(len(routing), 1)
+                    profile = json.loads(base64.b64decode(routing[0].removeprefix('happ://routing/onadd/'), validate=True))
+                    self.assertEqual(profile['Name'], 'FocusVPN Direct')
+                    self.assertEqual(profile['GlobalProxy'], 'true')
+                    self.assertEqual(dt.datetime.fromtimestamp(int(profile['LastUpdated']), dt.timezone.utc), dt.datetime(2026, 10, 8, tzinfo=dt.timezone.utc))
+                    self.assertEqual(profile['DirectSites'], list(HAPP_DIRECT_SITES))
+                    self.assertEqual(len(profile['DirectSites']), len(set(profile['DirectSites'])))
+                    self.assertTrue(all(site.startswith('domain:') for site in profile['DirectSites']))
+                    for site in ('mtalk.google.com', 'push.apple.com', 'max.ru', 'sberbank.ru', 'vk.com', 'api.ipify.org', 'ifconfig.me', 'zvuk.com'):
+                        self.assertIn('domain:' + site, profile['DirectSites'])
+                    self.assertNotIn('routing', headers)
+                    routing_links.append(routing[0])
+                    self.assertEqual(self.manager.subscription_token(user), token)
+                    self.assertEqual(self.manager.subscription_user(token)['link'], user['link'])
+        self.assertEqual(len(set(routing_links)), 1)
+        self.assertEqual(len(self.applied), applied_count)
+        for path, original in originals.items():
+            self.assertEqual(path.read_bytes(), original)
+        self.vip_intact()
+
     def test_open_ipv4_network_keeps_admin_session_requirement(self):
         handler = object.__new__(app.Handler)
         handler.client_address = ('203.0.113.42', 40000)
@@ -318,6 +355,36 @@ class HappUserTests(unittest.TestCase):
         self.assertIn('Нарастающий итог с момента включения накопительной статистики', page)
         self.assertIn('Endpoint: subscriptions.example.net:9445', page)
         self.assertGreater(page.index('VIP VLESS · существующая ссылка'), page.index('Журнал персонального доступа'))
+
+    def test_live_connections_precede_user_management(self):
+        with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
+            page = happ_server_ui.page([])
+        connections_position = page.index('Подключения HAPP')
+        users_position = page.index('Пользователи HAPP')
+        self.assertLess(connections_position, users_position)
+        self.assertLess(page.index('data-happ-connections'), page.index('id="happ_user_name"'))
+        self.assertLess(users_position, page.index('TOP-5 по трафику'))
+        self.assertNotIn('Имя подтверждается журналом VLESS-аутентификации;', page)
+        self.assertNotIn('не являются накопленным итогом закрытых сессий.', page)
+
+    def test_user_creation_is_in_styled_modal(self):
+        with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
+            page = happ_server_ui.page([], 'test-csrf')
+        users_panel = page.split('<h2>Пользователи HAPP</h2>', 1)[1].split('TOP-5 по трафику', 1)[0]
+        self.assertIn('type="button" data-happ-user-create-open>Добавить нового пользователя', users_panel)
+        self.assertNotIn('action="/happ-users/create"', users_panel)
+        self.assertNotIn('id="happ_user_name"', users_panel)
+        modal = page.split('<dialog class="gateway-dialog" data-happ-user-create-dialog', 1)[1].split('</dialog>', 1)[0]
+        self.assertIn('aria-labelledby="happ-user-create-title"', modal)
+        self.assertIn('method="post" action="/happ-users/create" data-happ-user-create-form', modal)
+        self.assertIn('name="csrf" value="test-csrf"', modal)
+        self.assertIn('name="name" maxlength="80" autocomplete="off" required autofocus', modal)
+        self.assertIn('name="expires_at" type="datetime-local"', modal)
+        self.assertIn('type="button" data-happ-user-create-cancel>Отмена', modal)
+        self.assertIn('type="submit">Создать пользователя', modal)
+        self.assertEqual(page.count('action="/happ-users/create"'), 1)
+        self.assertIn('/panel.css?v=2.1.7-happ-live-scroll-hidden', page)
+        self.assertIn('/happ-actions.js?v=10', page)
 
     def test_happ_server_vip_endpoint_brackets_ipv6_subscription_host(self):
         with patch.object(happ_server_ui, 'load_state', return_value={'server': 'old.example.net'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
@@ -409,6 +476,12 @@ class HappUserTests(unittest.TestCase):
                 self.assertIn('#announce: ' + announcement, body)
                 self.assertIn(users[0]['link'], body)
                 self.assertNotIn(users[1]['link'], body)
+                routing = [line for line in body.splitlines() if line.startswith('happ://routing/onadd/')]
+                self.assertEqual(len(routing), 1)
+                profile = json.loads(base64.b64decode(routing[0].removeprefix('happ://routing/onadd/'), validate=True))
+                self.assertEqual(profile['DirectSites'], list(HAPP_DIRECT_SITES))
+                self.assertEqual(profile['LastUpdated'], '1791417600')
+                self.assertIsNone(response.getheader('routing'))
                 connection.request('GET', '/happ-info')
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
@@ -429,7 +502,7 @@ class HappUserTests(unittest.TestCase):
                     refreshed = base64.b64decode(response.getheader('announce').removeprefix('base64:')).decode('utf-8')
                     self.assertEqual(refreshed, SUBSCRIPTION_ANNOUNCEMENT + '\nСкачано: ' + label + ' / ∞')
                     self.assertEqual(response.getheader('subscription-userinfo'), 'upload=20; download=' + str(amount) + '; total=0')
-                    response.read()
+                    self.assertIn(routing[0], response.read().decode('utf-8'))
                 for route in ('/happ-server', '/happ-server/live'):
                     connection.request('GET', route)
                     response = connection.getresponse()

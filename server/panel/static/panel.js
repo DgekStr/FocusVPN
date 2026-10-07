@@ -197,12 +197,12 @@
           tooltip: { callbacks: { title: (items) => items.length ? clock(items[0].parsed.x) + ' UTC' : '', label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(2)} МБ/с` } },
         },
         scales: {
-          x: { type: 'linear', min: now - 60000, max: now, border: { display: false }, grid: { display: false }, ticks: { color: '#8ea0be', maxTicksLimit: 5, maxRotation: 0, font: { size: 10 }, callback: clock } },
+          x: { type: 'linear', min: now - 600000, max: now, border: { display: false }, grid: { display: false }, ticks: { color: '#8ea0be', maxTicksLimit: 5, maxRotation: 0, font: { size: 10 }, callback: clock } },
           y: { beginAtZero: true, suggestedMax: 1, border: { display: false }, grid: { color: 'rgba(142,160,190,.12)' }, ticks: { color: '#8ea0be', maxTicksLimit: 5, font: { size: 10 }, callback: (value) => `${Number(value).toFixed(1)} МБ/с` } },
         },
       },
     });
-    happTraffic = { chart, previous: new Map(), sampledAt: null, series: new Map() };
+    happTraffic = { chart, previous: new Map(), sampledAt: null, colors: new Map(), minutes: 10, historyDue: 0, historyLoading: false, historyRequest: 0, historyController: null };
   }
 
   function happTrafficStatus(text, failed = false) {
@@ -239,59 +239,110 @@
     }
     state.previous = samples;
     state.sampledAt = timestamp;
-    for (const key of state.series.keys()) {
-      if (!users.has(key)) state.series.delete(key);
-    }
+    const total = document.querySelector('[data-happ-speed]');
+    if (total) total.textContent = measured ? `${[...rates.values()].reduce((sum, rate) => sum + rate, 0).toFixed(2)} МБ/с` : '— МБ/с';
+  }
+
+  function renderHappTrafficHistory(payload, state) {
     const palette = ['#22d3ee', '#f472b6', '#5eead4', '#fbbf24', '#a78bfa', '#fb7185', '#38bdf8', '#a3e635', '#fb923c', '#c4b5fd'];
-    const newcomers = [...users.entries()].filter(([key]) => !state.series.has(key)).sort((first, second) => rates.get(second[0]) - rates.get(first[0]) || first[0].localeCompare(second[0]));
-    for (const [key, user] of newcomers) {
-      if (state.series.size === 10) break;
-      const used = new Set([...state.series.values()].map((series) => series.color));
-      state.series.set(key, { color: palette.find((color) => !used.has(color)), name: user.user_name || 'Не определён', points: [] });
-    }
+    const users = (Array.isArray(payload.users) ? payload.users : []).slice(0, 10);
+    const reserved = new Set(users.map((user) => state.colors.get(String(user.user_key))).filter(Boolean));
+    const used = new Set();
     const legend = document.querySelector('[data-happ-chart-legend]');
     legend?.replaceChildren();
     const datasets = [];
-    for (const [key, series] of state.series) {
-      series.name = users.get(key).user_name || 'Не определён';
-      const rate = measured ? rates.get(key) : null;
-      series.points.push({ x: timestamp, y: rate });
-      series.points = series.points.filter((point) => point.x >= timestamp - 60000).slice(-120);
-      datasets.push({ label: series.name, data: series.points, borderColor: series.color, backgroundColor: series.color + '0a', borderWidth: 2, pointRadius: 0, pointHitRadius: 8, tension: .3, fill: true, spanGaps: false });
+    let maximum = 0;
+    for (const user of users) {
+      const key = String(user.user_key);
+      let color = state.colors.get(key);
+      if (!color || used.has(color)) color = palette.find((value) => !reserved.has(value) && !used.has(value)) || palette.find((value) => !used.has(value));
+      state.colors.set(key, color);
+      used.add(color);
+      const nameText = user.user_name || 'Не определён';
+      const peak = user.peak_bytes_per_second === null ? null : Math.max(0, Number(user.peak_bytes_per_second) || 0) / 1048576;
+      maximum = Math.max(maximum, peak || 0);
+      datasets.push({ label: nameText, data: Array.isArray(user.points) ? user.points : [], borderColor: color, backgroundColor: color + '0a', borderWidth: 2, pointRadius: 0, pointHitRadius: 8, tension: .3, cubicInterpolationMode: 'monotone', fill: true, spanGaps: false });
       if (legend) {
         const item = document.createElement('div');
         item.className = 'happ-chart-user';
         item.dataset.happUser = key;
         const swatch = document.createElement('span');
         swatch.className = 'happ-chart-swatch';
-        swatch.style.backgroundColor = series.color;
+        swatch.style.backgroundColor = color;
         const name = document.createElement('strong');
-        name.textContent = series.name;
-        name.title = series.name;
+        name.textContent = nameText;
+        name.title = nameText;
         const amount = document.createElement('small');
-        amount.textContent = rate === null ? 'Ожидание замера' : `${rate.toFixed(2)} МБ/с`;
+        amount.textContent = peak === null ? 'Ожидание замера' : `Пик: ${peak.toFixed(2)} МБ/с`;
+        amount.title = `Максимум за ${state.minutes} минут`;
         item.append(swatch, name, amount);
         legend.append(item);
       }
     }
-    if (legend && !state.series.size) {
+    if (legend && !users.length) {
       const empty = document.createElement('p');
       empty.className = 'muted';
-      empty.textContent = 'Нет активных пользователей.';
+      empty.textContent = 'В выбранном отрезке ещё нет замеров скорости.';
       legend.append(empty);
     }
-    const total = document.querySelector('[data-happ-speed]');
     const count = document.querySelector('[data-happ-chart-count]');
     const overflow = document.querySelector('[data-happ-chart-overflow]');
-    if (total) total.textContent = measured ? `${[...rates.values()].reduce((sum, rate) => sum + rate, 0).toFixed(2)} МБ/с` : '— МБ/с';
-    if (count) count.textContent = `${state.series.size} / 10`;
-    if (overflow) overflow.textContent = users.size > 10 ? `Ещё ${users.size - 10} активных пользователей` : '';
+    if (count) count.textContent = `${users.length} / 10`;
+    if (overflow) overflow.textContent = payload.user_count > 10 ? `Ещё ${payload.user_count - 10} пользователей в истории` : '';
     state.chart.data.datasets = datasets;
-    state.chart.options.scales.x.min = timestamp - 60000;
-    state.chart.options.scales.x.max = timestamp;
+    state.chart.options.scales.x.min = payload.since;
+    state.chart.options.scales.x.max = payload.until;
+    state.chart.options.scales.y.max = Math.max(1, maximum * 1.1);
     state.chart.update();
-    happTrafficStatus(!users.size ? 'Нет подключений' : measured ? 'Live' : 'Замер скорости');
+    const fresh = payload.sampled_at !== null && payload.until - payload.sampled_at <= 10000;
+    happTrafficStatus(!users.length ? 'Нет замеров' : fresh ? 'Live' : 'Нет свежих данных', users.length > 0 && !fresh);
   }
+
+  async function refreshHappTrafficHistory(force = false) {
+    const state = happTraffic;
+    if (!state || document.hidden || (!force && (state.historyLoading || Date.now() < state.historyDue))) return;
+    if (force) state.historyController?.abort();
+    const controller = new AbortController();
+    state.historyController = controller;
+    state.historyLoading = true;
+    state.historyDue = Date.now() + 5000;
+    const request = ++state.historyRequest;
+    const timeout = window.setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(panelPath(`/happ-server/traffic?minutes=${state.minutes}`), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+      if (response.status === 401) {
+        window.location.reload();
+        return;
+      }
+      if (!response.ok) throw new Error('History unavailable');
+      const payload = await response.json();
+      if (happTraffic === state && state.historyRequest === request && payload.minutes === state.minutes) renderHappTrafficHistory(payload, state);
+    } catch (_) {
+      if (happTraffic === state && state.historyRequest === request) happTrafficStatus('История недоступна', true);
+    } finally {
+      window.clearTimeout(timeout);
+      if (state.historyRequest === request) state.historyLoading = false;
+    }
+  }
+
+  document.addEventListener('change', (event) => {
+    const control = event.target.closest('[data-happ-chart-range]');
+    const minutes = Number(control?.value);
+    if (!happTraffic || ![10, 30, 60, 90].includes(minutes)) return;
+    happTraffic.minutes = minutes;
+    happTraffic.chart.data.datasets = [];
+    const until = Date.now();
+    happTraffic.chart.options.scales.x.min = until - minutes * 60000;
+    happTraffic.chart.options.scales.x.max = until;
+    document.querySelector('[data-happ-chart-legend]')?.replaceChildren();
+    const count = document.querySelector('[data-happ-chart-count]');
+    const overflow = document.querySelector('[data-happ-chart-overflow]');
+    if (count) count.textContent = '0 / 10';
+    if (overflow) overflow.textContent = '';
+    happTraffic.chart.update('none');
+    happTrafficStatus('Загрузка истории');
+    return refreshHappTrafficHistory(true);
+  });
 
   function renderHappLive(payload) {
     renderHappTraffic(payload);
@@ -414,12 +465,14 @@
       happLiveTimer = null;
     }
     if (happTraffic) {
+      happTraffic.historyController?.abort();
       happTraffic.chart.destroy();
       happTraffic = null;
     }
     const root = document.querySelector('[data-happ-live]');
     if (!root) return;
     createHappTraffic();
+    refreshHappTrafficHistory();
     if (!happTraffic && document.querySelector('[data-happ-traffic-chart]')) happTrafficStatus('График недоступен', true);
     const refresh = async () => {
       if (happLiveLoading || document.hidden || root.isConnected === false) return;
@@ -443,6 +496,7 @@
       } finally {
         window.clearTimeout(timeout);
         happLiveLoading = false;
+        if (document.querySelector('[data-happ-live]') === root) refreshHappTrafficHistory();
       }
     };
     refresh();

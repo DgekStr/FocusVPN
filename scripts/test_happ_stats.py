@@ -82,6 +82,7 @@ class HappStatsTests(unittest.TestCase):
             response.read.return_value = json.dumps({'connections': connections}).encode()
             payload = happ_stats.live_connections()
             again = happ_stats.live_connections()
+            collector = happ_stats.live_connections(include_visits=True)
             response.read.return_value = b'{"connections": []}'
             empty = happ_stats.live_connections()
         samples = payload['traffic_samples']
@@ -92,6 +93,8 @@ class HappStatsTests(unittest.TestCase):
         self.assertEqual(set(samples[0]), {'id', 'user_key', 'download_bytes'})
         self.assertEqual(payload['users'][0]['download_bytes'], 3584)
         self.assertEqual(payload['online_count'], 3)
+        self.assertEqual(len(collector['connections']), 3)
+        self.assertTrue(all(item.get('connection_key') and item.get('started_at') for item in collector['connections']))
         self.assertEqual(dt.datetime.fromisoformat(payload['sampled_at']).utcoffset(), dt.timedelta())
         self.assertEqual(empty['traffic_samples'], [])
         self.assertEqual(empty['users'], [])

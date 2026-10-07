@@ -386,6 +386,7 @@ def live_connections(include_visits=False, history_since=None):
         'top_users': rank_top_users(users),
     }
     if include_visits:
+        payload['connections'] = items
         with IDENTITY_LOCK:
             payload['visits'] = list(IDENTITY_CACHE['records'].get('pending_visits', {}).values())
     return payload

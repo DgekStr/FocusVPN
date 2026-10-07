@@ -1,6 +1,7 @@
 import datetime as dt
 import io
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -48,6 +49,19 @@ class HappHistory:
                     download_bytes INTEGER NOT NULL DEFAULT 0,
                     upload_bytes INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS download_rate_samples (
+                    sampled_at INTEGER NOT NULL,
+                    user_key TEXT NOT NULL,
+                    user_name TEXT NOT NULL,
+                    bytes_per_second REAL,
+                    PRIMARY KEY (sampled_at,user_key)
+                );
+                CREATE TABLE IF NOT EXISTS download_rate_counters (
+                    live_id TEXT PRIMARY KEY,
+                    user_key TEXT NOT NULL,
+                    download_bytes INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS rate_user_time ON download_rate_samples (user_key,sampled_at);
             ''')
             initialized = database.execute("SELECT 1 FROM settings WHERE key='lifetime_totals_initialized'").fetchone()
             if not initialized:
@@ -117,6 +131,7 @@ class HappHistory:
         items = payload.get('connections', [])
         visits = payload.get('visits', [])
         with self.lock, self.connect() as database:
+            self.record_download_rates(database, payload, observed)
             database.execute('UPDATE connections SET active=0 WHERE active=1')
             for visit in visits:
                 key = visit.get('connection_key')
@@ -173,6 +188,73 @@ class HappHistory:
             database.execute("INSERT OR REPLACE INTO settings VALUES ('last_collected_at', ?)", (observed,))
             database.execute("DELETE FROM settings WHERE key='last_error'")
         self.secure_files()
+
+    @staticmethod
+    def record_download_rates(database, payload, observed):
+        if not isinstance(payload.get('traffic_samples'), list):
+            return
+        timestamp = int(dt.datetime.fromisoformat(payload.get('sampled_at') or observed).timestamp() * 1000)
+        previous_at = database.execute("SELECT value FROM settings WHERE key='last_rate_sample_at'").fetchone()
+        previous_at = int(previous_at[0]) if previous_at else None
+        if previous_at is not None and timestamp <= previous_at:
+            return
+        elapsed = (timestamp - previous_at) / 1000 if previous_at is not None else 0
+        measured = 0 < elapsed <= 10
+        users = {str(item['user_key']): str(item.get('user_name') or 'Не определён') for item in payload.get('users', []) if item.get('user_key') and int(item.get('connections') or 0) > 0}
+        rates = {key: 0.0 if measured else None for key in users}
+        previous = {row['live_id']: row for row in database.execute('SELECT * FROM download_rate_counters')}
+        counters = []
+        for item in payload['traffic_samples']:
+            if not item.get('id') or not item.get('user_key'):
+                continue
+            identifier, key = str(item['id']), str(item['user_key'])
+            download = max(0, int(item.get('download_bytes') or 0))
+            counters.append((identifier, key, download))
+            prior = previous.get(identifier)
+            if measured and key in rates and prior is not None and prior['user_key'] == key:
+                rates[key] += max(0, download - prior['download_bytes']) / elapsed
+        database.execute('DELETE FROM download_rate_counters')
+        database.executemany('INSERT OR REPLACE INTO download_rate_counters VALUES (?,?,?)', counters)
+        database.executemany('INSERT INTO download_rate_samples VALUES (?,?,?,?)', [(timestamp, key, users[key], rate) for key, rate in rates.items()])
+        database.execute("INSERT OR REPLACE INTO settings VALUES ('last_rate_sample_at', ?)", (str(timestamp),))
+        database.execute('DELETE FROM download_rate_samples WHERE sampled_at < ?', (timestamp - 90 * 60000,))
+
+    def download_chart(self, minutes=10, at=None):
+        try:
+            minutes = int(minutes)
+        except (ValueError, TypeError) as error:
+            raise ValueError('Отрезок истории указан некорректно.') from error
+        if minutes not in (10, 30, 60, 90):
+            raise ValueError('Доступны отрезки 10, 30, 60 и 90 минут.')
+        until = int((at or dt.datetime.now(dt.timezone.utc)).timestamp() * 1000)
+        since = until - minutes * 60000
+        bucket = max(2000, math.ceil(minutes * 60000 / 300 / 1000) * 1000)
+        with self.connect() as database:
+            latest = database.execute("SELECT value FROM settings WHERE key='last_rate_sample_at'").fetchone()
+            ranked = database.execute('''
+                SELECT user_key,MAX(bytes_per_second) AS peak
+                FROM download_rate_samples WHERE sampled_at>=? AND sampled_at<=?
+                GROUP BY user_key ORDER BY peak DESC,user_key LIMIT 10
+            ''', (since, until)).fetchall()
+            count = database.execute('SELECT COUNT(DISTINCT user_key) FROM download_rate_samples WHERE sampled_at>=? AND sampled_at<=?', (since, until)).fetchone()[0]
+            result = []
+            for user in ranked:
+                key = user['user_key']
+                name = database.execute('SELECT user_name FROM download_rate_samples WHERE user_key=? AND sampled_at>=? AND sampled_at<=? ORDER BY sampled_at DESC LIMIT 1', (key, since, until)).fetchone()[0]
+                rows = database.execute('''
+                    SELECT sampled_at,bytes_per_second FROM (
+                        SELECT sampled_at,bytes_per_second,
+                            ROW_NUMBER() OVER (PARTITION BY sampled_at / ? ORDER BY bytes_per_second DESC,sampled_at DESC) AS position
+                        FROM download_rate_samples WHERE user_key=? AND sampled_at>=? AND sampled_at<=?
+                    ) WHERE position=1 ORDER BY sampled_at
+                ''', (bucket, key, since, until)).fetchall()
+                points = []
+                for row in rows:
+                    if points and row['sampled_at'] - points[-1]['x'] > bucket * 2:
+                        points.append({'x': points[-1]['x'] + bucket, 'y': None})
+                    points.append({'x': row['sampled_at'], 'y': row['bytes_per_second'] / 1048576 if row['bytes_per_second'] is not None else None})
+                result.append({'user_key': key, 'user_name': name, 'peak_bytes_per_second': user['peak'], 'points': points})
+        return {'minutes': minutes, 'since': since, 'until': until, 'sampled_at': int(latest[0]) if latest else None, 'user_count': count, 'users': result}
 
     def filters(self, user_key='', since='', until=''):
         conditions, values = [], []

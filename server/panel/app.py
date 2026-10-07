@@ -2170,6 +2170,17 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, sqlite3.Error):
                 self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {'error': 'Статистика аккаунтов временно недоступна.'})
             return
+        if parsed.path == '/happ-server/traffic':
+            try:
+                if HAPP_HISTORY is None:
+                    raise RuntimeError('Хранилище статистики недоступно.')
+                query = parse_qs(parsed.query)
+                self.send_json(HTTPStatus.OK, HAPP_HISTORY.download_chart(form_value(query, 'minutes') or '10'))
+            except ValueError:
+                self.send_json(HTTPStatus.BAD_REQUEST, {'error': 'Доступны отрезки 10, 30, 60 и 90 минут.'})
+            except (RuntimeError, OSError, sqlite3.Error):
+                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {'error': 'История скоростей временно недоступна.'})
+            return
         if parsed.path in ('/happ-history', '/happ-history.xls'):
             try:
                 if HAPP_HISTORY is None:

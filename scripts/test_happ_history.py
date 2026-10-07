@@ -36,6 +36,57 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(Path(self.directory.name).stat().st_mode & 0o777, 0o700)
             self.assertEqual(self.history.path.stat().st_mode & 0o777, 0o600)
 
+    def rate_payload(self, amount, sampled_at, user='personal-a', identifier='rate-a'):
+        return {'sampled_at': sampled_at.isoformat(), 'connections': [], 'users': [{'user_key': user, 'user_name': 'Alice', 'connections': 1}], 'traffic_samples': [{'id': identifier, 'user_key': user, 'download_bytes': amount}]}
+
+    def test_download_chart_persists_maximum_not_bucket_average(self):
+        self.history.ingest(self.rate_payload(0, self.at))
+        self.history.ingest(self.rate_payload(2 * 1048576, self.at + dt.timedelta(seconds=2)))
+        self.history.ingest(self.rate_payload(8 * 1048576, self.at + dt.timedelta(seconds=4)))
+        self.history.ingest(self.rate_payload(8 * 1048576, self.at + dt.timedelta(seconds=6)))
+        reopened = HappHistory(self.directory.name)
+        chart = reopened.download_chart(90, self.at + dt.timedelta(seconds=6))
+        self.assertEqual(chart['users'][0]['peak_bytes_per_second'], 3 * 1048576)
+        self.assertEqual(max(point['y'] or 0 for point in chart['users'][0]['points']), 3)
+        self.assertLessEqual(len(chart['users'][0]['points']), 301)
+        self.assertEqual(chart['sampled_at'], int((self.at + dt.timedelta(seconds=6)).timestamp() * 1000))
+        reopened.ingest(self.rate_payload(10 * 1048576, self.at + dt.timedelta(seconds=8)))
+        self.assertEqual(reopened.download_chart(10, self.at + dt.timedelta(seconds=8))['users'][0]['peak_bytes_per_second'], 3 * 1048576)
+
+    def test_download_chart_ranges_gaps_and_counter_reset(self):
+        self.history.ingest(self.rate_payload(0, self.at))
+        self.history.ingest(self.rate_payload(4 * 1048576, self.at + dt.timedelta(seconds=2)))
+        self.history.ingest(self.rate_payload(900 * 1048576, self.at + dt.timedelta(minutes=20)))
+        self.history.ingest(self.rate_payload(0, self.at + dt.timedelta(minutes=20, seconds=2)))
+        for minutes in (10, 30, 60, 90):
+            chart = self.history.download_chart(minutes, self.at + dt.timedelta(minutes=20, seconds=2))
+            self.assertEqual(chart['until'] - chart['since'], minutes * 60000)
+            self.assertEqual(chart['users'][0]['peak_bytes_per_second'], 0 if minutes == 10 else 2 * 1048576)
+            if minutes > 10:
+                self.assertTrue(any(point['y'] is None for point in chart['users'][0]['points']))
+        for invalid in ('bad', 0, 60 * 24):
+            with self.assertRaises(ValueError):
+                self.history.download_chart(invalid, self.at)
+
+    def test_download_chart_limits_users_and_does_not_invent_old_history(self):
+        self.history.ingest({'connections': [self.row()]}, self.at)
+        self.assertEqual(self.history.download_chart(90, self.at)['users'], [])
+        users = [{'user_key': 'user-' + str(index), 'user_name': 'User ' + str(index), 'connections': 1} for index in range(12)]
+        samples = [{'id': 'connection-' + str(index), 'user_key': user['user_key'], 'download_bytes': 0} for index, user in enumerate(users)]
+        payload = {'connections': [], 'users': users, 'traffic_samples': samples, 'sampled_at': self.at.isoformat()}
+        self.history.ingest(payload)
+        payload['sampled_at'] = (self.at + dt.timedelta(seconds=2)).isoformat()
+        for index, sample in enumerate(samples):
+            sample['download_bytes'] = (index + 1) * 1048576
+        self.history.ingest(payload)
+        chart = self.history.download_chart(30, self.at + dt.timedelta(seconds=2))
+        self.assertEqual(chart['user_count'], 12)
+        self.assertEqual(len(chart['users']), 10)
+        self.assertEqual(chart['users'][0]['user_key'], 'user-11')
+        before = chart
+        self.history.ingest(payload)
+        self.assertEqual(self.history.download_chart(30, self.at + dt.timedelta(seconds=2)), before)
+
     def test_samples_are_monotonic_and_not_double_counted(self):
         self.history.ingest({'connections': [self.row()]}, self.at)
         self.history.ingest({'connections': [self.row()]}, self.at)
@@ -211,13 +262,24 @@ class HistoryTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.getheader('Content-Type'), 'application/vnd.ms-excel')
                 self.assertEqual(response.read()[:8], bytes.fromhex('d0cf11e0a1b11ae1'))
+                for minutes in (10, 30, 60, 90):
+                    connection.request('GET', '/happ-server/traffic?minutes=' + str(minutes))
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    chart = json.loads(response.read())
+                    self.assertEqual(chart['minutes'], minutes)
+                    self.assertEqual(chart['until'] - chart['since'], minutes * 60000)
+                connection.request('GET', '/happ-server/traffic?minutes=invalid')
+                response = connection.getresponse()
+                self.assertEqual(response.status, 400)
+                response.read()
 
             def deny(handler):
                 handler.send_empty(403)
                 return False
 
             with patch.object(app.Handler, 'require_access', deny):
-                for route in ('/happ-history', '/happ-history.xls'):
+                for route in ('/happ-history', '/happ-history.xls', '/happ-server/traffic?minutes=90'):
                     connection.request('GET', route)
                     response = connection.getresponse()
                     self.assertEqual(response.status, 403)

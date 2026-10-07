@@ -41,10 +41,11 @@ def page(users=None, csrf='', message='', kind='success', events=None, traffic=N
 {banner}
 <section class="panel-stack">
   <section class="panel" data-happ-live>
-    <div class="detail-head"><div><h2>Подключения HAPP</h2><p class="subtitle">Скачивание · последние 60 секунд</p></div><span class="badge" data-happ-chart-status role="status">Ожидание данных</span></div>
+    <div class="detail-head"><div><h2>Подключения HAPP</h2><p class="subtitle">Скачивание · максимальные пики</p></div><span class="badge" data-happ-chart-status role="status">Ожидание данных</span></div>
+    <div class="happ-chart-range"><label for="happ_chart_range">Отрезок истории</label><select id="happ_chart_range" data-happ-chart-range><option value="10">10 минут</option><option value="30">30 минут</option><option value="60">60 минут</option><option value="90">90 минут</option></select></div>
     <div class="happ-live-totals"><div><span>Соединения</span><strong data-happ-online>0</strong></div><div><span>Скачивание</span><strong data-happ-speed>0.00 МБ/с</strong></div><div><span>На графике</span><strong data-happ-chart-count>0 / 10</strong></div></div>
     <div class="happ-chart-plot"><canvas data-happ-traffic-chart role="img" aria-label="Скорость скачивания пользователей HAPP, МБ в секунду"></canvas></div>
-    <div class="happ-chart-legend" data-happ-chart-legend><p class="muted">Нет активных пользователей.</p></div>
+    <div class="happ-chart-legend" data-happ-chart-legend><p class="muted">Ожидание истории скоростей.</p></div>
     <div class="happ-chart-footer"><span class="muted" data-happ-chart-overflow></span><a class="button secondary" href="/happ-history">История HAPP</a></div>
   </section>
   <section class="panel"><div class="detail-head happ-users-heading"><h2>Пользователи HAPP</h2><button type="button" data-happ-user-create-open>Добавить нового пользователя</button></div><div class="table-wrap"><table><thead><tr><th>Пользователь</th><th>Срок UTC</th><th>Персональная ссылка</th><th>Доступ</th></tr></thead><tbody>{rows}</tbody></table></div><p class="muted">Изменение доступа перезапускает HAPP-сервис и переподключает сессии. VIP UUID и ссылка сохраняются.</p></section>

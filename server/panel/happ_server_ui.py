@@ -2,6 +2,7 @@ import html
 import datetime as dt
 
 from happ_server import load_state, happ_add_link, public_vless_link
+from happ_stats import format_datetime
 from panel_ui import render_shell
 
 
@@ -32,7 +33,7 @@ def page(users=None, csrf='', message='', kind='success', events=None, traffic=N
     rows = ''.join(rows) or '<tr><td colspan="4" class="empty">Персональных пользователей пока нет.</td></tr>'
     banner = f'<div class="notice {"error" if kind == "error" else "success"}" role="status">{esc(message)}</div>' if message else ''
     event_labels = {'create': 'Создан', 'enable': 'Включён', 'disable': 'Отключён', 'delete': 'Удалён', 'update': 'Настройки изменены', 'expired': 'Срок истёк'}
-    event_rows = ''.join(f'<tr><td>{esc(item.get("at", ""))}</td><td>{esc(item.get("name", ""))}</td><td>{esc(event_labels.get(item.get("operation"), item.get("operation", "")))}</td></tr>' for item in (events or []))
+    event_rows = ''.join(f'<tr><td>{esc(format_datetime(item.get("at")))}</td><td>{esc(item.get("name", ""))}</td><td>{esc(event_labels.get(item.get("operation"), item.get("operation", "")))}</td></tr>' for item in (events or []))
     body = f'''<section class="page-head">
   <div><p class="eyebrow">Public endpoint</p><h1>HAPP Server</h1><p class="subtitle">Отдельный VLESS Reality вход для HAPP и совместимых клиентов.</p></div>
   <div class="status"><span class="status-dot ok"></span>public</div>

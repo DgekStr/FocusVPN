@@ -358,6 +358,27 @@ class HappUserTests(unittest.TestCase):
         self.assertIn('Endpoint: subscriptions.example.net:9445', page)
         self.assertGreater(page.index('VIP VLESS · существующая ссылка'), page.index('Журнал персонального доступа'))
 
+    def test_personal_access_log_formats_russian_utc(self):
+        cases = (
+            ('2026-10-07T21:36:46.369264+00:00', '07.10.2026 21:36:46', 'dgektv', 'create', 'Создан'),
+            ('2026-10-07T07:20:10.181860+00:00', '07.10.2026 07:20:10', 'marchenko', 'update', 'Настройки изменены'),
+            ('2026-10-08T00:36:46+03:00', '07.10.2026 21:36:46', 'Alice', 'enable', 'Включён'),
+            (None, '—', 'Alice', 'disable', 'Отключён'),
+            ('', '—', 'Alice', 'delete', 'Удалён'),
+            ('invalid<script>', '—', 'Alice', 'expired', 'Срок истёк'),
+        )
+        for timestamp, expected, name, operation, label in cases:
+            with self.subTest(timestamp=timestamp):
+                events = [{'at': timestamp, 'name': name, 'operation': operation}]
+                original = [item.copy() for item in events]
+                with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
+                    page = happ_server_ui.page([], events=events)
+                self.assertIn('<th>Время UTC</th>', page)
+                self.assertIn(f'<tr><td>{expected}</td><td>{name}</td><td>{label}</td></tr>', page)
+                if timestamp:
+                    self.assertNotIn(timestamp, page)
+                self.assertEqual(events, original)
+
     def test_live_connections_precede_user_management(self):
         with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
             page = happ_server_ui.page([])

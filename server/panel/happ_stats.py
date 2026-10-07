@@ -369,12 +369,15 @@ def live_connections(include_visits=False, history_since=None):
     connections = payload.get('connections') if isinstance(payload, dict) else None
     if not isinstance(connections, list):
         raise HappStatsError('Clash API вернул некорректные данные подключений.')
+    sampled_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec='milliseconds')
     connections = [item for item in connections if isinstance(item, dict)]
     peers = journal_identities(connections, history_since)
     items = [connection_item(item, peers) for item in connections]
     items.sort(key=lambda item: item['id'])
     users = summarize_users(items)
     payload = {
+        'sampled_at': sampled_at,
+        'traffic_samples': [{'id': item['id'] or item['connection_key'], 'user_key': item['user_key'], 'download_bytes': item['download_bytes']} for item in items],
         'online_count': len(items),
         'download': format_bytes(sum(item['download_bytes'] for item in items)),
         'upload': format_bytes(sum(item['upload_bytes'] for item in items)),

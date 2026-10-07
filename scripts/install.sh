@@ -242,7 +242,8 @@ validate_runtime_bundle() {
     server/panel/happ_stats.py server/panel/happ_history.py server/panel/happ_history_ui.py \
     server/panel/server_metrics.py server/panel/vless_monitor.py \
     server/panel/wg_admin.py server/panel/wg_easy_api.py \
-    server/panel/static/panel.css server/panel/static/panel.js server/panel/static/happ-actions.js; do
+    server/panel/static/panel.css server/panel/static/panel.js server/panel/static/happ-actions.js \
+    server/panel/static/chart.js server/panel/static/chart.LICENSE.txt; do
     [[ -s "$REPO_ROOT/$path" ]] || fail "runtime bundle is incomplete: $path"
   done
 }

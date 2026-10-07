@@ -39,7 +39,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <title>{esc(title)} | FOCUSLENS.DEV</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=2.1.7-happ-live-scroll-hidden">
+<link rel="stylesheet" href="/panel.css?v=2.1.7-happ-traffic">
 </head>
 <body>
 <div class="app-shell">
@@ -59,7 +59,8 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
   </aside>
   <div class="app-content"><main class="main">{body}</main></div>
 </div>
-  <script src="/panel.js?v=2.1.7" defer></script>
+<script src="/chart.js?v=4.5.1" defer></script>
+  <script src="/panel.js?v=2.1.7-happ-traffic" defer></script>
 <script src="/happ-actions.js?v=10" defer></script>
 </body>
 </html>'''

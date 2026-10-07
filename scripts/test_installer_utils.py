@@ -81,7 +81,7 @@ class InstallerUtilsTests(unittest.TestCase):
                     shutil.copytree(root / source, destination, ignore=shutil.ignore_patterns('__pycache__'))
                 else:
                     shutil.copyfile(root / source, destination)
-            for missing in ('VERSION', 'server/panel/happ_server.py', 'server/panel/static/panel.css', 'server/panel/static/happ-actions.js'):
+            for missing in ('VERSION', 'server/panel/happ_server.py', 'server/panel/static/panel.css', 'server/panel/static/happ-actions.js', 'server/panel/static/chart.js', 'server/panel/static/chart.LICENSE.txt'):
                 with self.subTest(missing=missing):
                     path = incomplete / missing
                     original = path.read_bytes()

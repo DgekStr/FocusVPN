@@ -9,6 +9,7 @@
   let wireGuardLiveLoading = false;
   let happLiveTimer = null;
   let happLiveLoading = false;
+  let happTraffic = null;
   let outboundCheckTimer = null;
   let outboundCheckLoading = false;
   let pendingGatewayForm = null;
@@ -180,7 +181,120 @@
     return cell;
   }
 
+  function createHappTraffic() {
+    const canvas = document.querySelector('[data-happ-traffic-chart]');
+    if (!canvas || !window.Chart) return;
+    const clock = (value) => new Date(value).toLocaleTimeString('ru-RU', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const now = Date.now();
+    const chart = new window.Chart(canvas, {
+      type: 'line', data: { datasets: [] },
+      options: {
+        responsive: true, maintainAspectRatio: false, parsing: false,
+        animation: { duration: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 0 : 900, easing: 'linear' },
+        interaction: { mode: 'nearest', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { title: (items) => items.length ? clock(items[0].parsed.x) + ' UTC' : '', label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(2)} МБ/с` } },
+        },
+        scales: {
+          x: { type: 'linear', min: now - 60000, max: now, border: { display: false }, grid: { display: false }, ticks: { color: '#8ea0be', maxTicksLimit: 5, maxRotation: 0, font: { size: 10 }, callback: clock } },
+          y: { beginAtZero: true, suggestedMax: 1, border: { display: false }, grid: { color: 'rgba(142,160,190,.12)' }, ticks: { color: '#8ea0be', maxTicksLimit: 5, font: { size: 10 }, callback: (value) => `${Number(value).toFixed(1)} МБ/с` } },
+        },
+      },
+    });
+    happTraffic = { chart, previous: new Map(), sampledAt: null, series: new Map() };
+  }
+
+  function happTrafficStatus(text, failed = false) {
+    const status = document.querySelector('[data-happ-chart-status]');
+    if (status) {
+      status.textContent = text;
+      status.className = failed ? 'badge bad' : 'badge online';
+    }
+  }
+
+  function renderHappTraffic(payload) {
+    if (!happTraffic) return;
+    const timestamp = Date.parse(payload.sampled_at);
+    if (!Number.isFinite(timestamp)) {
+      happTrafficStatus('Нет свежих данных', true);
+      return;
+    }
+    const state = happTraffic;
+    if (state.sampledAt !== null && timestamp <= state.sampledAt) return;
+    const elapsed = state.sampledAt === null ? 0 : (timestamp - state.sampledAt) / 1000;
+    const measured = elapsed > 0 && elapsed <= 10;
+    const users = new Map((Array.isArray(payload.users) ? payload.users : []).filter((user) => user.user_key && Number(user.connections) > 0).map((user) => [String(user.user_key), user]));
+    const rates = new Map([...users.keys()].map((key) => [key, 0]));
+    const samples = new Map();
+    for (const item of Array.isArray(payload.traffic_samples) ? payload.traffic_samples : []) {
+      const bytes = Number(item.download_bytes);
+      if (!item.id || !item.user_key || !Number.isFinite(bytes) || bytes < 0) continue;
+      const key = String(item.user_key);
+      const previous = state.previous.get(String(item.id));
+      samples.set(String(item.id), { key, bytes });
+      if (measured && previous?.key === key && rates.has(key)) {
+        rates.set(key, rates.get(key) + Math.max(0, bytes - previous.bytes) / elapsed / 1048576);
+      }
+    }
+    state.previous = samples;
+    state.sampledAt = timestamp;
+    for (const key of state.series.keys()) {
+      if (!users.has(key)) state.series.delete(key);
+    }
+    const palette = ['#22d3ee', '#f472b6', '#5eead4', '#fbbf24', '#a78bfa', '#fb7185', '#38bdf8', '#a3e635', '#fb923c', '#c4b5fd'];
+    const newcomers = [...users.entries()].filter(([key]) => !state.series.has(key)).sort((first, second) => rates.get(second[0]) - rates.get(first[0]) || first[0].localeCompare(second[0]));
+    for (const [key, user] of newcomers) {
+      if (state.series.size === 10) break;
+      const used = new Set([...state.series.values()].map((series) => series.color));
+      state.series.set(key, { color: palette.find((color) => !used.has(color)), name: user.user_name || 'Не определён', points: [] });
+    }
+    const legend = document.querySelector('[data-happ-chart-legend]');
+    legend?.replaceChildren();
+    const datasets = [];
+    for (const [key, series] of state.series) {
+      series.name = users.get(key).user_name || 'Не определён';
+      const rate = measured ? rates.get(key) : null;
+      series.points.push({ x: timestamp, y: rate });
+      series.points = series.points.filter((point) => point.x >= timestamp - 60000).slice(-120);
+      datasets.push({ label: series.name, data: series.points, borderColor: series.color, backgroundColor: series.color + '0a', borderWidth: 2, pointRadius: 0, pointHitRadius: 8, tension: .3, fill: true, spanGaps: false });
+      if (legend) {
+        const item = document.createElement('div');
+        item.className = 'happ-chart-user';
+        item.dataset.happUser = key;
+        const swatch = document.createElement('span');
+        swatch.className = 'happ-chart-swatch';
+        swatch.style.backgroundColor = series.color;
+        const name = document.createElement('strong');
+        name.textContent = series.name;
+        name.title = series.name;
+        const amount = document.createElement('small');
+        amount.textContent = rate === null ? 'Ожидание замера' : `${rate.toFixed(2)} МБ/с`;
+        item.append(swatch, name, amount);
+        legend.append(item);
+      }
+    }
+    if (legend && !state.series.size) {
+      const empty = document.createElement('p');
+      empty.className = 'muted';
+      empty.textContent = 'Нет активных пользователей.';
+      legend.append(empty);
+    }
+    const total = document.querySelector('[data-happ-speed]');
+    const count = document.querySelector('[data-happ-chart-count]');
+    const overflow = document.querySelector('[data-happ-chart-overflow]');
+    if (total) total.textContent = measured ? `${[...rates.values()].reduce((sum, rate) => sum + rate, 0).toFixed(2)} МБ/с` : '— МБ/с';
+    if (count) count.textContent = `${state.series.size} / 10`;
+    if (overflow) overflow.textContent = users.size > 10 ? `Ещё ${users.size - 10} активных пользователей` : '';
+    state.chart.data.datasets = datasets;
+    state.chart.options.scales.x.min = timestamp - 60000;
+    state.chart.options.scales.x.max = timestamp;
+    state.chart.update();
+    happTrafficStatus(!users.size ? 'Нет подключений' : measured ? 'Live' : 'Замер скорости');
+  }
+
   function renderHappLive(payload) {
+    renderHappTraffic(payload);
     const online = Number.isInteger(payload.online_count) ? payload.online_count : 0;
     const count = document.querySelector('[data-happ-online-count]');
     const onlineMetric = document.querySelector('[data-happ-online]');
@@ -299,9 +413,16 @@
       window.clearInterval(happLiveTimer);
       happLiveTimer = null;
     }
-    if (!document.querySelector('[data-happ-live]')) return;
+    if (happTraffic) {
+      happTraffic.chart.destroy();
+      happTraffic = null;
+    }
+    const root = document.querySelector('[data-happ-live]');
+    if (!root) return;
+    createHappTraffic();
+    if (!happTraffic && document.querySelector('[data-happ-traffic-chart]')) happTrafficStatus('График недоступен', true);
     const refresh = async () => {
-      if (happLiveLoading || document.hidden) return;
+      if (happLiveLoading || document.hidden || root.isConnected === false) return;
       happLiveLoading = true;
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 10000);
@@ -311,10 +432,14 @@
           window.location.reload();
           return;
         }
-        if (!response.ok) return;
+        if (document.querySelector('[data-happ-live]') !== root) return;
+        if (!response.ok) {
+          happTrafficStatus('Нет свежих данных', true);
+          return;
+        }
         renderHappLive(await response.json());
       } catch (_) {
-        // The next polling interval retries temporary sing-box API failures.
+        if (document.querySelector('[data-happ-live]') === root) happTrafficStatus('Нет свежих данных', true);
       } finally {
         window.clearTimeout(timeout);
         happLiveLoading = false;

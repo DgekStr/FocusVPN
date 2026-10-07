@@ -1,9 +1,12 @@
 import datetime as dt
+import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
+import happ_stats
 from happ_stats import aggregate_connections, authenticated_peers, connection_identity, connection_item, summarize_users, rank_top_users, journal_message, parse_connection_start, format_datetime
 
 
@@ -69,6 +72,29 @@ class HappStatsTests(unittest.TestCase):
         self.assertEqual(alice['download_bytes'], 3072)
         self.assertEqual(alice['upload_bytes'], 192)
         self.assertEqual(alice['download'], '3.0 KB')
+
+    def test_live_traffic_samples_preserve_per_connection_counters(self):
+        peers = authenticated_peers([self.source(1, 40001), self.auth(1, 'personal-a'), self.source(2, 40002), self.auth(2, 'personal-a')], self.names, set(), 'happ')
+        parallel = {**self.live(40001, download=512), 'id': '40001-second'}
+        connections = [self.live(40001, download=2048), self.live(40002, download=1024), parallel]
+        with patch.object(happ_stats.request, 'urlopen') as urlopen, patch.object(happ_stats, 'journal_identities', return_value=peers):
+            response = urlopen.return_value.__enter__.return_value
+            response.read.return_value = json.dumps({'connections': connections}).encode()
+            payload = happ_stats.live_connections()
+            again = happ_stats.live_connections()
+            response.read.return_value = b'{"connections": []}'
+            empty = happ_stats.live_connections()
+        samples = payload['traffic_samples']
+        self.assertEqual([sample['download_bytes'] for sample in samples], [2048, 512, 1024])
+        self.assertEqual([sample['user_key'] for sample in samples], ['personal-a', 'personal-a', 'personal-a'])
+        self.assertEqual(len({sample['id'] for sample in samples}), 3)
+        self.assertEqual(samples, again['traffic_samples'])
+        self.assertEqual(set(samples[0]), {'id', 'user_key', 'download_bytes'})
+        self.assertEqual(payload['users'][0]['download_bytes'], 3584)
+        self.assertEqual(payload['online_count'], 3)
+        self.assertEqual(dt.datetime.fromisoformat(payload['sampled_at']).utcoffset(), dt.timedelta())
+        self.assertEqual(empty['traffic_samples'], [])
+        self.assertEqual(empty['users'], [])
 
     def test_connections_group_by_ip_and_protocol_and_sum_live_fields(self):
         items = [

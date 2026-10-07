@@ -57,6 +57,7 @@ FAVICON_PATH = Path('/opt/sing-box-admin/static/favicon.png')
 FAVICON_SVG_PATH = Path('/opt/sing-box-admin/static/favicon.svg')
 PANEL_CSS_PATH = Path('/opt/sing-box-admin/static/panel.css')
 PANEL_JS_PATH = Path('/opt/sing-box-admin/static/panel.js')
+CHART_JS_PATH = Path('/opt/sing-box-admin/static/chart.js')
 HAPP_ACTIONS_PATH = Path('/opt/sing-box-admin/static/happ-actions.js')
 QR_ENCODE_BIN = '/usr/bin/qrencode'
 SING_BOX_BIN = '/usr/bin/sing-box'
@@ -1817,9 +1818,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def send_panel_js(self):
+    def send_panel_js(self, script_path=None):
         try:
-            payload = PANEL_JS_PATH.read_bytes()
+            payload = (script_path or PANEL_JS_PATH).read_bytes()
         except OSError:
             self.send_empty(HTTPStatus.NOT_FOUND)
             return
@@ -2132,6 +2133,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == '/panel.js':
             self.send_panel_js()
+            return
+        if parsed.path == '/chart.js':
+            self.send_panel_js(CHART_JS_PATH)
             return
         if parsed.path == '/happ-actions.js':
             self.send_happ_actions_js()

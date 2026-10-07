@@ -385,7 +385,14 @@ class HappUserTests(unittest.TestCase):
         connections_position = page.index('Подключения HAPP')
         users_position = page.index('Пользователи HAPP')
         self.assertLess(connections_position, users_position)
-        self.assertLess(page.index('data-happ-connections'), page.index('id="happ_user_name"'))
+        self.assertLess(page.index('data-happ-traffic-chart'), page.index('id="happ_user_name"'))
+        live_panel = page.split('data-happ-live>', 1)[1].split('</section>', 1)[0]
+        self.assertIn('data-happ-chart-legend', live_panel)
+        self.assertIn('href="/happ-history">История HAPP', live_panel)
+        self.assertLess(live_panel.index('data-happ-chart-legend'), live_panel.index('href="/happ-history"'))
+        self.assertNotIn('<table', live_panel)
+        self.assertIn('/chart.js?v=4.5.1', page)
+        self.assertLess(page.index('/chart.js?v='), page.index('/panel.js?v='))
         self.assertLess(users_position, page.index('TOP-5 по трафику'))
         self.assertNotIn('Имя подтверждается журналом VLESS-аутентификации;', page)
         self.assertNotIn('не являются накопленным итогом закрытых сессий.', page)
@@ -406,7 +413,7 @@ class HappUserTests(unittest.TestCase):
         self.assertIn('type="button" data-happ-user-create-cancel>Отмена', modal)
         self.assertIn('type="submit">Создать пользователя', modal)
         self.assertEqual(page.count('action="/happ-users/create"'), 1)
-        self.assertIn('/panel.css?v=2.1.7-happ-live-scroll-hidden', page)
+        self.assertIn('/panel.css?v=2.1.7-happ-traffic', page)
         self.assertIn('/happ-actions.js?v=10', page)
 
     def test_happ_server_vip_endpoint_brackets_ipv6_subscription_host(self):
@@ -469,6 +476,27 @@ class HappUserTests(unittest.TestCase):
             self.assertEqual(json.loads(self.public_path.read_text()), original)
         self.assertEqual(self.manager.vip()['link'], self.link)
         self.assertEqual(json.loads(self.config_path.read_text())['inbounds'][0]['users'], self.config['inbounds'][0]['users'])
+
+    def test_chart_library_is_served_before_admin_auth(self):
+        chart_path = Path(__file__).resolve().parents[1] / 'server' / 'panel' / 'static' / 'chart.js'
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+        try:
+            with patch.object(app, 'CHART_JS_PATH', chart_path), patch.object(app.Handler, 'require_access', return_value=False) as access:
+                connection.request('GET', '/chart.js?v=4.5.1')
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.getheader('Content-Type'), 'application/javascript; charset=utf-8')
+                self.assertEqual(response.getheader('X-Content-Type-Options'), 'nosniff')
+                self.assertEqual(response.read(), chart_path.read_bytes())
+                access.assert_not_called()
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
 
     def test_subscription_http_isolated_updates_and_preserves_admin_auth(self):
         self.manager.create('Alice')

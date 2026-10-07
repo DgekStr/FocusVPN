@@ -498,6 +498,7 @@ class WgAdmin:
     <button class="secondary" type="button" data-wg-qr-url="/wireguard/client/{esc(identifier)}/qr" data-wg-qr-label="{esc(client_name(client))}">QR</button>
     <form method="post" action="/wireguard/client/action">{self._csrf()}<input type="hidden" name="client_id" value="{esc(identifier)}"><input type="hidden" name="action" value="{toggle}"><button class="secondary" type="submit">{toggle_text}</button></form>
     <form method="post" action="/wireguard/client/action">{self._csrf()}<input type="hidden" name="client_id" value="{esc(identifier)}"><input type="hidden" name="action" value="{lan_action}"><button class="{lan_class}" type="submit">{lan_label}</button></form>
+        <form method="post" action="/wireguard/client/action">{self._csrf()}<input type="hidden" name="client_id" value="{esc(identifier)}"><input type="hidden" name="action" value="delete"><button class="danger" type="submit" aria-label="Удалить клиента {esc(client_name(client))}">Удалить</button></form>
   </div></td>
 </tr>''')
         client_rows = ''.join(rows) or '<tr><td colspan="6" class="empty">Клиенты пока не созданы.</td></tr>'

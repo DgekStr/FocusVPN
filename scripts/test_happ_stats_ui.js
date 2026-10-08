@@ -98,7 +98,8 @@ async function main() {
   const account = { dataset: { happAccount: 'personal-a' }, querySelector: (selector) => selector === '[data-account-download]' ? received : sent };
   const metrics = new Map();
   const name = '<script>display-name</script>';
-  const historyAt = Date.parse('2026-10-08T00:01:13+00:00');
+  let historyAt = Date.parse('2026-10-08T00:01:13+00:00');
+  let clock = historyAt;
   let historyUsers = [
     { user_key: 'personal-a', user_name: name, peak_bytes_per_second: null, points: [{ x: historyAt, y: null }] },
     { user_key: 'personal-b', user_name: 'Bob', peak_bytes_per_second: null, points: [{ x: historyAt, y: null }] },
@@ -131,6 +132,7 @@ async function main() {
   };
   const sandbox = {
     AbortController,
+    Date: class extends Date { static now() { return clock; } },
     URL,
     console,
     document,
@@ -273,6 +275,37 @@ async function main() {
   await changeRange({ target: range });
   assert.equal(legend.children[0].children[2].textContent, 'Пик: 2.00 МБ/с');
   assert.equal(chart.options.scales.y.max, 2.2);
+  const series = chart.data.datasets[0];
+  const spikeAt = historyAt;
+  historyAt += 6000;
+  clock = historyAt;
+  historyUsers[0].points.push({ x: historyAt, y: 0 });
+  await refresh();
+  await new Promise(setImmediate);
+  assert.equal(chart.data.datasets[0], series);
+  assert.equal(chart.options.animations.y.duration, 0);
+  assert.equal(chart.options.scales.y.max, 2.2);
+  assert.equal(chart.options.scales.x.max, historyAt);
+  assert.equal(chart.options.scales.x.min, historyAt - 90 * 60000);
+  assert.ok(series.data.some((point) => point.x === spikeAt && point.y === 2));
+  historyAt += 6000;
+  clock = historyAt;
+  historyUsers[0].peak_bytes_per_second = 4194304;
+  historyUsers[0].points.push({ x: historyAt, y: 4 });
+  await refresh();
+  await new Promise(setImmediate);
+  assert.equal(chart.options.scales.y.max, 4.4);
+  historyAt += 90 * 60000;
+  clock = historyAt;
+  historyUsers[0].peak_bytes_per_second = 0;
+  historyUsers[0].points = [{ x: historyAt, y: 0 }];
+  await refresh();
+  await new Promise(setImmediate);
+  assert.equal(chart.data.datasets[0], series);
+  assert.equal(chart.options.scales.y.max, 4.4);
+  await changeRange({ target: range });
+  assert.equal(chart.options.scales.y.max, 1);
+  console.log('PASS: persistent datasets, fixed vertical scale, larger peaks, horizontal time shift and explicit range reset');
   payload = { sampled_at: '2026-10-08T00:00:04+00:00', users: [{ user_key: 'personal-a', connections: 1 }], traffic_samples: [{ id: 'reconnected', user_key: 'personal-a', download_bytes: 90000000 }] };
   await refresh();
   assert.equal(metrics.get('[data-happ-speed]').textContent, '0.00 МБ/с');
@@ -290,7 +323,10 @@ async function main() {
   assert.equal(activityRows.children.length, 2);
   const cells = activityRows.children[0].children;
   assert.equal(cells[0].children[0].textContent, name);
+  assert.equal(cells[0].children[0].title, name);
   assert.equal(cells[0].children[2].textContent, 'Активен');
+  assert.equal(cells[0].children[2].title, 'Активен');
+  assert.equal(activityRows.children[1].children[0].children[2].textContent, 'Не подключён');
   const meter = cells[0].children[1];
   assert.equal(meter.role, 'meter');
   assert.equal(meter.ariaValueMax, '25');
@@ -304,6 +340,7 @@ async function main() {
   assert.equal(activityRows.children[1].children[0].children[1].ariaValueNow, '0');
   assert.ok(activityRows.children[1].children[0].children[1].children.every((segment) => !segment.className.includes(' lit')));
   assert.equal(cells[1].textContent, '203.0.113.1, 2001:db8::1');
+  assert.equal(cells[1].title, '203.0.113.1, 2001:db8::1');
   assert.equal(cells[2].textContent, '3');
   assert.equal(cells[3].textContent, '1.00 ГБ / 1.00 МБ');
   assert.equal(cells[4].textContent, '2.00 / 1.00');
@@ -320,7 +357,8 @@ async function main() {
   payload.activity.users[0].download_rate = 0;
   payload.activity.users[0].upload_rate = 0;
   await refresh();
-  assert.equal(activityRows.children[0].children[0].children[2].textContent, 'Подключён · без трафика');
+  assert.equal(activityRows.children[0].children[0].children[2].textContent, 'Активен');
+  assert.equal(activityRows.children[0].children[0].children[2].className, 'happ-activity-state active');
   assert.equal(activityRows.children[0].children[0].children[1].ariaValueNow, '0');
   let previousLevel = 0;
   payload.activity.users[0].status = 'active';
@@ -338,6 +376,8 @@ async function main() {
   payload.activity.fresh = false;
   await refresh();
   assert.equal(activityRows.children[0].children[0].children[1].ariaValueNow, '0');
+  assert.equal(activityRows.children[0].children[0].children[2].textContent, 'Не подключён');
+  assert.equal(activityRows.children[0].children[0].children[2].className, 'happ-activity-state offline');
   payload.activity.fresh = true;
   payload.activity.users[0].download_rate = 0;
   payload.activity.users[0].upload_rate = 1048576;

@@ -80,6 +80,22 @@ class HistoryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 reopened.activity(invalid, self.at)
 
+    def test_activity_order_uses_lifetime_download_not_speed_or_status(self):
+        bob = self.row(key='bob', user='personal-b', name='Bob', download=1048576, upload=0)
+        tied = self.row(key='tied', user='personal-c', name='bob', download=1048576, upload=0)
+        for offset, rows in ((0, [self.row(download=100, upload=2097152), tied, bob]), (1, [bob, self.row(download=1100, upload=2097152), tied]), (2, [self.row(download=2100, upload=2097152)])):
+            observed = self.at + dt.timedelta(seconds=offset)
+            payload = {'connections': rows, 'users': [{'user_key': row['user_key'], 'user_name': row['user_name'], 'connections': 1} for row in rows], 'traffic_samples': rows, 'sampled_at': observed.isoformat()}
+            self.history.ingest(payload, observed)
+            activity = self.history.activity(5, observed)
+            self.assertEqual([user['user_key'] for user in activity['users']], ['personal-b', 'personal-c', 'personal-a'])
+        self.assertEqual(activity['users'][0]['status'], 'offline')
+        self.assertEqual(activity['users'][2]['status'], 'active')
+        self.assertGreater(activity['users'][2]['download_rate'], activity['users'][0]['download_rate'])
+        stale = self.history.activity(5, self.at + dt.timedelta(seconds=20))
+        self.assertFalse(stale['fresh'])
+        self.assertEqual([user['user_key'] for user in stale['users']], ['personal-b', 'personal-c', 'personal-a'])
+
     def test_download_chart_ranges_gaps_and_counter_reset(self):
         self.history.ingest(self.rate_payload(0, self.at))
         self.history.ingest(self.rate_payload(4 * 1048576, self.at + dt.timedelta(seconds=2)))

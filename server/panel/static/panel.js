@@ -191,6 +191,7 @@
       options: {
         responsive: true, maintainAspectRatio: false, parsing: false,
         animation: { duration: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 0 : 900, easing: 'linear' },
+        animations: { y: { duration: 0 } },
         interaction: { mode: 'nearest', intersect: false },
         plugins: {
           legend: { display: false },
@@ -202,7 +203,7 @@
         },
       },
     });
-    happTraffic = { chart, previous: new Map(), sampledAt: null, colors: new Map(), minutes: 10, direction: 'download', seconds: 5, historyDue: 0, historyLoading: false, historyRequest: 0, historyController: null };
+    happTraffic = { chart, previous: new Map(), sampledAt: null, colors: new Map(), maximum: 0, minutes: 10, direction: 'download', seconds: 5, historyDue: 0, historyLoading: false, historyRequest: 0, historyController: null };
   }
 
   function happTrafficStatus(text, failed = false) {
@@ -250,6 +251,7 @@
     const used = new Set();
     const legend = document.querySelector('[data-happ-chart-legend]');
     legend?.replaceChildren();
+    const previous = new Map(state.chart.data.datasets.map((dataset) => [dataset.userKey, dataset]));
     const datasets = [];
     let maximum = 0;
     for (const user of users) {
@@ -260,8 +262,11 @@
       used.add(color);
       const nameText = user.user_name || 'Не определён';
       const peak = user.peak_bytes_per_second === null ? null : Math.max(0, Number(user.peak_bytes_per_second) || 0) / 1048576;
-      maximum = Math.max(maximum, peak || 0);
-      datasets.push({ label: nameText, data: Array.isArray(user.points) ? user.points : [], borderColor: color, backgroundColor: color + '0a', borderWidth: 2, pointRadius: 0, pointHitRadius: 8, tension: .3, cubicInterpolationMode: 'monotone', fill: true, spanGaps: false });
+      const points = Array.isArray(user.points) ? user.points : [];
+      maximum = Math.max(maximum, peak || 0, ...points.map((point) => Number.isFinite(point.y) ? Math.max(0, point.y) : 0));
+      const dataset = previous.get(key) || { userKey: key };
+      Object.assign(dataset, { label: nameText, data: points, borderColor: color, backgroundColor: color + '0a', borderWidth: 2, pointRadius: 0, pointHitRadius: 8, tension: .3, cubicInterpolationMode: 'monotone', fill: true, spanGaps: false });
+      datasets.push(dataset);
       if (legend) {
         const item = document.createElement('div');
         item.className = 'happ-chart-user';
@@ -292,7 +297,8 @@
     state.chart.data.datasets = datasets;
     state.chart.options.scales.x.min = payload.since;
     state.chart.options.scales.x.max = payload.until;
-    state.chart.options.scales.y.max = Math.max(1, maximum * 1.1);
+    state.maximum = Math.max(state.maximum, maximum);
+    state.chart.options.scales.y.max = Math.max(1, state.maximum * 1.1);
     state.chart.update();
     const fresh = payload.sampled_at !== null && payload.until - payload.sampled_at <= 10000;
     happTrafficStatus(!users.length ? 'Нет замеров' : fresh ? 'Live' : 'Нет свежих данных', users.length > 0 && !fresh);
@@ -349,7 +355,9 @@
       if (canvas) canvas.ariaLabel = `Скорость ${happTraffic.direction === 'upload' ? 'отправки' : 'скачивания'} пользователей HAPP, МБ в секунду`;
     }
     happTraffic.minutes = minutes;
+    happTraffic.maximum = 0;
     happTraffic.chart.data.datasets = [];
+    happTraffic.chart.options.scales.y.max = 1;
     const until = Date.now();
     happTraffic.chart.options.scales.x.min = until - minutes * 60000;
     happTraffic.chart.options.scales.x.max = until;
@@ -408,10 +416,12 @@
       const identity = document.createElement('td');
       const name = document.createElement('strong');
       name.textContent = user.user_name || 'Не определён';
+      name.title = name.textContent;
       const status = document.createElement('span');
-      const state = fresh ? user.status : 'unknown';
+      const state = fresh && ['active', 'connected'].includes(user.status) ? 'active' : 'offline';
       status.className = `happ-activity-state ${state}`;
-      status.textContent = { active: 'Активен', connected: 'Подключён · без трафика', offline: 'Не подключён', unknown: 'Нет данных' }[state] || 'Нет данных';
+      status.textContent = state === 'active' ? 'Активен' : 'Не подключён';
+      status.title = status.textContent;
       const trafficRate = fresh && ['active', 'connected'].includes(state) ? [user.download_rate, user.upload_rate].reduce((total, value) => total + (Number.isFinite(value) ? Math.max(0, value) : 0), 0) : 0;
       const level = trafficRate > 0 ? Math.min(25, Math.ceil(25 * Math.log1p(trafficRate / 1024) / Math.log1p(10240))) : 0;
       const meter = document.createElement('span');
@@ -439,7 +449,9 @@
         missing.textContent = `Без счётчиков: ${user.unknown_traffic}`;
         totals.append(missing);
       }
-      row.append(identity, happCell(fresh ? (user.ips || []).join(', ') : '—'), happCell(fresh ? String(user.connections || 0) : '—'), totals, speed, happCell(fresh ? `${rate(user.download_peak)} / ${rate(user.upload_peak)}` : '— / —'));
+      const address = happCell(fresh ? (user.ips || []).join(', ') : '—');
+      address.title = address.textContent;
+      row.append(identity, address, happCell(fresh ? String(user.connections || 0) : '—'), totals, speed, happCell(fresh ? `${rate(user.download_peak)} / ${rate(user.upload_peak)}` : '— / —'));
       body.append(row);
     }
   }

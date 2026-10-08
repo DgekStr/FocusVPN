@@ -332,7 +332,7 @@ class HappHistory:
                     'download_peak': peaks.get(key, {}).get('download') if fresh else None,
                     'upload_peak': peaks.get(key, {}).get('upload') if fresh else None,
                 })
-        users.sort(key=lambda user: (user['status'] not in ('active', 'connected'), -(user['download_rate'] or 0), user['user_name'], user['user_key']))
+        users.sort(key=lambda user: (-(user['download_bytes'] or 0), user['user_name'].casefold(), user['user_key']))
         return {'seconds': seconds, 'sampled_at': sampled_at, 'fresh': fresh, 'users': users}
 
     def download_chart(self, minutes=10, at=None, direction='download'):

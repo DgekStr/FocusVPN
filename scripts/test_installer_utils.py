@@ -157,8 +157,8 @@ ip() {
                     self.assertEqual((installed / name).stat().st_mode & 0o777, 0o644)
             self.assertEqual((installed / 'VERSION').read_bytes(), (root / 'VERSION').read_bytes())
             shell = (installed / 'panel_ui.py').read_text(encoding='utf-8')
-            self.assertIn('/panel.css?v=2.1.7-happ-led25', shell)
-            self.assertIn('/panel.js?v=2.1.7-happ-led25', shell)
+            self.assertIn('/panel.css?v=2.1.8-happ-list5-chart', shell)
+            self.assertIn('/panel.js?v=2.1.8-happ-list5-chart', shell)
             self.assertIn('repeat(25, minmax(0, 1fr))', (installed / 'static/panel.css').read_text(encoding='utf-8'))
             self.assertIn('index < 25', (installed / 'static/panel.js').read_text(encoding='utf-8'))
 

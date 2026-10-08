@@ -340,7 +340,7 @@ initialize_auth() {
 
 configure_nginx_proxy() {
   local server_ip certificate key site
-  server_ip="$(ip -4 route show default | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+  server_ip="$(ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
   [[ "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "could not determine the server IPv4 address for the panel URL"
   certificate="/etc/ssl/certs/focusvpn-panel.crt"
   key="/etc/ssl/private/focusvpn-panel.key"
@@ -516,7 +516,7 @@ main() {
     log "panel and wg-easy installed; sing-box/HAPP services were not enabled"
     log "complete configs, then run: sudo ./scripts/install.sh --enable"
   fi
-  server_ip="$(ip -4 route show default | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+  server_ip="$(ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
   log "installed packages: Docker, Nginx, OpenSSL, Python 3, nftables, WireGuard tools, sing-box and panel dependencies"
   log "started services: docker, nginx, sing-box-admin, wg-easy-private-ui, wg-easy container"
   log "admin panel: https://$server_ip:7445 (self-signed certificate; browser warning expected)"

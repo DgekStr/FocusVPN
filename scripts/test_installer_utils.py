@@ -63,6 +63,29 @@ class InstallerUtilsTests(unittest.TestCase):
         self.assertIn('install -d -m 0750 -o root -g sing-box "$SING_BOX_ROOT" "$HAPP_ROOT"', installer)
         self.assertIn('python3 -m compileall -q "$APP_ROOT"', installer)
 
+    def test_server_ipv4_detection_without_default_route_source(self):
+        bash = str(Path('C:/Program Files/Git/bin/bash.exe')) if os.name == 'nt' else shutil.which('bash')
+        if not bash or not Path(bash).is_file():
+            self.skipTest('Bash is required for installer IPv4 validation')
+        installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')
+        commands = '''set -euo pipefail
+ip() {
+  case "$*" in
+    "-4 route show default") printf '%s\\n' 'default via 192.168.56.1 dev enp0s3 proto static' ;;
+    "-4 route get 1.1.1.1") printf '%s\\n' '1.1.1.1 via 192.168.56.1 dev enp0s3 src 192.168.56.10 uid 0' '    cache' ;;
+    *) return 1 ;;
+  esac
+}
+'''
+        for name in ('configure_nginx_proxy', 'create_wg_easy_container', 'main'):
+            with self.subTest(function=name):
+                body = installer.split(name + '() {', 1)[1].split('\n}\n', 1)[0]
+                assignment = next(line.strip() for line in body.splitlines() if line.strip().startswith('server_ip='))
+                script = commands + assignment + '\nprintf "%s\\n" "$server_ip"\n'
+                result = subprocess.run([bash], input=script, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), '192.168.56.10')
+
     def test_runtime_bundle_preflight_rejects_missing_files(self):
         bash = str(Path('C:/Program Files/Git/bin/bash.exe')) if os.name == 'nt' else shutil.which('bash')
         if not bash or not Path(bash).is_file():

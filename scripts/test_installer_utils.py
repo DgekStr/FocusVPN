@@ -136,6 +136,32 @@ ip() {
                     self.assertIn('runtime bundle is incomplete: ' + missing, result.stderr)
                     path.write_bytes(original)
 
+    def test_runtime_install_copies_happ_meter_and_matching_asset_revision(self):
+        bash = str(Path('C:/Program Files/Git/bin/bash.exe')) if os.name == 'nt' else shutil.which('bash')
+        if not bash or not Path(bash).is_file():
+            self.skipTest('Bash is required for runtime installation validation')
+        root = Path(__file__).resolve().parents[1]
+        installer = (root / 'scripts' / 'install.sh').read_text(encoding='utf-8')
+        body = installer.split('install_tree() {', 1)[1].split('\n}\n', 1)[0]
+        prefixes = ('find "$REPO_ROOT/server/panel"', 'find "$REPO_ROOT/server/panel/static"', 'install -m 0644 "$REPO_ROOT/VERSION"')
+        commands = [line.strip() for line in body.splitlines() if line.strip().startswith(prefixes)]
+        self.assertEqual(len(commands), 3)
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / 'runtime'
+            script = 'set -euo pipefail\nmkdir -p "$APP_ROOT/static"\n' + '\n'.join(commands) + '\n'
+            result = subprocess.run([bash], input=script, text=True, capture_output=True, env={**os.environ, 'REPO_ROOT': root.as_posix(), 'APP_ROOT': installed.as_posix()})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for name in ('panel_ui.py', 'static/panel.css', 'static/panel.js', 'static/chart.js', 'static/chart.LICENSE.txt'):
+                self.assertEqual((installed / name).read_bytes(), (root / 'server/panel' / name).read_bytes())
+                if os.name == 'posix':
+                    self.assertEqual((installed / name).stat().st_mode & 0o777, 0o644)
+            self.assertEqual((installed / 'VERSION').read_bytes(), (root / 'VERSION').read_bytes())
+            shell = (installed / 'panel_ui.py').read_text(encoding='utf-8')
+            self.assertIn('/panel.css?v=2.1.7-happ-led25', shell)
+            self.assertIn('/panel.js?v=2.1.7-happ-led25', shell)
+            self.assertIn('repeat(25, minmax(0, 1fr))', (installed / 'static/panel.css').read_text(encoding='utf-8'))
+            self.assertIn('index < 25', (installed / 'static/panel.js').read_text(encoding='utf-8'))
+
     def test_legacy_wireguard_configs_are_backed_up_only_after_confirmation(self):
         installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')
         legacy_check = installer.split('check_legacy_wireguard() {', 1)[1].split('\n}\n', 1)[0]

@@ -403,7 +403,6 @@
       body.append(row);
       return;
     }
-    const maximum = Math.max(1, ...users.flatMap((user) => [user.download_rate || 0, user.upload_rate || 0]));
     for (const user of users) {
       const row = document.createElement('tr');
       const identity = document.createElement('td');
@@ -413,16 +412,26 @@
       const state = fresh ? user.status : 'unknown';
       status.className = `happ-activity-state ${state}`;
       status.textContent = { active: 'Активен', connected: 'Подключён · без трафика', offline: 'Не подключён', unknown: 'Нет данных' }[state] || 'Нет данных';
-      identity.append(name, status);
-      const speed = happCell(fresh ? `${rate(user.download_rate)} / ${rate(user.upload_rate)}` : '— / —');
-      if (fresh) {
-        for (const direction of ['download', 'upload']) {
-          const meter = document.createElement('span');
-          meter.className = `happ-activity-meter ${direction}`;
-          meter.style.width = `${Math.min(100, Math.max(0, Number(user[`${direction}_rate`]) || 0) / maximum * 100)}%`;
-          speed.append(meter);
-        }
+      const trafficRate = fresh && ['active', 'connected'].includes(state) ? [user.download_rate, user.upload_rate].reduce((total, value) => total + (Number.isFinite(value) ? Math.max(0, value) : 0), 0) : 0;
+      const level = trafficRate > 0 ? Math.min(25, Math.ceil(25 * Math.log1p(trafficRate / 1024) / Math.log1p(10240))) : 0;
+      const meter = document.createElement('span');
+      meter.className = 'happ-activity-meter';
+      meter.role = 'meter';
+      meter.ariaLabel = `Сетевая активность ${name.textContent}`;
+      meter.ariaValueMin = '0';
+      meter.ariaValueMax = '25';
+      meter.ariaValueNow = String(level);
+      meter.ariaValueText = fresh ? `${rate(trafficRate)} МБ/с` : 'Нет свежих данных';
+      meter.title = fresh ? `${rate(user.download_rate)} / ${rate(user.upload_rate)} МБ/с` : 'Нет свежих данных';
+      for (let index = 0; index < 25; index++) {
+        const segment = document.createElement('span');
+        segment.className = `happ-activity-segment ${index < 15 ? 'green' : index < 20 ? 'amber' : 'red'}${index < level ? ' lit' : ''}${index < level && index >= level - 3 ? ' edge' : ''}`;
+        segment.ariaHidden = 'true';
+        segment.style.animationDelay = `${-index * 65}ms`;
+        meter.append(segment);
       }
+      identity.append(name, meter, status);
+      const speed = happCell(fresh ? `${rate(user.download_rate)} / ${rate(user.upload_rate)}` : '— / —');
       const totals = happCell(`${bytes(user.download_bytes)} / ${bytes(user.upload_bytes)}`);
       totals.title = 'Накопленные замеры журнала; ручной сброс обнуляет итог.';
       if (user.unknown_traffic) {

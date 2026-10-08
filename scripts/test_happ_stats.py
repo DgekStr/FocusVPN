@@ -31,6 +31,23 @@ class HappStatsTests(unittest.TestCase):
         self.assertEqual(connection_identity(self.live(40002), peers)['user_name'], 'Bob')
         self.assertEqual(connection_identity(self.live(40003), peers)['user_name'], 'Не определён')
 
+    def test_live_statistics_only_publish_authenticated_registered_identities(self):
+        peers = authenticated_peers([self.source(1, 40001), self.auth(1, 'personal-a')], self.names, set(), 'happ')
+        connections = [self.live(40001), self.live(40003)]
+        with patch.object(happ_stats.request, 'urlopen') as urlopen, patch.object(happ_stats, 'journal_identities', return_value=peers):
+            response = urlopen.return_value.__enter__.return_value
+            response.read.return_value = json.dumps({'connections': connections}).encode()
+            public = happ_stats.live_connections()
+            private = happ_stats.live_connections(include_visits=True)
+        self.assertEqual(public['online_count'], 1)
+        self.assertEqual(public['unresolved_connections'], 1)
+        self.assertEqual([item['user_key'] for item in public['users']], ['personal-a'])
+        self.assertEqual([item['user_key'] for item in public['traffic_samples']], ['personal-a'])
+        self.assertEqual(public['connections'][0]['user_name'], 'Alice')
+        self.assertEqual(public['connections'][0]['connections'], 1)
+        self.assertEqual(len(private['connections']), 2)
+        self.assertTrue(any(item['user_key'] == 'unknown' for item in private['connections']))
+
     def test_binary_message_and_ansi(self):
         source = self.source(1, 40001)
         auth = self.auth(1, 'personal-a')

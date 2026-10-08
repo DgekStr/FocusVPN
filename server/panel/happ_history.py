@@ -75,7 +75,7 @@ class HappHistory:
                 database.execute('''
                     INSERT OR IGNORE INTO user_traffic_totals (user_key,user_name,download_bytes,upload_bytes)
                     SELECT user_key,MAX(user_name),COALESCE(SUM(download_bytes),0),COALESCE(SUM(upload_bytes),0)
-                    FROM connections GROUP BY user_key
+                    FROM connections WHERE user_key!='unknown' GROUP BY user_key
                 ''')
                 database.execute("INSERT OR REPLACE INTO settings VALUES ('lifetime_totals_initialized','1')")
         self.secure_files()
@@ -124,6 +124,9 @@ class HappHistory:
 
     @staticmethod
     def add_user_traffic(database, user_key, user_name, download_delta, upload_delta):
+        if user_key == 'unknown':
+            database.execute("UPDATE user_traffic_totals SET download_bytes=MAX(0,download_bytes+MIN(0,?)),upload_bytes=MAX(0,upload_bytes+MIN(0,?)) WHERE user_key='unknown'", (download_delta, upload_delta))
+            return
         database.execute('''
             INSERT INTO user_traffic_totals (user_key,user_name,download_bytes,upload_bytes)
             VALUES (?,?,MAX(0,?),MAX(0,?))
@@ -133,6 +136,39 @@ class HappHistory:
                 upload_bytes=MAX(0,user_traffic_totals.upload_bytes+?)
         ''', (user_key, user_name, download_delta, upload_delta, download_delta, upload_delta))
 
+    def reconcile_authenticated_visits(self, database, visits):
+        authenticated = {}
+        for visit in visits:
+            if not visit.get('connection_key') or visit.get('user_key') in (None, '', 'unknown') or visit.get('source_port') is None:
+                continue
+            try:
+                started = dt.datetime.fromisoformat(visit['started_at'])
+            except (KeyError, TypeError, ValueError):
+                continue
+            peer = (visit.get('ip'), str(visit['source_port']), visit.get('destination'))
+            authenticated.setdefault(peer, []).append((visit, started))
+        if not authenticated:
+            return
+        for row in database.execute("SELECT * FROM connections WHERE user_key='unknown'").fetchall():
+            try:
+                started = dt.datetime.fromisoformat(row['started_at'])
+            except (TypeError, ValueError):
+                continue
+            peer = (row['source_ip'], str(row['source_port']), row['destination'])
+            candidates = [visit for visit, timestamp in authenticated.get(peer, []) if abs((timestamp - started).total_seconds()) <= 15]
+            if len({(visit['connection_key'], visit['user_key']) for visit in candidates}) != 1:
+                continue
+            visit = candidates[0]
+            known = database.execute('SELECT * FROM connections WHERE connection_key=?', (visit['connection_key'],)).fetchone()
+            if known is not None and (known['download_bytes'] is not None or known['upload_bytes'] is not None):
+                continue
+            download, upload = row['download_bytes'] or 0, row['upload_bytes'] or 0
+            self.add_user_traffic(database, 'unknown', row['user_name'], -download, -upload)
+            self.add_user_traffic(database, visit['user_key'], visit['user_name'], download, upload)
+            if known is not None:
+                database.execute('DELETE FROM connections WHERE connection_key=?', (known['connection_key'],))
+            database.execute('UPDATE connections SET connection_key=?,user_key=?,user_name=?,started_at=? WHERE connection_key=?', (visit['connection_key'], visit['user_key'], visit['user_name'], visit['started_at'], row['connection_key']))
+
     def ingest(self, payload, at=None):
         observed = utc_text(at)
         items = payload.get('connections', [])
@@ -140,6 +176,7 @@ class HappHistory:
         with self.lock, self.connect() as database:
             self.record_download_rates(database, payload, observed)
             database.execute('UPDATE connections SET active=0 WHERE active=1')
+            self.reconcile_authenticated_visits(database, visits)
             for visit in visits:
                 key = visit.get('connection_key')
                 if not key or not visit.get('started_at'):
@@ -163,7 +200,8 @@ class HappHistory:
                 previous_upload = max((row['upload_bytes'] or 0 for row in prior_rows), default=0)
                 download = max(0, int(item.get('download_bytes', 0)), previous_download)
                 upload = max(0, int(item.get('upload_bytes', 0)), previous_upload)
-                old_identity = next((row for row in prior_rows if row['user_key'] != 'unknown'), prior_rows[0] if prior_rows else None)
+                counted_rows = [row for row in prior_rows if row['download_bytes'] is not None or row['upload_bytes'] is not None]
+                old_identity = next((row for row in counted_rows if row['user_key'] != 'unknown'), counted_rows[0] if counted_rows else None)
                 old_user_key = old_identity['user_key'] if old_identity else 'unknown'
                 old_user_name = old_identity['user_name'] if old_identity else 'Не определён'
                 user_key = str(item.get('user_key') or 'unknown')
@@ -207,13 +245,13 @@ class HappHistory:
             return
         elapsed = (timestamp - previous_at) / 1000 if previous_at is not None else 0
         measured = 0 < elapsed <= 10
-        users = {str(item['user_key']): str(item.get('user_name') or 'Не определён') for item in payload.get('users', []) if item.get('user_key') and int(item.get('connections') or 0) > 0}
+        users = {str(item['user_key']): str(item.get('user_name') or 'Не определён') for item in payload.get('users', []) if item.get('user_key') and item['user_key'] != 'unknown' and int(item.get('connections') or 0) > 0}
         rates = {key: 0.0 if measured else None for key in users}
         upload_rates = {key: 0.0 if measured else None for key in users}
         previous = {row['live_id']: row for row in database.execute('SELECT * FROM download_rate_counters')}
         counters = []
         for item in payload['traffic_samples']:
-            if not item.get('id') or not item.get('user_key'):
+            if not item.get('id') or not item.get('user_key') or item['user_key'] == 'unknown':
                 continue
             identifier, key = str(item['id']), str(item['user_key'])
             download = max(0, int(item.get('download_bytes') or 0))
@@ -258,6 +296,8 @@ class HappHistory:
             current = {row['user_key']: dict(row) for row in database.execute('SELECT * FROM download_rate_samples WHERE sampled_at=?', (sampled_at,))}
             users = []
             for key in totals.keys() | connected.keys() | current.keys() | logged.keys():
+                if key == 'unknown':
+                    continue
                 total = totals.get(key, {})
                 live = connected.get(key, {})
                 sample = current.get(key, {})
@@ -296,9 +336,9 @@ class HappHistory:
             ranked = database.execute(f'''
                 SELECT user_key,MAX({rate_column}) AS peak
                 FROM download_rate_samples WHERE sampled_at>=? AND sampled_at<=?
-                GROUP BY user_key ORDER BY peak DESC,user_key LIMIT 10
+                AND user_key!='unknown' GROUP BY user_key ORDER BY peak DESC,user_key LIMIT 10
             ''', (since, until)).fetchall()
-            count = database.execute('SELECT COUNT(DISTINCT user_key) FROM download_rate_samples WHERE sampled_at>=? AND sampled_at<=?', (since, until)).fetchone()[0]
+            count = database.execute("SELECT COUNT(DISTINCT user_key) FROM download_rate_samples WHERE sampled_at>=? AND sampled_at<=? AND user_key!='unknown'", (since, until)).fetchone()[0]
             result = []
             for user in ranked:
                 key = user['user_key']
@@ -319,7 +359,7 @@ class HappHistory:
         return {'minutes': minutes, 'direction': direction, 'since': since, 'until': until, 'sampled_at': int(latest[0]) if latest else None, 'user_count': count, 'users': result}
 
     def filters(self, user_key='', since='', until=''):
-        conditions, values = [], []
+        conditions, values = ["user_key!='unknown'"], []
         if user_key:
             conditions.append('user_key=?')
             values.append(user_key)
@@ -365,7 +405,7 @@ class HappHistory:
         with self.connect() as database:
             rows = database.execute('''
                 SELECT user_key,user_name,download_bytes,upload_bytes
-                FROM user_traffic_totals
+                FROM user_traffic_totals WHERE user_key!='unknown'
             ''').fetchall()
         return {row['user_key']: {**dict(row), 'download': format_bytes(row['download_bytes']), 'upload': format_bytes(row['upload_bytes'])} for row in rows}
 
@@ -375,7 +415,7 @@ class HappHistory:
             rows = database.execute('''
                 SELECT user_key,user_name,download_bytes,upload_bytes
                 FROM user_traffic_totals
-                WHERE download_bytes + upload_bytes > 0
+                WHERE user_key!='unknown' AND download_bytes + upload_bytes > 0
                 ORDER BY download_bytes + upload_bytes DESC,user_name COLLATE NOCASE
                 LIMIT ?
             ''', (max(0, min(5, int(limit))),)).fetchall()
@@ -400,7 +440,7 @@ class HappHistory:
 
     def user_options(self):
         with self.connect() as database:
-            return [dict(row) for row in database.execute('SELECT user_key, MAX(user_name) AS user_name FROM connections GROUP BY user_key ORDER BY user_name')]
+            return [dict(row) for row in database.execute("SELECT user_key, MAX(user_name) AS user_name FROM connections WHERE user_key!='unknown' GROUP BY user_key ORDER BY user_name")]
 
     def last_collected_at(self):
         with self.connect() as database:

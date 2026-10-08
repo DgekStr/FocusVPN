@@ -176,13 +176,15 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual((totals['personal-b']['download_bytes'], totals['personal-b']['upload_bytes']), (500, 60))
 
     def test_lifetime_totals_backfill_existing_retained_connections_once(self):
-        self.history.ingest({'connections': [self.row(download=321, upload=123)]}, self.at)
+        self.history.ingest({'connections': [self.row(download=321, upload=123), self.row(key='legacy-unknown', user='unknown', name='Не определён')]}, self.at)
         with self.history.connect() as database:
             database.execute('DROP TABLE user_traffic_totals')
             database.execute("DELETE FROM settings WHERE key='lifetime_totals_initialized'")
         migrated = HappHistory(self.directory.name)
         totals = migrated.user_totals()
         self.assertEqual((totals['personal-a']['download_bytes'], totals['personal-a']['upload_bytes']), (321, 123))
+        with migrated.connect() as database:
+            self.assertEqual(database.execute("SELECT COUNT(*) FROM user_traffic_totals WHERE user_key='unknown'").fetchone()[0], 0)
 
     def test_journal_only_visit_keeps_unknown_bytes(self):
         visit = self.row()
@@ -206,6 +208,66 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(result['count'], 1)
         self.assertEqual(result['rows'][0]['user_name'], 'Alice')
         self.assertEqual(result['download_bytes'], 200)
+        self.assertEqual(self.history.user_totals()['personal-a']['download_bytes'], 200)
+
+    def test_unresolved_identity_never_appears_as_a_statistics_user(self):
+        payload = self.rate_payload(1000, self.at)
+        payload['connections'] = [self.row(download=1000)]
+        for collection in ('connections', 'users', 'traffic_samples'):
+            for item in payload[collection]:
+                item.update({'user_key': 'unknown', 'user_name': 'Не определён'})
+        self.history.ingest(payload, self.at)
+        self.assertEqual(self.history.user_totals(), {})
+        self.assertEqual(self.history.top_users(), [])
+        self.assertEqual(self.history.activity(5, self.at)['users'], [])
+        self.assertEqual(self.history.download_chart(10, self.at)['users'], [])
+        self.assertEqual(self.history.user_options(), [])
+        self.assertEqual(self.history.traffic_chart(), [])
+        self.assertEqual(self.history.query()['count'], 0)
+        with self.history.connect() as database:
+            self.assertEqual(database.execute("SELECT COUNT(*) FROM connections WHERE user_key='unknown'").fetchone()[0], 1)
+            self.assertEqual(database.execute("SELECT COUNT(*) FROM user_traffic_totals WHERE user_key='unknown'").fetchone()[0], 0)
+            database.execute("INSERT INTO user_traffic_totals VALUES ('unknown','Не определён',1000,50)")
+            database.execute("INSERT INTO download_rate_samples VALUES (?,'unknown','Не определён',100,50)", (int(self.at.timestamp() * 1000),))
+        reopened = HappHistory(self.directory.name)
+        self.assertEqual(reopened.user_totals(), {})
+        self.assertEqual(reopened.top_users(), [])
+        self.assertEqual(reopened.activity(5, self.at)['users'], [])
+        self.assertEqual(reopened.download_chart(10, self.at)['users'], [])
+        self.assertEqual(reopened.download_chart(10, self.at)['user_count'], 0)
+        self.assertEqual(reopened.user_options(), [])
+        self.assertEqual(reopened.traffic_chart(), [])
+        self.assertEqual(reopened.query()['count'], 0)
+
+    def test_late_journal_identity_recovers_closed_connection_counters(self):
+        pending = self.row(key='live-delayed', user='unknown', name='Не определён', download=123)
+        pending.update({'source_port': 40001, 'id': 'delayed-live-id'})
+        visit = {**pending, 'connection_key': 'authenticated-delayed', 'user_key': 'personal-a', 'user_name': 'Alice'}
+        self.history.ingest({'connections': [pending]}, self.at)
+        later = self.at + dt.timedelta(seconds=2)
+        self.history.ingest({'connections': [], 'visits': [visit]}, later)
+        result = self.history.query()
+        self.assertEqual(result['count'], 1)
+        self.assertEqual(result['rows'][0]['user_name'], 'Alice')
+        self.assertEqual(result['rows'][0]['active'], 0)
+        self.assertEqual(result['download_bytes'], 123)
+        self.assertEqual(self.history.user_totals()['personal-a']['download_bytes'], 123)
+        self.history.ingest({'connections': [], 'visits': [visit]}, later + dt.timedelta(seconds=1))
+        self.assertEqual(self.history.query()['count'], 1)
+        self.assertEqual(self.history.user_totals()['personal-a']['download_bytes'], 123)
+
+    def test_ambiguous_late_journal_never_assigns_unknown_connection(self):
+        pending = self.row(key='live-ambiguous', user='unknown', name='Не определён')
+        pending.update({'source_port': 40001, 'id': 'ambiguous-live-id'})
+        first = {**pending, 'connection_key': 'authenticated-first', 'user_key': 'personal-a', 'user_name': 'Alice'}
+        second = {**first, 'connection_key': 'authenticated-second', 'user_key': 'personal-b', 'user_name': 'Bob'}
+        self.history.ingest({'connections': [pending]}, self.at)
+        self.history.ingest({'connections': [], 'visits': [first, second]}, self.at + dt.timedelta(seconds=2))
+        with self.history.connect() as database:
+            row = database.execute('SELECT user_key FROM connections WHERE live_id=?', ('ambiguous-live-id',)).fetchone()
+        self.assertEqual(row['user_key'], 'unknown')
+        self.assertNotIn('personal-a', self.history.user_totals())
+        self.assertNotIn('personal-b', self.history.user_totals())
 
     def test_restart_continues_counters_and_closed_rows_persist(self):
         self.history.ingest({'connections': [self.row()]}, self.at)

@@ -374,14 +374,16 @@ def live_connections(include_visits=False, history_since=None):
     peers = journal_identities(connections, history_since)
     items = [connection_item(item, peers) for item in connections]
     items.sort(key=lambda item: item['id'])
-    users = summarize_users(items)
+    verified_items = [item for item in items if item['user_key'] != 'unknown']
+    users = summarize_users(verified_items)
     payload = {
         'sampled_at': sampled_at,
-        'traffic_samples': [{'id': item['id'] or item['connection_key'], 'user_key': item['user_key'], 'download_bytes': item['download_bytes'], 'upload_bytes': item['upload_bytes']} for item in items],
-        'online_count': len(items),
-        'download': format_bytes(sum(item['download_bytes'] for item in items)),
-        'upload': format_bytes(sum(item['upload_bytes'] for item in items)),
-        'connections': aggregate_connections(items),
+        'traffic_samples': [{'id': item['id'] or item['connection_key'], 'user_key': item['user_key'], 'download_bytes': item['download_bytes'], 'upload_bytes': item['upload_bytes']} for item in verified_items],
+        'online_count': len(verified_items),
+        'unresolved_connections': len(items) - len(verified_items),
+        'download': format_bytes(sum(item['download_bytes'] for item in verified_items)),
+        'upload': format_bytes(sum(item['upload_bytes'] for item in verified_items)),
+        'connections': aggregate_connections(verified_items),
         'users': users,
         'top_users': rank_top_users(users),
     }

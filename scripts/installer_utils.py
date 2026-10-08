@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import os
 import re
@@ -7,6 +8,42 @@ from pathlib import Path
 
 
 SHA256_DIGEST = re.compile(r'^sha256:([0-9a-f]{64})$')
+
+
+def configure_proxy_environment(path, server_ip):
+    server_ip = str(ipaddress.IPv4Address(server_ip))
+    path = Path(path)
+    subscription_origin = f'https://{server_ip}:7445'
+    lines = path.read_text(encoding='utf-8').splitlines()
+    updated = []
+    found_host = False
+    found_proxy = False
+    found_subscription = False
+    for line in lines:
+        if line.startswith('SING_BOX_ADMIN_HOST='):
+            updated.append('SING_BOX_ADMIN_HOST=127.0.0.1')
+            found_host = True
+        elif line.startswith('FOCUSVPN_TRUSTED_PROXY_NETWORKS='):
+            current = line.split('=', 1)[1].strip().strip('"\'')
+            networks = [item.strip() for item in current.split(',') if item.strip()]
+            if '127.0.0.1/32' not in networks:
+                networks.append('127.0.0.1/32')
+            updated.append('FOCUSVPN_TRUSTED_PROXY_NETWORKS=' + ','.join(networks))
+            found_proxy = True
+        elif line.startswith('FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL='):
+            current = line.split('=', 1)[1].strip().strip('"\'')
+            updated.append(line if current else 'FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL=' + subscription_origin)
+            found_subscription = True
+        else:
+            updated.append(line)
+    if not found_host:
+        updated.append('SING_BOX_ADMIN_HOST=127.0.0.1')
+    if not found_proxy:
+        updated.append('FOCUSVPN_TRUSTED_PROXY_NETWORKS=127.0.0.1/32')
+    if not found_subscription:
+        updated.append('FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL=' + subscription_origin)
+    path.write_text('\n'.join(updated) + '\n', encoding='utf-8')
+    os.chmod(path, 0o600)
 
 
 def remove_placeholder_servers(config):
@@ -72,6 +109,9 @@ def release_asset_sha256(release, asset_name):
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == 'remove-placeholders':
         migrate_placeholder_file(sys.argv[2], sys.argv[3])
+        return
+    if len(sys.argv) == 4 and sys.argv[1] == 'configure-proxy':
+        configure_proxy_environment(sys.argv[2], sys.argv[3])
         return
     if len(sys.argv) != 3:
         raise SystemExit('Usage: installer_utils.py RELEASE_JSON ASSET_NAME')

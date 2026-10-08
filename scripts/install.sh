@@ -354,36 +354,7 @@ configure_nginx_proxy() {
     chmod 0644 "$certificate"
   fi
 
-  python3 - "$CONFIG_ROOT/focusvpn.env" <<'PY'
-import os
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-lines = path.read_text(encoding='utf-8').splitlines()
-updated = []
-found_host = False
-found_proxy = False
-for line in lines:
-    if line.startswith('SING_BOX_ADMIN_HOST='):
-        updated.append('SING_BOX_ADMIN_HOST=127.0.0.1')
-        found_host = True
-    elif line.startswith('FOCUSVPN_TRUSTED_PROXY_NETWORKS='):
-        current = line.split('=', 1)[1].strip().strip('"\'')
-        networks = [item.strip() for item in current.split(',') if item.strip()]
-        if '127.0.0.1/32' not in networks:
-            networks.append('127.0.0.1/32')
-        updated.append('FOCUSVPN_TRUSTED_PROXY_NETWORKS=' + ','.join(networks))
-        found_proxy = True
-    else:
-        updated.append(line)
-if not found_host:
-    updated.append('SING_BOX_ADMIN_HOST=127.0.0.1')
-if not found_proxy:
-    updated.append('FOCUSVPN_TRUSTED_PROXY_NETWORKS=127.0.0.1/32')
-path.write_text('\n'.join(updated) + '\n', encoding='utf-8')
-os.chmod(path, 0o600)
-PY
+  python3 "$REPO_ROOT/scripts/installer_utils.py" configure-proxy "$CONFIG_ROOT/focusvpn.env" "$server_ip"
 
   cat > "$site" <<EOF
 server {

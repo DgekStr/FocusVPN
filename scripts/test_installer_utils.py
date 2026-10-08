@@ -86,6 +86,28 @@ ip() {
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), '192.168.56.10')
 
+    def test_installer_configures_external_subscription_origin_without_overwriting_custom_url(self):
+        installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')
+        configure = installer.split('configure_nginx_proxy() {', 1)[1].split('\ncreate_wg_easy_container() {', 1)[0]
+        self.assertIn('python3 "$REPO_ROOT/scripts/installer_utils.py" configure-proxy "$CONFIG_ROOT/focusvpn.env" "$server_ip"', configure)
+        utility = Path(__file__).resolve().parent / 'installer_utils.py'
+        automatic = 'FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL=https://192.0.2.5:7445'
+        custom = 'FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL="https://vpn.example.com:8443/vpn/"'
+        for configured, expected in (('', automatic), ('FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL=""\n', automatic), (custom + '\n', custom)):
+            with self.subTest(configured=configured), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'focusvpn.env'
+                path.write_text('SING_BOX_ADMIN_HOST=0.0.0.0\nFOCUSVPN_TRUSTED_PROXY_NETWORKS=192.0.2.1/32\nUNRELATED=value\n' + configured, encoding='utf-8')
+                result = subprocess.run([sys.executable, str(utility), 'configure-proxy', str(path), '192.0.2.5'], text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = path.read_text(encoding='utf-8').splitlines()
+                self.assertIn(expected, lines)
+                self.assertEqual(sum(line.startswith('FOCUSVPN_HAPP_SUBSCRIPTION_BASE_URL=') for line in lines), 1)
+                self.assertIn('SING_BOX_ADMIN_HOST=127.0.0.1', lines)
+                self.assertIn('FOCUSVPN_TRUSTED_PROXY_NETWORKS=192.0.2.1/32,127.0.0.1/32', lines)
+                self.assertIn('UNRELATED=value', lines)
+                if os.name == 'posix':
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_runtime_bundle_preflight_rejects_missing_files(self):
         bash = str(Path('C:/Program Files/Git/bin/bash.exe')) if os.name == 'nt' else shutil.which('bash')
         if not bash or not Path(bash).is_file():

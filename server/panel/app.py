@@ -2160,11 +2160,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == '/happ-server/live':
             try:
+                seconds = form_value(parse_qs(parsed.query), 'seconds') or '5'
+                activity = HAPP_HISTORY.activity(seconds) if HAPP_HISTORY is not None else None
                 payload = happ_live_connections()
+                payload['activity'] = activity
                 payload['account_traffic'] = HAPP_HISTORY.user_totals() if HAPP_HISTORY is not None else {}
                 if HAPP_HISTORY is not None:
                     payload['top_users'] = HAPP_HISTORY.top_users(payload.get('users', []))
                 self.send_json(HTTPStatus.OK, payload)
+            except ValueError as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {'error': str(error)})
             except HappStatsError as error:
                 self.send_json(HTTPStatus.BAD_GATEWAY, {'error': str(error)})
             except (OSError, sqlite3.Error):
@@ -2175,9 +2180,9 @@ class Handler(BaseHTTPRequestHandler):
                 if HAPP_HISTORY is None:
                     raise RuntimeError('Хранилище статистики недоступно.')
                 query = parse_qs(parsed.query)
-                self.send_json(HTTPStatus.OK, HAPP_HISTORY.download_chart(form_value(query, 'minutes') or '10'))
-            except ValueError:
-                self.send_json(HTTPStatus.BAD_REQUEST, {'error': 'Доступны отрезки 10, 30, 60 и 90 минут.'})
+                self.send_json(HTTPStatus.OK, HAPP_HISTORY.download_chart(form_value(query, 'minutes') or '10', direction=form_value(query, 'direction') or 'download'))
+            except ValueError as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {'error': str(error)})
             except (RuntimeError, OSError, sqlite3.Error):
                 self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {'error': 'История скоростей временно недоступна.'})
             return
@@ -2598,6 +2603,7 @@ def happ_expiry_worker():
 def happ_history_worker():
     next_cleanup = 0.0
     while not HAPP_HISTORY_STOP.is_set():
+        cycle_started = time.monotonic()
         try:
             if HAPP_HISTORY is not None:
                 payload = happ_live_connections(include_visits=True, history_since=HAPP_HISTORY.last_collected_at())
@@ -2612,7 +2618,7 @@ def happ_history_worker():
                     HAPP_HISTORY.record_collection_error()
             except Exception:
                 pass
-        HAPP_HISTORY_STOP.wait(2)
+        HAPP_HISTORY_STOP.wait(max(0.05, 1 - (time.monotonic() - cycle_started)))
 
 
 def main():

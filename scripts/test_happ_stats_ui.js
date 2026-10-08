@@ -71,6 +71,7 @@ async function main() {
   const liveRoot = element();
   const canvas = element();
   const legend = element();
+  const activityRows = element();
   let chart;
   let refresh;
   let payload;
@@ -81,7 +82,7 @@ async function main() {
   let finishHistory;
   let heldSignal;
   const ranges = [];
-  const range = { value: '10', closest() { return this; } };
+  const range = { value: '10', closest(selector) { return selector === '[data-happ-chart-range]' ? this : null; } };
   class FakeChart {
     constructor(target, config) {
       assert.equal(target, canvas);
@@ -112,6 +113,11 @@ async function main() {
       if (selector === '[data-happ-live]') return liveRoot;
       if (selector === '[data-happ-traffic-chart]') return canvas;
       if (selector === '[data-happ-chart-legend]') return legend;
+      if (selector === '[data-happ-activity-users]') return activityRows;
+      if (['[data-happ-activity-status]', '[data-happ-users-online]', '[data-happ-current]', '[data-happ-lifetime-download]', '[data-happ-lifetime-upload]', '[data-happ-peak-label]'].includes(selector)) {
+        if (!metrics.has(selector)) metrics.set(selector, element());
+        return metrics.get(selector);
+      }
       if (selector === '[data-happ-chart-range]') return range;
       if (selector === '[data-happ-connections]') return connections;
       if (selector === '[data-happ-user-traffic]') return users;
@@ -140,9 +146,9 @@ async function main() {
     fetch: async (url, options) => {
       assert.ok(options.signal);
       if (url.startsWith('/happ-server/traffic?minutes=')) {
-        const minutes = Number(url.split('=')[1]);
+        const minutes = Number(new URL(url, 'http://localhost').searchParams.get('minutes'));
         ranges.push(minutes);
-        const result = { minutes, since: historyAt - minutes * 60000, until: historyAt, sampled_at: historyAt, user_count: historyCount, users: historyUsers };
+        const result = { minutes, direction: new URL(url, 'http://localhost').searchParams.get('direction'), since: historyAt - minutes * 60000, until: historyAt, sampled_at: historyAt, user_count: historyCount, users: historyUsers };
         const response = { status: historyStatus, ok: historyStatus === 200, json: async () => result };
         if (deferHistory) {
           deferHistory = false;
@@ -151,7 +157,7 @@ async function main() {
         }
         return response;
       }
-      assert.equal(url, '/happ-server/live');
+      assert.match(url, /^\/happ-server\/live\?seconds=\d+$/);
       return {
         status: httpStatus, ok: httpStatus === 200,
         json: async () => payload || ({
@@ -276,6 +282,43 @@ async function main() {
   assert.equal(metrics.get('[data-happ-speed]').textContent, '2.00 МБ/с');
   assert.ok([10, 30, 60, 90].every((minutes) => ranges.includes(minutes)));
   console.log('PASS: HAPP live rates, persisted maxima, four ranges, request races, colors, limit and stale/empty states');
+  payload.activity = { seconds: 5, fresh: true, sampled_at: historyAt, users: [
+    { user_key: 'personal-a', user_name: name, status: 'active', connections: 3, ips: ['203.0.113.1', '2001:db8::1'], download_bytes: 1073741824, upload_bytes: 1048576, download_rate: 2097152, upload_rate: 1048576, download_peak: 4194304, upload_peak: 2097152 },
+    { user_key: 'offline', user_name: 'Closed', status: 'offline', connections: 0, ips: [], download_bytes: 1073741824, upload_bytes: 1048576, download_rate: 0, upload_rate: 0, download_peak: null, upload_peak: null },
+  ] };
+  await refresh();
+  assert.equal(activityRows.children.length, 2);
+  const cells = activityRows.children[0].children;
+  assert.equal(cells[0].children[0].textContent, name);
+  assert.equal(cells[0].children[1].textContent, 'Активен');
+  assert.equal(cells[1].textContent, '203.0.113.1, 2001:db8::1');
+  assert.equal(cells[2].textContent, '3');
+  assert.equal(cells[3].textContent, '1.00 ГБ / 1.00 МБ');
+  assert.equal(cells[4].textContent, '2.00 / 1.00');
+  assert.equal(cells[5].textContent, '4.00 / 2.00');
+  assert.equal(metrics.get('[data-happ-lifetime-download]').textContent, '2.00 ГБ');
+  assert.equal(metrics.get('[data-happ-users-online]').textContent, '1 / 1');
+  const secondsControl = { value: '60', closest(selector) { return selector === '[data-happ-peak-seconds]' ? this : null; } };
+  await changeRange({ target: secondsControl });
+  await refresh();
+  assert.equal(metrics.get('[data-happ-users-online]').textContent, '— / —');
+  payload.activity.seconds = 60;
+  payload.activity.users[0].status = 'connected';
+  await refresh();
+  assert.equal(activityRows.children[0].children[0].children[1].textContent, 'Подключён · без трафика');
+  assert.equal(metrics.get('[data-happ-peak-label]').textContent, 'за 60 сек, МБ/с');
+  secondsControl.value = '61';
+  await changeRange({ target: secondsControl });
+  assert.equal(secondsControl.value, '60');
+  const directionControl = { value: 'upload', closest(selector) { return selector === '[data-happ-chart-direction]' ? this : null; } };
+  await changeRange({ target: directionControl });
+  assert.equal(chart.data.datasets.length, 1);
+  assert.ok(canvas.ariaLabel.includes('отправки'));
+  httpStatus = 503;
+  await refresh();
+  assert.equal(metrics.get('[data-happ-current]').textContent, '— / —');
+  assert.equal(activityRows.children[0].children[0].textContent, 'Ожидание свежих данных.');
+  console.log('PASS: activity identity, IPs, lifetime totals, rates, peak window, upload mode, races and stale states');
 }
 
 main().catch((error) => {

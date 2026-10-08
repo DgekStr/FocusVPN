@@ -202,7 +202,7 @@
         },
       },
     });
-    happTraffic = { chart, previous: new Map(), sampledAt: null, colors: new Map(), minutes: 10, historyDue: 0, historyLoading: false, historyRequest: 0, historyController: null };
+    happTraffic = { chart, previous: new Map(), sampledAt: null, colors: new Map(), minutes: 10, direction: 'download', seconds: 5, historyDue: 0, historyLoading: false, historyRequest: 0, historyController: null };
   }
 
   function happTrafficStatus(text, failed = false) {
@@ -309,14 +309,14 @@
     const request = ++state.historyRequest;
     const timeout = window.setTimeout(() => controller.abort(), 10000);
     try {
-      const response = await fetch(panelPath(`/happ-server/traffic?minutes=${state.minutes}`), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+      const response = await fetch(panelPath(`/happ-server/traffic?minutes=${state.minutes}&direction=${state.direction}`), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
       if (response.status === 401) {
         window.location.reload();
         return;
       }
       if (!response.ok) throw new Error('History unavailable');
       const payload = await response.json();
-      if (happTraffic === state && state.historyRequest === request && payload.minutes === state.minutes) renderHappTrafficHistory(payload, state);
+      if (happTraffic === state && state.historyRequest === request && payload.minutes === state.minutes && (payload.direction || 'download') === state.direction) renderHappTrafficHistory(payload, state);
     } catch (_) {
       if (happTraffic === state && state.historyRequest === request) happTrafficStatus('История недоступна', true);
     } finally {
@@ -326,9 +326,28 @@
   }
 
   document.addEventListener('change', (event) => {
+    const secondsControl = event.target.closest('[data-happ-peak-seconds]');
+    if (secondsControl && happTraffic) {
+      const seconds = Number(secondsControl.value);
+      if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60) {
+        secondsControl.value = String(happTraffic.seconds);
+        return;
+      }
+      happTraffic.seconds = seconds;
+      renderHappActivity(null);
+      return;
+    }
+    const directionControl = event.target.closest('[data-happ-chart-direction]');
     const control = event.target.closest('[data-happ-chart-range]');
-    const minutes = Number(control?.value);
+    const minutes = control ? Number(control.value) : happTraffic?.minutes;
+    if (!directionControl && !control) return;
     if (!happTraffic || ![10, 30, 60, 90].includes(minutes)) return;
+    if (directionControl) {
+      if (!['download', 'upload'].includes(directionControl.value)) return;
+      happTraffic.direction = directionControl.value;
+      const canvas = document.querySelector('[data-happ-traffic-chart]');
+      if (canvas) canvas.ariaLabel = `Скорость ${happTraffic.direction === 'upload' ? 'отправки' : 'скачивания'} пользователей HAPP, МБ в секунду`;
+    }
     happTraffic.minutes = minutes;
     happTraffic.chart.data.datasets = [];
     const until = Date.now();
@@ -344,6 +363,78 @@
     return refreshHappTrafficHistory(true);
   });
 
+  function renderHappActivity(payload) {
+    const body = document.querySelector('[data-happ-activity-users]');
+    if (!body) return;
+    const setText = (selector, text) => {
+      const target = document.querySelector(selector);
+      if (target) target.textContent = text;
+    };
+    const rate = (value) => value === null || value === undefined ? '—' : (Math.max(0, Number(value) || 0) / 1048576).toFixed(2);
+    const bytes = (value) => {
+      if (value === null || value === undefined) return '—';
+      let amount = Math.max(0, Number(value) || 0);
+      const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+      let unit = 0;
+      while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit++; }
+      return `${amount.toFixed(unit ? 2 : 0)} ${units[unit]}`;
+    };
+    const users = Array.isArray(payload?.users) ? payload.users : [];
+    const fresh = payload?.fresh === true && payload.seconds === happTraffic?.seconds;
+    const connected = users.filter((user) => ['active', 'connected'].includes(user.status));
+    const sum = (field) => users.reduce((total, user) => total + (Number(user[field]) || 0), 0);
+    setText('[data-happ-activity-status]', fresh ? 'Обновлено ' + new Date(payload.sampled_at).toLocaleTimeString('ru-RU') : 'Нет свежих данных');
+    setText('[data-happ-users-online]', fresh ? `${connected.length} / ${users.filter((user) => user.status === 'active').length}` : '— / —');
+    setText('[data-happ-online]', fresh ? String(sum('connections')) : '—');
+    const totalRate = (field) => connected.some((user) => user[field] === null || user[field] === undefined) ? null : sum(field);
+    setText('[data-happ-current]', fresh ? `${rate(totalRate('download_rate'))} / ${rate(totalRate('upload_rate'))} МБ/с` : '— / —');
+    if (payload) {
+      setText('[data-happ-lifetime-download]', bytes(sum('download_bytes')));
+      setText('[data-happ-lifetime-upload]', bytes(sum('upload_bytes')));
+    }
+    setText('[data-happ-peak-label]', `за ${happTraffic?.seconds || 5} сек, МБ/с`);
+    body.replaceChildren();
+    if (!users.length) {
+      const row = document.createElement('tr');
+      const cell = happCell(payload ? 'В журнале пока нет пользователей.' : 'Ожидание свежих данных.');
+      cell.colSpan = 6;
+      cell.className = 'empty';
+      row.append(cell);
+      body.append(row);
+      return;
+    }
+    const maximum = Math.max(1, ...users.flatMap((user) => [user.download_rate || 0, user.upload_rate || 0]));
+    for (const user of users) {
+      const row = document.createElement('tr');
+      const identity = document.createElement('td');
+      const name = document.createElement('strong');
+      name.textContent = user.user_name || 'Не определён';
+      const status = document.createElement('span');
+      const state = fresh ? user.status : 'unknown';
+      status.className = `happ-activity-state ${state}`;
+      status.textContent = { active: 'Активен', connected: 'Подключён · без трафика', offline: 'Не подключён', unknown: 'Нет данных' }[state] || 'Нет данных';
+      identity.append(name, status);
+      const speed = happCell(fresh ? `${rate(user.download_rate)} / ${rate(user.upload_rate)}` : '— / —');
+      if (fresh) {
+        for (const direction of ['download', 'upload']) {
+          const meter = document.createElement('span');
+          meter.className = `happ-activity-meter ${direction}`;
+          meter.style.width = `${Math.min(100, Math.max(0, Number(user[`${direction}_rate`]) || 0) / maximum * 100)}%`;
+          speed.append(meter);
+        }
+      }
+      const totals = happCell(`${bytes(user.download_bytes)} / ${bytes(user.upload_bytes)}`);
+      totals.title = 'Накопленные замеры журнала; ручной сброс обнуляет итог.';
+      if (user.unknown_traffic) {
+        const missing = document.createElement('small');
+        missing.textContent = `Без счётчиков: ${user.unknown_traffic}`;
+        totals.append(missing);
+      }
+      row.append(identity, happCell(fresh ? (user.ips || []).join(', ') : '—'), happCell(fresh ? String(user.connections || 0) : '—'), totals, speed, happCell(fresh ? `${rate(user.download_peak)} / ${rate(user.upload_peak)}` : '— / —'));
+      body.append(row);
+    }
+  }
+
   function renderHappLive(payload) {
     renderHappTraffic(payload);
     const online = Number.isInteger(payload.online_count) ? payload.online_count : 0;
@@ -355,6 +446,7 @@
     if (onlineMetric) onlineMetric.textContent = String(online);
     if (download) download.textContent = payload.download || '0 B';
     if (upload) upload.textContent = payload.upload || '0 B';
+    renderHappActivity(payload.activity);
     const topUsersBody = document.querySelector('[data-happ-top-users]');
     if (topUsersBody) {
       topUsersBody.replaceChildren();
@@ -480,19 +572,23 @@
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 10000);
       try {
-        const response = await fetch(panelPath('/happ-server/live'), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+        const response = await fetch(panelPath(`/happ-server/live?seconds=${happTraffic?.seconds || 5}`), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
         if (response.status === 401) {
           window.location.reload();
           return;
         }
         if (document.querySelector('[data-happ-live]') !== root) return;
         if (!response.ok) {
+          renderHappActivity(null);
           happTrafficStatus('Нет свежих данных', true);
           return;
         }
         renderHappLive(await response.json());
       } catch (_) {
-        if (document.querySelector('[data-happ-live]') === root) happTrafficStatus('Нет свежих данных', true);
+        if (document.querySelector('[data-happ-live]') === root) {
+          renderHappActivity(null);
+          happTrafficStatus('Нет свежих данных', true);
+        }
       } finally {
         window.clearTimeout(timeout);
         happLiveLoading = false;

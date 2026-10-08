@@ -53,6 +53,33 @@ class HistoryTests(unittest.TestCase):
         reopened.ingest(self.rate_payload(10 * 1048576, self.at + dt.timedelta(seconds=8)))
         self.assertEqual(reopened.download_chart(10, self.at + dt.timedelta(seconds=8))['users'][0]['peak_bytes_per_second'], 3 * 1048576)
 
+    def test_activity_upload_peaks_lifetime_and_stale_data(self):
+        for offset, download, upload in ((0, 0, 0), (1, 1000, 400), (2, 1100, 450)):
+            observed = self.at + dt.timedelta(seconds=offset)
+            payload = self.rate_payload(download, observed, identifier='live-journal-1')
+            payload['traffic_samples'][0]['upload_bytes'] = upload
+            payload['connections'] = [self.row(download=download, upload=upload)]
+            self.history.ingest(payload, observed)
+        reopened = HappHistory(self.directory.name)
+        user = reopened.activity(60, self.at + dt.timedelta(seconds=2))['users'][0]
+        self.assertEqual((user['download_bytes'], user['upload_bytes']), (1100, 450))
+        self.assertEqual((user['download_rate'], user['upload_rate']), (100, 50))
+        self.assertEqual((user['download_peak'], user['upload_peak']), (1000, 400))
+        self.assertEqual((user['status'], user['connections'], user['ips']), ('active', 1, ['203.0.113.1']))
+        self.assertEqual(reopened.activity(1, self.at + dt.timedelta(seconds=2))['users'][0]['download_peak'], 100)
+        chart = reopened.download_chart(10, self.at + dt.timedelta(seconds=2), direction='upload')
+        self.assertEqual(chart['users'][0]['peak_bytes_per_second'], 400)
+        self.assertEqual(chart['direction'], 'upload')
+        with self.assertRaises(ValueError):
+            reopened.download_chart(direction='invalid')
+        stale = reopened.activity(60, self.at + dt.timedelta(seconds=20))
+        self.assertFalse(stale['fresh'])
+        self.assertEqual(stale['users'][0]['status'], 'unknown')
+        self.assertIsNone(stale['users'][0]['download_rate'])
+        for invalid in (0, 61, 'bad'):
+            with self.assertRaises(ValueError):
+                reopened.activity(invalid, self.at)
+
     def test_download_chart_ranges_gaps_and_counter_reset(self):
         self.history.ingest(self.rate_payload(0, self.at))
         self.history.ingest(self.rate_payload(4 * 1048576, self.at + dt.timedelta(seconds=2)))
@@ -67,6 +94,22 @@ class HistoryTests(unittest.TestCase):
         for invalid in ('bad', 0, 60 * 24):
             with self.assertRaises(ValueError):
                 self.history.download_chart(invalid, self.at)
+
+    def test_activity_migrates_existing_database_and_keeps_unknown_traffic(self):
+        self.history.ingest(self.rate_payload(1000, self.at), self.at)
+        with self.history.connect() as database:
+            database.execute('ALTER TABLE download_rate_samples DROP COLUMN upload_bytes_per_second')
+            database.execute('ALTER TABLE download_rate_counters DROP COLUMN upload_bytes')
+        migrated = HappHistory(self.directory.name)
+        chart = migrated.download_chart(10, self.at, direction='upload')
+        self.assertIsNone(chart['users'][0]['peak_bytes_per_second'])
+        self.assertIsNone(chart['users'][0]['points'][0]['y'])
+        migrated.ingest({'connections': [], 'visits': [self.row()]}, self.at)
+        user = migrated.activity(5, self.at)['users'][0]
+        self.assertEqual(user['unknown_traffic'], 1)
+        self.assertIsNone(user['download_bytes'])
+        migrated.record_collection_error()
+        self.assertFalse(migrated.activity(5, self.at)['fresh'])
 
     def test_download_chart_limits_users_and_does_not_invent_old_history(self):
         self.history.ingest({'connections': [self.row()]}, self.at)
@@ -273,13 +316,27 @@ class HistoryTests(unittest.TestCase):
                 response = connection.getresponse()
                 self.assertEqual(response.status, 400)
                 response.read()
+                with patch.object(app, 'happ_live_connections', return_value={'users': []}):
+                    for seconds in (1, 5, 60):
+                        connection.request('GET', '/happ-server/live?seconds=' + str(seconds))
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 200)
+                        self.assertEqual(json.loads(response.read())['activity']['seconds'], seconds)
+                    connection.request('GET', '/happ-server/live?seconds=61')
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 400)
+                    response.read()
+                connection.request('GET', '/happ-server/traffic?direction=upload')
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(json.loads(response.read())['direction'], 'upload')
 
             def deny(handler):
                 handler.send_empty(403)
                 return False
 
             with patch.object(app.Handler, 'require_access', deny):
-                for route in ('/happ-history', '/happ-history.xls', '/happ-server/traffic?minutes=90'):
+                for route in ('/happ-history', '/happ-history.xls', '/happ-server/traffic?minutes=90', '/happ-server/live?seconds=60'):
                     connection.request('GET', route)
                     response = connection.getresponse()
                     self.assertEqual(response.status, 403)

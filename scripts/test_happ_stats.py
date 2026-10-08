@@ -90,7 +90,7 @@ class HappStatsTests(unittest.TestCase):
         self.assertEqual([sample['user_key'] for sample in samples], ['personal-a', 'personal-a', 'personal-a'])
         self.assertEqual(len({sample['id'] for sample in samples}), 3)
         self.assertEqual(samples, again['traffic_samples'])
-        self.assertEqual(set(samples[0]), {'id', 'user_key', 'download_bytes'})
+        self.assertEqual(set(samples[0]), {'id', 'user_key', 'download_bytes', 'upload_bytes'})
         self.assertEqual(payload['users'][0]['download_bytes'], 3584)
         self.assertEqual(payload['online_count'], 3)
         self.assertEqual(len(collector['connections']), 3)

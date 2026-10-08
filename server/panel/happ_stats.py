@@ -377,7 +377,7 @@ def live_connections(include_visits=False, history_since=None):
     users = summarize_users(items)
     payload = {
         'sampled_at': sampled_at,
-        'traffic_samples': [{'id': item['id'] or item['connection_key'], 'user_key': item['user_key'], 'download_bytes': item['download_bytes']} for item in items],
+        'traffic_samples': [{'id': item['id'] or item['connection_key'], 'user_key': item['user_key'], 'download_bytes': item['download_bytes'], 'upload_bytes': item['upload_bytes']} for item in items],
         'online_count': len(items),
         'download': format_bytes(sum(item['download_bytes'] for item in items)),
         'upload': format_bytes(sum(item['upload_bytes'] for item in items)),

@@ -170,6 +170,16 @@ History retention is saved by `POST /settings/happ-history` in the settings hand
 
 Only `sing-box-admin` needs restarting when installing the bridge. Do not reinstall WireGuard or overwrite runtime configuration, authentication, client keys or statistics. Test with `py -3 scripts/test_crm_bridge.py`, `node scripts/test_panel_checks.js` and `node scripts/test_happ_stats_ui.js`.
 
+## HAPP Activity Metrics
+
+`/happ-server` shows per-user connection state, source IPs, connection counts, recorded lifetime Download/Upload totals, current rates and peak rates in a selectable 1-60 second trailing window. Rates are counter deltas measured by the background collector on a nominal one-second cycle, not instantaneous link capacity. A disconnected VPN client cannot be detected until it has an observable connection; idle connected rows mean open connections without measured traffic.
+
+The history chart switches between Download and Upload and retains the existing 10/30/60/90 minute ranges and top-10 peak ranking. Upload-rate history starts after this deployment; old rows remain unknown, not reconstructed. Lifetime totals survive retention cleanup but retain the existing manual per-user reset semantics. Journal-only visits without counters are marked separately; bytes missed between samples cannot be recovered from those log entries. Collector errors or samples older than ten seconds clear live states instead of displaying stale rates as current.
+
+Deployment adds nullable Upload columns to the existing SQLite sample/counter tables. Back up `/mnt/stat/happ-stat.sqlite3` with the SQLite backup API before restarting `sing-box-admin`; no VPN service restart or runtime credential change is required.
+
 ## Rollback
+
+For the HAPP activity migration, stop `sing-box-admin` and restore both the previous panel files and the pre-migration SQLite backup before starting it again. The previous collector uses positional inserts incompatible with the added columns. Restoring that snapshot discards statistics collected after the backup; retain a fresh copy of the current database before rolling back.
 
 Use the timestamped backup created on the server, restore the specific file, run its syntax check, then restart only the owning service. Never use a blanket reset or overwrite unrelated runtime state.

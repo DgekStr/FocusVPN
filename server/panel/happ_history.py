@@ -63,6 +63,13 @@ class HappHistory:
                 );
                 CREATE INDEX IF NOT EXISTS rate_user_time ON download_rate_samples (user_key,sampled_at);
             ''')
+            for table, column, definition in (
+                ('download_rate_samples', 'upload_bytes_per_second', 'REAL'),
+                ('download_rate_counters', 'upload_bytes', 'INTEGER'),
+            ):
+                columns = {row['name'] for row in database.execute('PRAGMA table_info(' + table + ')')}
+                if column not in columns:
+                    database.execute('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + definition)
             initialized = database.execute("SELECT 1 FROM settings WHERE key='lifetime_totals_initialized'").fetchone()
             if not initialized:
                 database.execute('''
@@ -202,6 +209,7 @@ class HappHistory:
         measured = 0 < elapsed <= 10
         users = {str(item['user_key']): str(item.get('user_name') or 'Не определён') for item in payload.get('users', []) if item.get('user_key') and int(item.get('connections') or 0) > 0}
         rates = {key: 0.0 if measured else None for key in users}
+        upload_rates = {key: 0.0 if measured else None for key in users}
         previous = {row['live_id']: row for row in database.execute('SELECT * FROM download_rate_counters')}
         counters = []
         for item in payload['traffic_samples']:
@@ -209,17 +217,71 @@ class HappHistory:
                 continue
             identifier, key = str(item['id']), str(item['user_key'])
             download = max(0, int(item.get('download_bytes') or 0))
-            counters.append((identifier, key, download))
+            upload = max(0, int(item.get('upload_bytes') or 0))
+            counters.append((identifier, key, download, upload))
             prior = previous.get(identifier)
             if measured and key in rates and prior is not None and prior['user_key'] == key:
                 rates[key] += max(0, download - prior['download_bytes']) / elapsed
+                if prior['upload_bytes'] is not None:
+                    upload_rates[key] += max(0, upload - prior['upload_bytes']) / elapsed
         database.execute('DELETE FROM download_rate_counters')
-        database.executemany('INSERT OR REPLACE INTO download_rate_counters VALUES (?,?,?)', counters)
-        database.executemany('INSERT INTO download_rate_samples VALUES (?,?,?,?)', [(timestamp, key, users[key], rate) for key, rate in rates.items()])
+        database.executemany('INSERT OR REPLACE INTO download_rate_counters (live_id,user_key,download_bytes,upload_bytes) VALUES (?,?,?,?)', counters)
+        database.executemany('INSERT INTO download_rate_samples (sampled_at,user_key,user_name,bytes_per_second,upload_bytes_per_second) VALUES (?,?,?,?,?)', [(timestamp, key, users[key], rate, upload_rates[key]) for key, rate in rates.items()])
         database.execute("INSERT OR REPLACE INTO settings VALUES ('last_rate_sample_at', ?)", (str(timestamp),))
         database.execute('DELETE FROM download_rate_samples WHERE sampled_at < ?', (timestamp - 90 * 60000,))
 
-    def download_chart(self, minutes=10, at=None):
+    def activity(self, seconds=5, at=None):
+        try:
+            seconds = int(seconds)
+        except (TypeError, ValueError) as error:
+            raise ValueError('Интервал должен быть от 1 до 60 секунд.') from error
+        if not 1 <= seconds <= 60:
+            raise ValueError('Интервал должен быть от 1 до 60 секунд.')
+        until = int((at or dt.datetime.now(dt.timezone.utc)).timestamp() * 1000)
+        with self.connect() as database:
+            database.execute('BEGIN')
+            latest = database.execute("SELECT value FROM settings WHERE key='last_rate_sample_at'").fetchone()
+            sampled_at = int(latest[0]) if latest else None
+            error = database.execute("SELECT 1 FROM settings WHERE key='last_error'").fetchone()
+            fresh = not error and sampled_at is not None and 0 <= until - sampled_at <= 10000
+            totals = {row['user_key']: dict(row) for row in database.execute('SELECT * FROM user_traffic_totals')}
+            logged = {row['user_key']: dict(row) for row in database.execute('SELECT user_key,MAX(user_name) AS user_name,SUM(download_bytes IS NULL OR upload_bytes IS NULL) AS unknown_traffic FROM connections GROUP BY user_key')}
+            connected = {}
+            for row in database.execute('SELECT user_key,user_name,source_ip FROM connections WHERE active=1'):
+                user = connected.setdefault(row['user_key'], {'user_name': row['user_name'], 'ips': set(), 'connections': 0})
+                user['ips'].add(row['source_ip'])
+                user['connections'] += 1
+            peaks = {row['user_key']: dict(row) for row in database.execute('''
+                SELECT user_key,MAX(bytes_per_second) AS download,MAX(upload_bytes_per_second) AS upload
+                FROM download_rate_samples WHERE sampled_at>? AND sampled_at<=? GROUP BY user_key
+            ''', (until - seconds * 1000, until))}
+            current = {row['user_key']: dict(row) for row in database.execute('SELECT * FROM download_rate_samples WHERE sampled_at=?', (sampled_at,))}
+            users = []
+            for key in totals.keys() | connected.keys() | current.keys() | logged.keys():
+                total = totals.get(key, {})
+                live = connected.get(key, {})
+                sample = current.get(key, {})
+                online = fresh and bool(live.get('connections'))
+                download = sample.get('bytes_per_second') if online else (0 if fresh else None)
+                upload = sample.get('upload_bytes_per_second') if online else (0 if fresh else None)
+                users.append({
+                    'user_key': key, 'user_name': live.get('user_name') or total.get('user_name') or sample.get('user_name') or logged.get(key, {}).get('user_name') or 'Не определён',
+                    'status': ('active' if (download or 0) + (upload or 0) > 0 else 'connected') if online else ('offline' if fresh else 'unknown'),
+                    'connections': live.get('connections', 0) if fresh else None,
+                    'ips': sorted(live.get('ips', [])) if fresh else [],
+                    'download_bytes': total.get('download_bytes'), 'upload_bytes': total.get('upload_bytes'),
+                    'unknown_traffic': logged.get(key, {}).get('unknown_traffic', 0),
+                    'download_rate': download, 'upload_rate': upload,
+                    'download_peak': peaks.get(key, {}).get('download') if fresh else None,
+                    'upload_peak': peaks.get(key, {}).get('upload') if fresh else None,
+                })
+        users.sort(key=lambda user: (user['status'] not in ('active', 'connected'), -(user['download_rate'] or 0), user['user_name'], user['user_key']))
+        return {'seconds': seconds, 'sampled_at': sampled_at, 'fresh': fresh, 'users': users}
+
+    def download_chart(self, minutes=10, at=None, direction='download'):
+        if direction not in ('download', 'upload'):
+            raise ValueError('Неизвестное направление трафика.')
+        rate_column = 'bytes_per_second' if direction == 'download' else 'upload_bytes_per_second'
         try:
             minutes = int(minutes)
         except (ValueError, TypeError) as error:
@@ -231,8 +293,8 @@ class HappHistory:
         bucket = max(2000, math.ceil(minutes * 60000 / 300 / 1000) * 1000)
         with self.connect() as database:
             latest = database.execute("SELECT value FROM settings WHERE key='last_rate_sample_at'").fetchone()
-            ranked = database.execute('''
-                SELECT user_key,MAX(bytes_per_second) AS peak
+            ranked = database.execute(f'''
+                SELECT user_key,MAX({rate_column}) AS peak
                 FROM download_rate_samples WHERE sampled_at>=? AND sampled_at<=?
                 GROUP BY user_key ORDER BY peak DESC,user_key LIMIT 10
             ''', (since, until)).fetchall()
@@ -241,10 +303,10 @@ class HappHistory:
             for user in ranked:
                 key = user['user_key']
                 name = database.execute('SELECT user_name FROM download_rate_samples WHERE user_key=? AND sampled_at>=? AND sampled_at<=? ORDER BY sampled_at DESC LIMIT 1', (key, since, until)).fetchone()[0]
-                rows = database.execute('''
+                rows = database.execute(f'''
                     SELECT sampled_at,bytes_per_second FROM (
-                        SELECT sampled_at,bytes_per_second,
-                            ROW_NUMBER() OVER (PARTITION BY sampled_at / ? ORDER BY bytes_per_second DESC,sampled_at DESC) AS position
+                        SELECT sampled_at,{rate_column} AS bytes_per_second,
+                            ROW_NUMBER() OVER (PARTITION BY sampled_at / ? ORDER BY {rate_column} DESC,sampled_at DESC) AS position
                         FROM download_rate_samples WHERE user_key=? AND sampled_at>=? AND sampled_at<=?
                     ) WHERE position=1 ORDER BY sampled_at
                 ''', (bucket, key, since, until)).fetchall()
@@ -254,7 +316,7 @@ class HappHistory:
                         points.append({'x': points[-1]['x'] + bucket, 'y': None})
                     points.append({'x': row['sampled_at'], 'y': row['bytes_per_second'] / 1048576 if row['bytes_per_second'] is not None else None})
                 result.append({'user_key': key, 'user_name': name, 'peak_bytes_per_second': user['peak'], 'points': points})
-        return {'minutes': minutes, 'since': since, 'until': until, 'sampled_at': int(latest[0]) if latest else None, 'user_count': count, 'users': result}
+        return {'minutes': minutes, 'direction': direction, 'since': since, 'until': until, 'sampled_at': int(latest[0]) if latest else None, 'user_count': count, 'users': result}
 
     def filters(self, user_key='', since='', until=''):
         conditions, values = [], []

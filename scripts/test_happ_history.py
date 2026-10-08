@@ -175,6 +175,28 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual((totals['personal-a']['download_bytes'], totals['personal-a']['upload_bytes']), (20, 20))
         self.assertEqual((totals['personal-b']['download_bytes'], totals['personal-b']['upload_bytes']), (500, 60))
 
+    def test_deleted_users_are_purged_and_delayed_samples_cannot_restore_them(self):
+        rows = [self.row(), self.row(key='bob', user='personal-b', name='Bob', download=300), self.row(key='vip', user='VIP', name='VIP', download=700), self.row(key='unresolved', user='unknown', name='Не определён')]
+        payload = {'connections': rows, 'users': [{'user_key': row['user_key'], 'user_name': row['user_name'], 'connections': 1} for row in rows], 'traffic_samples': [{'id': row['id'], 'user_key': row['user_key'], 'download_bytes': row['download_bytes'], 'upload_bytes': row['upload_bytes']} for row in rows], 'sampled_at': self.at.isoformat()}
+        self.history.ingest(payload, self.at)
+        reopened = HappHistory(self.directory.name)
+        self.assertGreater(reopened.retain_registered_users([{'id': 'b'}]), 0)
+        self.assertEqual(reopened.retain_registered_users([{'id': 'b'}]), 0)
+        later = self.at + dt.timedelta(seconds=1)
+        reopened.ingest({**payload, 'visits': [rows[0]], 'sampled_at': later.isoformat()}, later)
+        self.assertEqual(set(reopened.user_totals()), {'personal-b', 'VIP'})
+        self.assertEqual(reopened.user_totals()['personal-b']['download_bytes'], 300)
+        self.assertEqual(reopened.user_totals()['VIP']['download_bytes'], 700)
+        for collection in (reopened.activity(5, later)['users'], reopened.download_chart(10, later)['users'], reopened.top_users(), reopened.user_options(), reopened.traffic_chart(), reopened.query()['rows']):
+            self.assertTrue(all(row['user_key'] in ('personal-b', 'VIP') for row in collection))
+        with reopened.connect() as database:
+            for table in ('connections', 'user_traffic_totals', 'download_rate_samples', 'download_rate_counters'):
+                self.assertEqual(database.execute('SELECT COUNT(*) FROM ' + table + ' WHERE user_key=?', ('personal-a',)).fetchone()[0], 0)
+            self.assertEqual(database.execute("SELECT COUNT(*) FROM connections WHERE user_key='unknown'").fetchone()[0], 1)
+        reopened.retain_registered_users([{'id': 'a'}, {'id': 'b'}])
+        reopened.ingest({'connections': [self.row(download=200)]}, later + dt.timedelta(seconds=1))
+        self.assertEqual(reopened.user_totals()['personal-a']['download_bytes'], 200)
+
     def test_lifetime_totals_backfill_existing_retained_connections_once(self):
         self.history.ingest({'connections': [self.row(download=321, upload=123), self.row(key='legacy-unknown', user='unknown', name='Не определён')]}, self.at)
         with self.history.connect() as database:
@@ -337,6 +359,54 @@ class HistoryTests(unittest.TestCase):
         store.cleanup.assert_called_once()
         acknowledge.assert_called_once_with([])
         store.record_collection_error.assert_not_called()
+
+    def test_worker_removes_previously_deleted_users_before_ingesting_delayed_payload(self):
+        payload = {'connections': [self.row(), self.row(key='bob', user='personal-b', name='Bob')]}
+        self.history.ingest(payload, self.at)
+        stop = Mock()
+        stop.is_set.side_effect = [False, True]
+        users = types.SimpleNamespace(registry=lambda: {'users': [{'id': 'b'}]})
+        with patch.object(app, 'HAPP_HISTORY_STOP', stop), patch.object(app, 'HAPP_HISTORY', self.history), patch.object(app, 'HAPP_USERS', users), patch.object(app, 'happ_live_connections', return_value=payload), patch.object(app, 'acknowledge_history_visits'):
+            app.happ_history_worker()
+        self.assertEqual(set(self.history.user_totals()), {'personal-b'})
+        self.assertEqual(self.history.query()['count'], 1)
+        self.assertIsNone(self.history.query()['collector_error'])
+
+    def test_delete_endpoint_clears_statistics_only_after_successful_user_removal(self):
+        payload = {'connections': [self.row(), self.row(key='bob', user='personal-b', name='Bob', download=300)]}
+        self.history.ingest(payload, self.at)
+        registry = {'users': [{'id': 'a'}, {'id': 'b'}]}
+        action = Mock(side_effect=ValueError('Configuration was not applied'))
+        users = types.SimpleNamespace(registry=lambda: registry, action=action)
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+        try:
+            with patch.object(app, 'HAPP_HISTORY', self.history), patch.object(app, 'HAPP_USERS', users), patch.object(app, 'happ_setup_needed', return_value=False), patch.object(app.Handler, 'require_access', return_value=True):
+                form = urlencode({'csrf': app.CSRF_TOKEN, 'id': 'a', 'operation': 'delete'})
+                connection.request('POST', '/happ-users/action', form, {'Content-Type': 'application/x-www-form-urlencoded'})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 303)
+                self.assertEqual(parse_qs(urlparse(response.getheader('Location')).query)['kind'], ['error'])
+                response.read()
+                self.assertIn('personal-a', self.history.user_totals())
+                action.side_effect = lambda *_: registry.update(users=[{'id': 'b'}])
+                connection.request('POST', '/happ-users/action', form, {'Content-Type': 'application/x-www-form-urlencoded'})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 303)
+                self.assertEqual(parse_qs(urlparse(response.getheader('Location')).query)['kind'], ['success'])
+                response.read()
+                action.assert_called_with('a', 'delete', '', '')
+                self.history.ingest(payload, self.at + dt.timedelta(seconds=1))
+                self.assertEqual(set(self.history.user_totals()), {'personal-b'})
+                self.assertEqual(self.history.user_totals()['personal-b']['download_bytes'], 300)
+                self.assertEqual(self.history.query()['count'], 1)
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
 
     def test_udp_journal_visit_has_no_invented_counters(self):
         timestamp = str(int(self.at.timestamp() * 1000000))

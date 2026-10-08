@@ -2287,9 +2287,11 @@ class Handler(BaseHTTPRequestHandler):
                 with HAPP_LOCK:
                     if path == '/happ-users/create':
                         HAPP_USERS.create(form_value(values, 'name'), form_value(values, 'expires_at'))
+                        sync_happ_history_users()
                         message = 'Персональный пользователь создан. VIP credentials сохранены; при применении HAPP переподключает сессии.'
                     elif path == '/happ-users/action':
                         HAPP_USERS.action(form_value(values, 'id'), form_value(values, 'operation'), form_value(values, 'name'), form_value(values, 'expires_at'))
+                        sync_happ_history_users()
                         message = 'Изменение пользователя применено; VIP-ссылка сохранена.'
                     elif path == '/happ-users/traffic/reset':
                         user_id = form_value(values, 'id')
@@ -2600,12 +2602,19 @@ def happ_expiry_worker():
                 VLESS_MONITOR.append_event({'event': 'happ_expiry_failed', 'message': 'Не удалось применить истечение персонального доступа HAPP; повтор через минуту.'})
 
 
+def sync_happ_history_users():
+    if HAPP_HISTORY is not None and HAPP_USERS is not None:
+        HAPP_HISTORY.retain_registered_users(HAPP_USERS.registry()['users'])
+
+
 def happ_history_worker():
     next_cleanup = 0.0
     while not HAPP_HISTORY_STOP.is_set():
         cycle_started = time.monotonic()
         try:
             if HAPP_HISTORY is not None:
+                with HAPP_LOCK:
+                    sync_happ_history_users()
                 payload = happ_live_connections(include_visits=True, history_since=HAPP_HISTORY.last_collected_at())
                 HAPP_HISTORY.ingest(payload)
                 acknowledge_history_visits(payload.get('visits', []))
@@ -2633,6 +2642,7 @@ def main():
     HAPP_USERS = HappUsers(APP_DIR, HAPP_CONFIG_PATH, HAPP_STATE_PATH, apply_happ_configuration)
     HAPP_USERS.initialize()
     HAPP_HISTORY = HappHistory('/mnt/stat')
+    sync_happ_history_users()
     SERVER_METRICS = ServerMetrics('/mnt/stat/server-metrics.sqlite3')
     SERVER_METRICS.sample()
     threading.Thread(target=collect_metrics, args=(SERVER_METRICS_STOP, SERVER_METRICS), name='server-metrics', daemon=True).start()

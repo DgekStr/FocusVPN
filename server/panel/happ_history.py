@@ -21,6 +21,7 @@ class HappHistory:
         os.chmod(self.directory, 0o700)
         self.path = self.directory / 'happ-stat.sqlite3'
         self.lock = threading.Lock()
+        self.registered_user_keys = None
         with self.connect() as database:
             database.executescript('''
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -136,6 +137,20 @@ class HappHistory:
                 upload_bytes=MAX(0,user_traffic_totals.upload_bytes+?)
         ''', (user_key, user_name, download_delta, upload_delta, download_delta, upload_delta))
 
+    def retain_registered_users(self, users):
+        keys = frozenset({'VIP', 'unknown'} | {'personal-' + user['id'] for user in users})
+        with self.lock:
+            if keys == self.registered_user_keys:
+                return 0
+            removed = 0
+            placeholders = ','.join('?' for key in keys)
+            with self.connect() as database:
+                for table in ('connections', 'user_traffic_totals', 'download_rate_samples', 'download_rate_counters'):
+                    removed += database.execute('DELETE FROM ' + table + ' WHERE user_key NOT IN (' + placeholders + ')', tuple(keys)).rowcount
+            self.registered_user_keys = keys
+        self.secure_files()
+        return removed
+
     def reconcile_authenticated_visits(self, database, visits):
         authenticated = {}
         for visit in visits:
@@ -171,9 +186,11 @@ class HappHistory:
 
     def ingest(self, payload, at=None):
         observed = utc_text(at)
-        items = payload.get('connections', [])
-        visits = payload.get('visits', [])
         with self.lock, self.connect() as database:
+            if self.registered_user_keys is not None:
+                payload = {**payload, **{name: [item for item in payload.get(name, []) if item.get('user_key', 'unknown') in self.registered_user_keys] for name in ('connections', 'visits', 'users', 'traffic_samples')}}
+            items = payload.get('connections', [])
+            visits = payload.get('visits', [])
             self.record_download_rates(database, payload, observed)
             database.execute('UPDATE connections SET active=0 WHERE active=1')
             self.reconcile_authenticated_visits(database, visits)

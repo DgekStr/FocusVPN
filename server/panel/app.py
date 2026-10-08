@@ -1165,7 +1165,7 @@ def resolve_happ_subscription_base_url(state=None):
     host = validate_server(str(state.get('server') or urlsplit(state.get('link', '')).hostname or ''), 'Public HAPP server')
     if ':' in host:
         host = '[' + host + ']'
-    return validate_subscription_base_url(f'http://{host}:{PORT}')
+    return validate_subscription_base_url(f'https://{host}:7445')
 
 
 def save_happ_subscription_base_url(value):

@@ -430,10 +430,10 @@ class HappUserTests(unittest.TestCase):
 
     def test_subscription_origin_prefers_settings_then_env_then_public_host(self):
         with patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(app, 'PORT', 9443):
-            self.assertEqual(app.resolve_happ_subscription_base_url({'server': '203.0.113.10'}), 'http://203.0.113.10:9443')
-            self.assertEqual(app.resolve_happ_subscription_base_url({'server': 'vpn.example.com'}), 'http://vpn.example.com:9443')
-            self.assertEqual(app.resolve_happ_subscription_base_url({'server': '2001:db8::10'}), 'http://[2001:db8::10]:9443')
-            self.assertEqual(app.resolve_happ_subscription_base_url({'link': self.link}), 'http://vpn.example.com:9443')
+            self.assertEqual(app.resolve_happ_subscription_base_url({'server': '203.0.113.10'}), 'https://203.0.113.10:7445')
+            self.assertEqual(app.resolve_happ_subscription_base_url({'server': 'vpn.example.com'}), 'https://vpn.example.com:7445')
+            self.assertEqual(app.resolve_happ_subscription_base_url({'server': '2001:db8::10'}), 'https://[2001:db8::10]:7445')
+            self.assertEqual(app.resolve_happ_subscription_base_url({'link': self.link}), 'https://vpn.example.com:7445')
             state = {'server': '203.0.113.10', 'subscription_base_url': 'https://vpn.example.com:8443/vpn/'}
             self.assertEqual(app.resolve_happ_subscription_base_url(state), 'https://vpn.example.com:8443/vpn')
         with patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', 'https://env.example.com'):
@@ -447,14 +447,14 @@ class HappUserTests(unittest.TestCase):
         self.manager.create('Alice')
         user = self.manager.users()[0]
         handler = object.__new__(app.Handler)
-        urls = self.manager.subscription_urls('http://vpn.example.com:9443')
+        urls = self.manager.subscription_urls('https://vpn.example.com:7445')
         for user_id, expected in ((None, urls['VIP']), (user['id'], urls[user['id']])):
             result = types.SimpleNamespace(returncode=0, stdout=b'<svg xmlns="http://www.w3.org/2000/svg"/>')
             with patch.object(app, 'HAPP_USERS', self.manager), patch.object(app, 'load_happ_state', return_value={'server': 'vpn.example.com'}), patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(app, 'PORT', 9443), patch.object(app.subprocess, 'run', return_value=result) as encoder, patch.object(handler, 'send_binary') as send:
                 handler.send_happ_qr(user_id)
                 self.assertEqual(encoder.call_args.kwargs['input'].decode('utf-8'), expected)
                 self.assertEqual(urlsplit(expected).hostname, 'vpn.example.com')
-                self.assertEqual(urlsplit(expected).port, 9443)
+                self.assertEqual(urlsplit(expected).port, 7445)
                 self.assertTrue(urlsplit(expected).path.startswith('/happ-subscription/'))
                 resolved = self.manager.subscription_user(urlsplit(expected).path.rsplit('/', 1)[1])
                 self.assertEqual(resolved['link'], self.link if user_id is None else user['link'])
@@ -529,7 +529,7 @@ class HappUserTests(unittest.TestCase):
                 self.assertEqual(response.getheader('Cache-Control'), 'no-store')
                 announcement = response.getheader('announce')
                 self.assertEqual(base64.b64decode(announcement.removeprefix('base64:')).decode('utf-8'), SUBSCRIPTION_ANNOUNCEMENT + '\nСкачано: 0.00 МБ / ∞')
-                self.assertEqual(response.getheader('profile-web-page-url'), 'http://vpn.example.com:9443/happ-info')
+                self.assertEqual(response.getheader('profile-web-page-url'), 'https://vpn.example.com:7445/happ-info')
                 body = response.read().decode('utf-8')
                 self.assertIn('#announce: ' + announcement, body)
                 self.assertIn(users[0]['link'], body)

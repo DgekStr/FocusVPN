@@ -3,6 +3,7 @@ import datetime as dt
 from email.message import Message
 import html
 import http.client
+from http.cookies import SimpleCookie
 import ipaddress
 import json
 import os
@@ -311,6 +312,17 @@ class HappUserTests(unittest.TestCase):
                 redirect.assert_called_once_with('/login')
         with patch.dict(os.environ, {'FOCUSVPN_ADMIN_NETWORK': '0.0.0.0/0'}):
             self.assertIn(ipaddress.ip_address('203.0.113.42'), app.network_from_environment('FOCUSVPN_ADMIN_NETWORK', '192.168.0.0/24'))
+
+    def test_session_cookie_allows_cross_site_portal_navigation(self):
+        handler = object.__new__(app.Handler)
+        cookies = SimpleCookie()
+        cookies.load(handler.session_cookie('test-session', 300, secure=True))
+        cookie = cookies[app.SESSION_COOKIE_NAME]
+        self.assertEqual(cookie['samesite'], 'Lax')
+        self.assertEqual(cookie['path'], '/')
+        self.assertEqual(cookie['max-age'], '300')
+        self.assertTrue(cookie['httponly'])
+        self.assertTrue(cookie['secure'])
 
     def test_trusted_proxy_preserves_client_ip_and_https_cookie(self):
         handler = object.__new__(app.Handler)

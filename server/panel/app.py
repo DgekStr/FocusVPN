@@ -1954,7 +1954,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def session_cookie(self, token, max_age, secure=False):
         secure_flag = '; Secure' if secure else ''
-        return f'{SESSION_COOKIE_NAME}={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict{secure_flag}'
+        return f'{SESSION_COOKIE_NAME}={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Lax{secure_flag}'
 
     def send_login_challenge(self):
         self.send_response(HTTPStatus.UNAUTHORIZED)

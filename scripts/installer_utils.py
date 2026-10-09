@@ -19,10 +19,15 @@ def configure_proxy_environment(path, server_ip):
     found_host = False
     found_proxy = False
     found_subscription = False
+    found_admin_network = False
     for line in lines:
         if line.startswith('SING_BOX_ADMIN_HOST='):
             updated.append('SING_BOX_ADMIN_HOST=127.0.0.1')
             found_host = True
+        elif line.startswith('FOCUSVPN_ADMIN_NETWORK='):
+            current = line.split('=', 1)[1].strip().strip('"\'')
+            updated.append(line if current else 'FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0')
+            found_admin_network = True
         elif line.startswith('FOCUSVPN_TRUSTED_PROXY_NETWORKS='):
             current = line.split('=', 1)[1].strip().strip('"\'')
             networks = [item.strip() for item in current.split(',') if item.strip()]
@@ -38,6 +43,8 @@ def configure_proxy_environment(path, server_ip):
             updated.append(line)
     if not found_host:
         updated.append('SING_BOX_ADMIN_HOST=127.0.0.1')
+    if not found_admin_network:
+        updated.append('FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0')
     if not found_proxy:
         updated.append('FOCUSVPN_TRUSTED_PROXY_NETWORKS=127.0.0.1/32')
     if not found_subscription:

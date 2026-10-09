@@ -63,6 +63,66 @@ class InstallerUtilsTests(unittest.TestCase):
         self.assertIn('install -d -m 0750 -o root -g sing-box "$SING_BOX_ROOT" "$HAPP_ROOT"', installer)
         self.assertIn('python3 -m compileall -q "$APP_ROOT"', installer)
 
+    def test_wg_easy_host_modules_are_loaded_and_persisted_before_container_start(self):
+        bash = str(Path('C:/Program Files/Git/bin/bash.exe')) if os.name == 'nt' else shutil.which('bash')
+        if not bash or not Path(bash).is_file():
+            self.skipTest('Bash is required for wg-easy kernel module validation')
+        installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')
+        function = 'prepare_wg_easy_host() {' + installer.split('prepare_wg_easy_host() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
+        modules = ['wireguard', 'iptable_filter', 'iptable_nat', 'ip6table_filter', 'ip6table_nat']
+        for failed_module in ('', 'wireguard', 'ip6table_nat'):
+            with self.subTest(failed_module=failed_module), tempfile.TemporaryDirectory() as directory:
+                modules_file = Path(directory) / 'modules-load.d' / 'focusvpn-wg-easy.conf'
+                script = '''set -euo pipefail
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+modprobe() { printf '%s\\n' "$1"; [[ "$1" != "$FAILED_MODULE" ]]; }
+''' + function + '\nprepare_wg_easy_host "$MODULES_FILE"\n'
+                result = subprocess.run([bash], input=script, text=True, capture_output=True, env={**os.environ, 'MODULES_FILE': modules_file.as_posix(), 'FAILED_MODULE': failed_module})
+                if failed_module:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout.splitlines(), modules[:modules.index(failed_module) + 1])
+                    self.assertIn('required wg-easy kernel module is unavailable: ' + failed_module, result.stderr)
+                    self.assertFalse(modules_file.exists())
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), modules)
+                    self.assertEqual(modules_file.read_text(encoding='utf-8').splitlines(), modules)
+                    if os.name == 'posix':
+                        self.assertEqual(modules_file.stat().st_mode & 0o777, 0o644)
+        create = installer.split('create_wg_easy_container() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(create.index('prepare_wg_easy_host'), create.index('docker inspect'))
+        self.assertIn('docker.io kmod nftables', installer)
+
+    def test_existing_unhealthy_wg_easy_is_restarted_after_host_preparation(self):
+        bash = str(Path('C:/Program Files/Git/bin/bash.exe')) if os.name == 'nt' else shutil.which('bash')
+        if not bash or not Path(bash).is_file():
+            self.skipTest('Bash is required for wg-easy container recovery validation')
+        installer = (Path(__file__).resolve().parent / 'install.sh').read_text(encoding='utf-8')
+        function = 'create_wg_easy_container() {' + installer.split('create_wg_easy_container() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
+        for health in ('healthy', 'unhealthy', ''):
+            with self.subTest(health=health), tempfile.TemporaryDirectory() as directory:
+                commands_file = Path(directory) / 'commands.txt'
+                script = '''set -euo pipefail
+prepare_wg_easy_host() { printf '%s\\n' prepare_wg_easy_host >> "$COMMANDS_FILE"; }
+docker() {
+  printf '%s\\n' "docker $*" >> "$COMMANDS_FILE"
+  if [[ "$*" == *'.State.Health'* ]]; then printf '%s\\n' "$WG_HEALTH"; fi
+}
+curl() { return 0; }
+python3() { printf '%s\\n' verify_api >> "$COMMANDS_FILE"; }
+log() { :; }
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+''' + function + '\ncreate_wg_easy_container\n'
+                result = subprocess.run([bash], input=script, text=True, capture_output=True, env={**os.environ, 'COMMANDS_FILE': commands_file.as_posix(), 'WG_HEALTH': health, 'ADMIN_ROOT': directory, 'REPO_ROOT': directory})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                commands = commands_file.read_text(encoding='utf-8').splitlines()
+                self.assertEqual(commands[0], 'prepare_wg_easy_host')
+                self.assertEqual(commands.count('docker restart wg-easy'), int(health == 'unhealthy'))
+                self.assertIn('verify_api', commands)
+                self.assertFalse(any(command.startswith('docker rm ') for command in commands))
+                if health == 'unhealthy':
+                    self.assertLess(commands.index('docker restart wg-easy'), commands.index('verify_api'))
+
     def test_server_ipv4_detection_without_default_route_source(self):
         bash = str(Path('C:/Program Files/Git/bin/bash.exe')) if os.name == 'nt' else shutil.which('bash')
         if not bash or not Path(bash).is_file():
@@ -107,6 +167,52 @@ ip() {
                 self.assertIn('UNRELATED=value', lines)
                 if os.name == 'posix':
                     self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_installer_opens_public_ipv4_panel_by_default_and_preserves_explicit_acl(self):
+        utility = Path(__file__).resolve().parent / 'installer_utils.py'
+        public = 'FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0'
+        restricted = 'FOCUSVPN_ADMIN_NETWORK="192.0.2.10/32"'
+        for configured, expected in (('', public), ('FOCUSVPN_ADMIN_NETWORK=\n', public), ('FOCUSVPN_ADMIN_NETWORK=""\n', public), (restricted + '\n', restricted)):
+            with self.subTest(configured=configured), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'focusvpn.env'
+                path.write_text('SING_BOX_ADMIN_HOST=0.0.0.0\nUNRELATED=value\n' + configured, encoding='utf-8')
+                for attempt in range(2):
+                    with self.subTest(attempt=attempt):
+                        result = subprocess.run([sys.executable, str(utility), 'configure-proxy', str(path), '192.0.2.5'], text=True, capture_output=True)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        lines = path.read_text(encoding='utf-8').splitlines()
+                        self.assertIn(expected, lines)
+                        self.assertEqual(sum(line.startswith('FOCUSVPN_ADMIN_NETWORK=') for line in lines), 1)
+                        self.assertIn('SING_BOX_ADMIN_HOST=127.0.0.1', lines)
+                        self.assertIn('FOCUSVPN_TRUSTED_PROXY_NETWORKS=127.0.0.1/32', lines)
+                        self.assertIn('UNRELATED=value', lines)
+                        if os.name == 'posix':
+                            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_fresh_install_public_acl_and_firewall_template_are_consistent(self):
+        bash = str(Path('C:/Program Files/Git/bin/bash.exe')) if os.name == 'nt' else shutil.which('bash')
+        if not bash or not Path(bash).is_file():
+            self.skipTest('Bash is required for fresh installer ACL validation')
+        root = Path(__file__).resolve().parents[1]
+        environment = (root / 'server/config/focusvpn/focusvpn.env.example').read_text(encoding='utf-8')
+        self.assertIn('SING_BOX_ADMIN_HOST=127.0.0.1\n', environment)
+        self.assertIn('FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0\n', environment)
+        installer = (root / 'scripts/install.sh').read_text(encoding='utf-8')
+        function = 'render_template() {' + installer.split('render_template() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
+        for admin_network in ('', '0.0.0.0/0', '192.0.2.10/32'):
+            with self.subTest(admin_network=admin_network), tempfile.TemporaryDirectory() as directory:
+                destination = Path(directory) / 'wg-easy-private-ui.nft'
+                script = 'set -euo pipefail\nset -a\n' + environment + '\nset +a\n' + '''python3() { "$PYTHON_EXECUTABLE" "$@"; }
+FOCUSVPN_ADMIN_NETWORK="$TEST_ADMIN_NETWORK"
+export FOCUSVPN_ADMIN_NETWORK
+''' + function + '\nrender_template "$NFT_TEMPLATE" "$NFT_DESTINATION"\n'
+                result = subprocess.run([bash], input=script, text=True, capture_output=True, env={**os.environ, 'PYTHON_EXECUTABLE': Path(sys.executable).as_posix(), 'TEST_ADMIN_NETWORK': admin_network, 'NFT_TEMPLATE': (root / 'server/config/sing-box-admin/wg-easy-private-ui.nft.template').as_posix(), 'NFT_DESTINATION': destination.as_posix()})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                rendered = destination.read_text(encoding='utf-8')
+                self.assertNotIn('__FOCUSVPN_', rendered)
+                self.assertIn(', ' + (admin_network or '0.0.0.0/0') + ' } counter drop', rendered)
+                self.assertIn('iifname != "lo" tcp dport 51821 counter drop', rendered)
+                self.assertNotIn('7445', rendered)
 
     def test_runtime_bundle_preflight_rejects_missing_files(self):
         bash = str(Path('C:/Program Files/Git/bin/bash.exe')) if os.name == 'nt' else shutil.which('bash')

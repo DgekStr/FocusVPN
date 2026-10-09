@@ -34,6 +34,7 @@ Options:
 The default mode installs dependencies, code, systemd units and safe templates,
 then initializes wg-easy automatically with private service credentials.
 Its web UI is restricted to localhost; sing-box/HAPP require real configs.
+Panel HTTPS accepts all IPv4 sources by default and requires authentication.
 For a one-command GitHub bootstrap, see scripts/bootstrap.sh.
 EOF
 }
@@ -68,7 +69,7 @@ esac
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y --no-install-recommends ca-certificates curl docker.io nftables nginx openssl python3 python3-xlwt qrencode tar wireguard-tools
+  apt-get install -y --no-install-recommends ca-certificates curl docker.io kmod nftables nginx openssl python3 python3-xlwt qrencode tar wireguard-tools
   systemctl stop nginx.service 2>/dev/null || true
   systemctl enable --now docker
 }
@@ -78,9 +79,10 @@ confirm_install_plan() {
   [[ "${FOCUSVPN_INSTALL_PLAN_CONFIRMED:-}" == "1" ]] && return 0
   cat <<'EOF'
 [focusvpn] WARNING: installation will make system-level changes.
-Packages: ca-certificates, curl, Docker, nftables, Nginx, OpenSSL, Python 3, python3-xlwt, qrencode, tar, wireguard-tools, sing-box.
+Packages: ca-certificates, curl, Docker, kmod, nftables, Nginx, OpenSSL, Python 3, python3-xlwt, qrencode, tar, wireguard-tools, sing-box.
 Services/container to enable: docker, nginx, sing-box-admin, wg-easy-private-ui, wg-easy.
 Admin panel: https://<server-ip>:7445 (self-signed certificate; browser warning expected).
+Panel HTTPS accepts all IPv4 sources by default and requires authentication; an explicit admin CIDR is preserved.
 wg-easy administrator/API setup is automatic; private credentials are stored with mode 0600.
 WireGuard is initialized; sing-box/HAPP remain stopped unless --enable is requested with real configurations.
 EOF
@@ -319,7 +321,7 @@ from pathlib import Path
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 content = source.read_text(encoding='utf-8')
-admin_network = ipaddress.ip_network(os.environ.get('FOCUSVPN_ADMIN_NETWORK') or os.environ['FOCUSVPN_LAN_NETWORK'], strict=False)
+admin_network = ipaddress.ip_network(os.environ.get('FOCUSVPN_ADMIN_NETWORK') or '0.0.0.0/0', strict=False)
 if admin_network.version != 4:
   raise ValueError('FOCUSVPN_ADMIN_NETWORK must be an IPv4 network')
 content = content.replace('__FOCUSVPN_ADMIN_NETWORK__', str(admin_network))
@@ -392,11 +394,28 @@ contains_placeholder() {
   grep -Eq '<[A-Za-z0-9_.-]+>' "$1"
 }
 
+prepare_wg_easy_host() {
+  local module
+  local modules_file="${1:-/etc/modules-load.d/focusvpn-wg-easy.conf}"
+  local -a modules=(wireguard iptable_filter iptable_nat ip6table_filter ip6table_nat)
+  for module in "${modules[@]}"; do
+    modprobe "$module" || fail "required wg-easy kernel module is unavailable: $module; install matching kernel modules or use a host with WireGuard/legacy iptables support"
+  done
+  install -d -m 0755 "$(dirname "$modules_file")"
+  printf '%s\n' "${modules[@]}" > "$modules_file"
+  chmod 0644 "$modules_file"
+}
+
 create_wg_easy_container() {
   local server_ip initialization_environment setup_location
+  prepare_wg_easy_host
   initialization_environment="$ADMIN_ROOT/wg-easy-init.env"
   if docker inspect wg-easy >/dev/null 2>&1; then
     docker start wg-easy >/dev/null
+    if [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' wg-easy)" == "unhealthy" ]]; then
+      log "restarting unhealthy wg-easy after preparing host kernel modules"
+      docker restart wg-easy >/dev/null
+    fi
     curl --fail --silent --retry 10 --retry-connrefused --retry-delay 1 --max-time 5 http://127.0.0.1:51821/ >/dev/null || fail "wg-easy did not become ready"
     setup_location="$(curl --silent --show-error --max-time 5 --output /dev/null --write-out '%{redirect_url}' http://127.0.0.1:51821/)"
     if [[ "$setup_location" != *'/setup/'* ]]; then
@@ -488,7 +507,7 @@ main() {
     log "complete configs, then run: sudo ./scripts/install.sh --enable"
   fi
   server_ip="$(ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
-  log "installed packages: Docker, Nginx, OpenSSL, Python 3, nftables, WireGuard tools, sing-box and panel dependencies"
+  log "installed packages: Docker, kmod, Nginx, OpenSSL, Python 3, nftables, WireGuard tools, sing-box and panel dependencies"
   log "started services: docker, nginx, sing-box-admin, wg-easy-private-ui, wg-easy container"
   log "admin panel: https://$server_ip:7445 (self-signed certificate; browser warning expected)"
   log "wg-easy API configured automatically; credentials stored privately in $ADMIN_ROOT/wg-easy-api.json"

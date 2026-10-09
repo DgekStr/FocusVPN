@@ -26,8 +26,9 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlspl
 
 from wg_admin import WgAdmin
 from wg_easy_api import WgEasyApi, WgEasyApiError
+from happ_server import DEFAULT_SUBSCRIPTION_TITLE, SUBSCRIPTION_ANNOUNCEMENT
 from happ_server import load_state as load_happ_state
-from happ_server import public_vless_link, subscription_content, subscription_information_page, vless_link_for_subscription
+from happ_server import public_vless_link, subscription_content, subscription_information_page, validate_subscription_content, vless_link_for_subscription
 from happ_server_ui import page as happ_server_page
 from happ_stats import HappStatsError, live_connections as happ_live_connections
 from happ_stats import format_datetime
@@ -1183,6 +1184,14 @@ def save_happ_subscription_base_url(value):
     write_atomic_file(HAPP_STATE_PATH, (json.dumps(state, indent=2, ensure_ascii=False) + '\n').encode('utf-8'), mode=0o600)
 
 
+def save_happ_subscription_content(title, announcement):
+    title, announcement = validate_subscription_content(title, announcement)
+    state = load_happ_state()
+    state.update(subscription_title=title, subscription_announcement=announcement)
+    backup_file(HAPP_STATE_PATH, 'happ-subscription-content')
+    write_atomic_file(HAPP_STATE_PATH, (json.dumps(state, indent=2, ensure_ascii=False) + '\n').encode('utf-8'), mode=0o600)
+
+
 def apply_happ_state(raw):
     payload = parse_json_object(raw, 'HAPP Public link')
     resolve_happ_subscription_base_url(payload)
@@ -1586,6 +1595,8 @@ def render_settings_page(config, query, message='', kind='success'):
                 happ_state_payload.pop('local_link', None)
                 happ_state = json.dumps(happ_state_payload, indent=2, ensure_ascii=False)
                 happ_subscription_setting = str(happ_state_payload.get('subscription_base_url', ''))
+                happ_subscription_title = str(happ_state_payload.get('subscription_title', DEFAULT_SUBSCRIPTION_TITLE))
+                happ_subscription_announcement = str(happ_state_payload.get('subscription_announcement', SUBSCRIPTION_ANNOUNCEMENT))
                 happ_subscription_origin = resolve_happ_subscription_base_url(happ_state_payload)
                 happ_error = ''
         except (OSError, ValueError) as error:
@@ -1593,6 +1604,8 @@ def render_settings_page(config, query, message='', kind='success'):
                 happ_state = '{}'
                 happ_state_payload = {}
                 happ_subscription_setting = ''
+                happ_subscription_title = DEFAULT_SUBSCRIPTION_TITLE
+                happ_subscription_announcement = SUBSCRIPTION_ANNOUNCEMENT
                 happ_subscription_origin = ''
                 happ_error = message_banner(f'HAPP Server: {error}', 'error')
         service_control = load_service_control()
@@ -1630,6 +1643,7 @@ def render_settings_page(config, query, message='', kind='success'):
 <div class="settings-layout">
     {gateway_mode_panel}
     <section class="panel"><h2>Публичный URL подписки HAPP</h2><form method="post" action="/settings/happ/subscription"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_subscription_base_url">WAN / DNS URL · пусто = публичный адрес HAPP</label><input id="happ_subscription_base_url" name="subscription_base_url" type="url" value="{esc(happ_subscription_setting)}" placeholder="{esc(happ_subscription_origin)}"></div><p class="muted">Текущий адрес: {esc(happ_subscription_origin)}. Внешний порт должен быть доступен клиенту; HTTPS задаётся только для настроенного TLS endpoint.</p><div class="actions"><button type="submit">Сохранить URL подписки</button></div></form></section>
+    <section class="panel"><h2>Заголовок и объявление HAPP</h2><form method="post" action="/settings/happ/announcement"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_subscription_title">Заголовок сервера</label><input id="happ_subscription_title" name="subscription_title" maxlength="80" value="{esc(happ_subscription_title)}" required></div><div class="field"><label for="happ_subscription_announcement">Текст объявления</label><textarea id="happ_subscription_announcement" name="subscription_announcement" rows="5" maxlength="2000">{esc(happ_subscription_announcement)}</textarea></div><p class="muted">Заголовок отображается перед именем пользователя; итоговое имя HAPP ограничено 25 символами. Объявление обновится при следующем обновлении подписки; строка «Скачано» формируется автоматически.</p><div class="actions"><button type="submit">Сохранить блок HAPP</button></div></form></section>
     <section class="panel"><h2>Хранение статистики HAPP</h2><form method="post" action="/settings/happ-history"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_retention_days">Хранить дней · старые записи очищаются автоматически</label><input id="happ_retention_days" name="retention_days" type="number" min="1" max="3650" step="1" value="{history_days}" required></div><div class="actions"><button type="submit">Сохранить срок хранения</button><a class="button secondary" href="/happ-history">История HAPP</a></div></form><p class="muted">База хранится в /mnt/stat/. По умолчанию 60 дней; уменьшение срока сразу удалит записи старше выбранного периода.</p></section>
     <section class="panel"><h2>VIP-ссылка HAPP</h2><div class="field"><label for="happ_vip_link">Ссылка подключения</label><textarea id="happ_vip_link" class="public-link-field" readonly spellcheck="false">{esc(vip_link)}</textarea></div></section>
     <section class="panel"><h2>Автопроверка VLESS</h2><form method="post" action="/settings/vless-monitor"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label><input class="inline-checkbox" type="checkbox" name="monitor_enabled"{' checked' if monitor_settings['enabled'] else ''}> Проверять VLESS по расписанию</label></div><div class="field"><label for="monitor_interval_minutes">Интервал между циклами, минуты</label><input id="monitor_interval_minutes" name="interval_minutes" type="number" min="1" max="60" step="1" value="{monitor_settings['interval_minutes']}" required></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="auto_switch"{' checked' if monitor_settings['auto_switch'] else ''}> Автовыбор: минимальная задержка в трёх циклах подряд</label></div><div class="field"><label><input class="inline-checkbox" type="checkbox" name="mattermost_enabled"{' checked' if monitor_settings['mattermost_enabled'] else ''}> Уведомлять Mattermost о смене шлюза</label></div><div class="field"><label for="mattermost_webhook">Webhook Mattermost{' · сохранён' if monitor_settings['webhook_url'] else ''}</label><input id="mattermost_webhook" name="webhook_url" type="password" autocomplete="new-password" placeholder="{'Оставьте пустым для сохранения webhook' if monitor_settings['webhook_url'] else 'https://mattermost.example/hooks/...'}"></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="clear_webhook"> Удалить сохранённый webhook</label></div></div><div class="actions"><button type="submit">Сохранить автоматизацию</button><a class="button secondary" href="/gateway-journal">Журнал переключений</a></div></form><form method="post" action="/settings/vless-monitor/test-webhook"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit"{' disabled' if not monitor_settings['webhook_url'] else ''}>Проверить webhook</button></div></form><p class="muted">Последняя проверка: {esc(monitor_state.get('last_checked_at', 'ещё не выполнялась'))}. Кандидат: {esc(monitor_state.get('candidate') or 'нет')} · {monitor_state.get('streak', 0)}/3.</p></section>
@@ -2091,9 +2105,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             user_key = 'VIP' if user['id'] == 'VIP' else 'personal-' + user['id']
             traffic = HAPP_HISTORY.user_totals().get(user_key, {})
-            subscription_origin = resolve_happ_subscription_base_url()
+            subscription_state = load_happ_state()
+            subscription_origin = resolve_happ_subscription_base_url(subscription_state)
             user = {**user, 'link': vless_link_for_subscription(user['link'], subscription_origin)}
-            content, headers = subscription_content(user, traffic, subscription_origin + '/happ-info')
+            content, headers = subscription_content(
+                user,
+                traffic,
+                subscription_origin + '/happ-info',
+                subscription_state.get('subscription_title', DEFAULT_SUBSCRIPTION_TITLE),
+                subscription_state.get('subscription_announcement', SUBSCRIPTION_ANNOUNCEMENT),
+            )
         except (ValueError, OSError, sqlite3.Error):
             self.send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
             return
@@ -2110,7 +2131,16 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == '/happ-info':
             if self.vpn_client_allowed():
-                self.send_html(HTTPStatus.OK, subscription_information_page())
+                try:
+                    state = load_happ_state()
+                    content = subscription_information_page(
+                        state.get('subscription_title', DEFAULT_SUBSCRIPTION_TITLE),
+                        state.get('subscription_announcement', SUBSCRIPTION_ANNOUNCEMENT),
+                    )
+                except (OSError, ValueError):
+                    self.send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self.send_html(HTTPStatus.OK, content)
             else:
                 self.send_empty(HTTPStatus.FORBIDDEN)
             return
@@ -2434,6 +2464,14 @@ class Handler(BaseHTTPRequestHandler):
                     with HAPP_LOCK:
                         save_happ_subscription_base_url(form_value(values, 'subscription_base_url'))
                     self.redirect_settings('', 'Публичный адрес подписки сохранён; VIP-ссылка не изменена.')
+                    return
+                if path == '/settings/happ/announcement':
+                    with HAPP_LOCK:
+                        save_happ_subscription_content(
+                            form_value(values, 'subscription_title'),
+                            form_value(values, 'subscription_announcement'),
+                        )
+                    self.redirect_settings('', 'Заголовок и объявление HAPP сохранены; новые данные появятся при обновлении подписки.')
                     return
                 if path == '/settings/happ/keys':
                     if form_value(values, 'confirm_happ_keys') != 'generate':

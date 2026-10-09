@@ -18,7 +18,7 @@ from urllib.parse import urlsplit, parse_qs, quote, unquote, urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
 from happ_users import HappUsers, build_user_config, user_link, now_utc, write_private_json
-from happ_server import happ_add_link, subscription_content, HAPP_DIRECT_SITES, SUBSCRIPTION_ANNOUNCEMENT, subscription_information_page, vless_link_for_subscription
+from happ_server import happ_add_link, subscription_content, HAPP_DIRECT_SITES, SUBSCRIPTION_ANNOUNCEMENT, subscription_information_page, validate_subscription_content, vless_link_for_subscription
 from happ_history import HappHistory
 if sys.platform == 'win32':
     sys.modules.setdefault('grp', types.ModuleType('grp'))
@@ -228,6 +228,34 @@ class HappUserTests(unittest.TestCase):
         self.assertIn(('#profile-title: ' + headers['profile-title']).encode('ascii'), content)
         self.assertIn(b'#subscription-userinfo: upload=30; download=120; total=0', content)
         self.assertTrue(content.decode('utf-8').endswith(self.link + '\n'))
+
+    def test_subscription_content_uses_custom_title_and_announcement(self):
+        user = {'name': 'Alice', 'link': self.link}
+        content, headers = subscription_content(
+            user,
+            {'download_bytes': 120, 'upload_bytes': 30},
+            title='Focus VPN',
+            announcement='Тестовое объявление\nВторая строка',
+        )
+        title = base64.b64decode(headers['profile-title'].removeprefix('base64:')).decode('utf-8')
+        announcement = base64.b64decode(headers['announce'].removeprefix('base64:')).decode('utf-8')
+        self.assertEqual(title, 'Focus VPN Alice')
+        self.assertEqual(announcement, 'Тестовое объявление\nВторая строка\nСкачано: 0.00 МБ / ∞')
+        self.assertIn(('#profile-title: ' + headers['profile-title']).encode('ascii'), content)
+        self.assertEqual(
+            base64.b64decode(subscription_content(user, {'download_bytes': 0}, announcement='')[1]['announce'].removeprefix('base64:')).decode('utf-8'),
+            'Скачано: 0.00 МБ / ∞',
+        )
+        with self.assertRaises(ValueError):
+            validate_subscription_content('Название\nHeader: injected', 'Текст')
+        with self.assertRaises(ValueError):
+            validate_subscription_content('OK', 'x' * 2001)
+
+    def test_subscription_information_page_uses_and_escapes_custom_content(self):
+        page = subscription_information_page('<b>Private VPN</b>', '<script>alert(1)</script>')
+        self.assertIn('&lt;b&gt;Private VPN&lt;/b&gt;', page)
+        self.assertIn('&lt;script&gt;alert(1)&lt;/script&gt;', page)
+        self.assertNotIn('<script>alert(1)</script>', page)
 
     def test_subscription_routing_preserves_existing_access(self):
         self.manager.create('Alice')
@@ -485,6 +513,48 @@ class HappUserTests(unittest.TestCase):
         self.assertEqual(self.manager.vip()['link'], self.link)
         self.assertEqual(json.loads(self.config_path.read_text())['inbounds'][0]['users'], self.config['inbounds'][0]['users'])
 
+    def test_subscription_announcement_save_preserves_other_settings_and_vip(self):
+        with patch.object(app, 'HAPP_STATE_PATH', self.public_path), patch.object(app, 'load_happ_state', side_effect=lambda: json.loads(self.public_path.read_text(encoding='utf-8'))), patch.object(app, 'backup_file'), patch.object(app, 'write_atomic_file', side_effect=lambda path, content, **kwargs: path.write_bytes(content)):
+            app.save_happ_subscription_content('  Focus VPN  ', 'Первая строка\r\nВторая строка')
+            saved = json.loads(self.public_path.read_text(encoding='utf-8'))
+            self.assertEqual(saved['subscription_title'], 'Focus VPN')
+            self.assertEqual(saved['subscription_announcement'], 'Первая строка\nВторая строка')
+            self.assertEqual(saved['link'], self.link)
+            app.save_happ_subscription_content('Focus VPN', '')
+            self.assertEqual(json.loads(self.public_path.read_text(encoding='utf-8'))['subscription_announcement'], '')
+            with self.assertRaises(ValueError):
+                app.save_happ_subscription_content('Bad\nTitle', 'Текст')
+            self.assertEqual(json.loads(self.public_path.read_text(encoding='utf-8'))['subscription_title'], 'Focus VPN')
+        self.assertEqual(self.manager.vip()['link'], self.link)
+        self.assertEqual(json.loads(self.config_path.read_text())['inbounds'][0]['users'], self.config['inbounds'][0]['users'])
+
+    def test_subscription_announcement_settings_form_saves_through_authenticated_post(self):
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+        try:
+            form = urlencode({
+                'csrf': app.CSRF_TOKEN,
+                'subscription_title': 'Focus VPN',
+                'subscription_announcement': 'Обновлённый текст HAPP',
+            })
+            with patch.object(app, 'HAPP_STATE_PATH', self.public_path), patch.object(app, 'load_happ_state', side_effect=lambda: json.loads(self.public_path.read_text(encoding='utf-8'))), patch.object(app, 'backup_file'), patch.object(app, 'write_atomic_file', side_effect=lambda path, content, **kwargs: path.write_bytes(content)), patch.object(app.Handler, 'vpn_client_allowed', return_value=True), patch.object(app.Handler, 'session_authenticated', return_value=True):
+                connection.request('POST', '/settings/happ/announcement', body=form, headers={'Content-Type': 'application/x-www-form-urlencoded'})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 303)
+                self.assertIn('/settings?', response.getheader('Location'))
+                response.read()
+            saved = json.loads(self.public_path.read_text(encoding='utf-8'))
+            self.assertEqual(saved['subscription_title'], 'Focus VPN')
+            self.assertEqual(saved['subscription_announcement'], 'Обновлённый текст HAPP')
+            self.assertEqual(saved['link'], self.link)
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
     def test_chart_library_is_served_before_admin_auth(self):
         chart_path = Path(__file__).resolve().parents[1] / 'server' / 'panel' / 'static' / 'chart.js'
         server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
@@ -520,8 +590,9 @@ class HappUserTests(unittest.TestCase):
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+        subscription_state = {'server': 'vpn.example.com'}
         try:
-            with patch.object(app, 'HAPP_USERS', self.manager), patch.object(app, 'HAPP_HISTORY', history), patch.object(app, 'load_happ_state', return_value={'server': 'vpn.example.com'}), patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(app.Handler, 'vpn_client_allowed', return_value=True):
+            with patch.object(app, 'HAPP_USERS', self.manager), patch.object(app, 'HAPP_HISTORY', history), patch.object(app, 'load_happ_state', side_effect=lambda: dict(subscription_state)), patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(app.Handler, 'vpn_client_allowed', return_value=True):
                 connection.request('GET', '/happ-subscription/' + token)
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
@@ -549,6 +620,24 @@ class HappUserTests(unittest.TestCase):
                 self.assertIn('text-align:justify', information)
                 self.assertIn('focuslens.dev', information)
                 self.assertNotIn(users[0]['link'], information)
+                subscription_state.update(subscription_title='Private VPN', subscription_announcement='Новое объявление HAPP')
+                connection.request('GET', '/happ-subscription/' + token)
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(
+                    base64.b64decode(response.getheader('profile-title').removeprefix('base64:')).decode('utf-8'),
+                    'Private VPN Alice',
+                )
+                self.assertEqual(
+                    base64.b64decode(response.getheader('announce').removeprefix('base64:')).decode('utf-8'),
+                    'Новое объявление HAPP\nСкачано: 0.00 МБ / ∞',
+                )
+                response.read()
+                connection.request('GET', '/happ-info')
+                response = connection.getresponse()
+                self.assertIn('Private VPN', response.read().decode('utf-8'))
+                subscription_state.clear()
+                subscription_state['server'] = 'vpn.example.com'
                 history.ingest({'connections': [{**record, 'download_bytes': 200}]})
                 connection.request('GET', '/happ-subscription/' + token)
                 response = connection.getresponse()

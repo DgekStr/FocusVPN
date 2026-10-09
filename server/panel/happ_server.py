@@ -211,10 +211,13 @@ HAPP_DIRECT_SITES = (
     'domain:zvuk.com',
     'domain:focuslens.dev',
 )
+DEFAULT_SUBSCRIPTION_TITLE = '\U0001f5a7 FocusVPN'
 SUBSCRIPTION_ANNOUNCEMENT = (
     '🔒Это частный VPN сервер, для работы команды разработчиков focuslens.dev. '
     'Если вы здесь оказались - это не случайно ❤️'
 )
+MAX_SUBSCRIPTION_TITLE_LENGTH = 80
+MAX_SUBSCRIPTION_ANNOUNCEMENT_LENGTH = 2000
 
 
 def load_state():
@@ -247,18 +250,31 @@ def vless_link_for_subscription(link, subscription_url):
     return urlunsplit((parsed_link.scheme, authority, parsed_link.path, parsed_link.query, parsed_link.fragment))
 
 
-def subscription_content(user, traffic, information_url=None):
+def validate_subscription_content(title, announcement):
+    title = str(title or '').strip()
+    announcement = str(announcement or '').replace('\r\n', '\n').replace('\r', '\n').strip()
+    if not title or len(title) > MAX_SUBSCRIPTION_TITLE_LENGTH or any(ord(char) < 32 for char in title):
+        raise ValueError('Заголовок HAPP должен содержать от 1 до 80 символов без управляющих символов.')
+    if len(announcement) > MAX_SUBSCRIPTION_ANNOUNCEMENT_LENGTH or any(
+        ord(char) < 32 and char not in '\n\t' for char in announcement
+    ):
+        raise ValueError('Текст объявления HAPP слишком длинный или содержит управляющие символы.')
+    return title, announcement
+
+
+def subscription_content(user, traffic, information_url=None, title=DEFAULT_SUBSCRIPTION_TITLE, announcement=SUBSCRIPTION_ANNOUNCEMENT):
     download = max(0, int(traffic.get('download_bytes', 0)))
     upload = max(0, int(traffic.get('upload_bytes', 0)))
     userinfo = f'upload={upload}; download={download}; total=0'
     expiry = parse_expiry(user.get('expires_at'))
     if expiry is not None:
         userinfo += '; expire=' + str(int(expiry.timestamp()))
-    title = base64.b64encode(('\U0001f5a7 FocusVPN ' + user['name'])[:25].encode('utf-8')).decode('ascii')
-    headers = {'subscription-userinfo': userinfo, 'profile-update-interval': '1', 'profile-title': 'base64:' + title}
+    title, announcement = validate_subscription_content(title, announcement)
+    encoded_title = base64.b64encode((title + ' ' + user['name'])[:25].encode('utf-8')).decode('ascii')
+    headers = {'subscription-userinfo': userinfo, 'profile-update-interval': '1', 'profile-title': 'base64:' + encoded_title}
     downloaded = f'{download / (1024 ** 3):.2f} ГБ' if download >= 1024 ** 3 else f'{download / (1024 ** 2):.2f} МБ'
-    announcement = SUBSCRIPTION_ANNOUNCEMENT + '\nСкачано: ' + downloaded + ' / ∞'
-    headers['announce'] = 'base64:' + base64.b64encode(announcement.encode('utf-8')).decode('ascii')
+    announcement_text = (announcement + '\n' if announcement else '') + 'Скачано: ' + downloaded + ' / ∞'
+    headers['announce'] = 'base64:' + base64.b64encode(announcement_text.encode('utf-8')).decode('ascii')
     if information_url:
         headers['profile-web-page-url'] = information_url
     routing_profile = {'Name': 'FocusVPN Direct', 'GlobalProxy': 'true', 'LastUpdated': '1791417601', 'DirectSites': list(HAPP_DIRECT_SITES)}
@@ -267,6 +283,8 @@ def subscription_content(user, traffic, information_url=None):
     return body.encode('utf-8'), headers
 
 
-def subscription_information_page():
-    paragraphs = ''.join('<p>' + html.escape(paragraph) + '</p>' for paragraph in SUBSCRIPTION_ANNOUNCEMENT.split('\n'))
-    return '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>FocusVPN</title><style>body{margin:0;background:#f4f7fa;color:#17252e;font:18px/1.65 Georgia,serif}main{max-width:680px;margin:48px auto;padding:0 24px}h1{font-size:28px}p{text-align:justify;overflow-wrap:anywhere;hyphens:auto}@media(max-width:480px){main{margin:24px auto;padding:0 18px}}</style></head><body><main><h1>FocusVPN</h1>' + paragraphs + '</main></body></html>'
+def subscription_information_page(title=DEFAULT_SUBSCRIPTION_TITLE, announcement=SUBSCRIPTION_ANNOUNCEMENT):
+    title, announcement = validate_subscription_content(title, announcement)
+    paragraphs = ''.join('<p>' + html.escape(paragraph) + '</p>' for paragraph in announcement.split('\n'))
+    escaped_title = html.escape(title)
+    return '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + escaped_title + '</title><style>body{margin:0;background:#f4f7fa;color:#17252e;font:18px/1.65 Georgia,serif}main{max-width:680px;margin:48px auto;padding:0 24px}h1{font-size:28px}p{text-align:justify;overflow-wrap:anywhere;hyphens:auto}@media(max-width:480px){main{margin:24px auto;padding:0 18px}}</style></head><body><main><h1>' + escaped_title + '</h1>' + paragraphs + '</main></body></html>'

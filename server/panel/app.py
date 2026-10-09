@@ -621,6 +621,7 @@ def import_xray_outbound(source, tag):
     if tls_source.get('fingerprint'):
         tls['utls'] = {'enabled': True, 'fingerprint': tls_source['fingerprint']}
     if security == 'reality':
+        tls.setdefault('utls', {'enabled': True, 'fingerprint': 'chrome'})
         public_key = tls_source.get('publicKey', '')
         short_id = str(tls_source.get('shortId', '')).lower()
         if not PUBLIC_KEY_PATTERN.fullmatch(public_key) or not SHORT_ID_PATTERN.fullmatch(short_id):

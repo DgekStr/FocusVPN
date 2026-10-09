@@ -261,6 +261,41 @@ class RouteSyncTests(unittest.TestCase):
         source['streamSettings']['tlsSettings']['allowInsecure'] = True
         self.assertTrue(app.import_xray_outbound(source, 'auto-8')['tls']['insecure'])
 
+    def test_full_xray_reality_import_defaults_empty_fingerprint_to_chrome(self):
+        source = batch_import_fixture()[0]['outbounds'][0]
+        settings = source['settings']
+        source['settings'] = {'vnext': [{'address': settings['address'], 'port': settings['port'], 'users': [{'id': settings['id'], 'flow': settings['flow'], 'encryption': 'none'}]}]}
+        payload = {'outbounds': [source, {'protocol': 'freedom', 'tag': 'direct'}, {'protocol': 'blackhole', 'tag': 'block'}]}
+        for fingerprint in ('', None, 'missing'):
+            with self.subTest(fingerprint=fingerprint):
+                reality = source['streamSettings']['realitySettings']
+                if fingerprint == 'missing':
+                    reality.pop('fingerprint', None)
+                else:
+                    reality['fingerprint'] = fingerprint
+                config = json.loads(json.dumps(self.gateway))
+                validator = Mock()
+                tags, skipped = app.import_server_batch(json.dumps(payload), config, validator=validator)
+                self.assertEqual(len(tags), 1)
+                self.assertEqual(skipped, [])
+                validator.assert_called_once()
+                candidate = json.loads(validator.call_args.args[0])
+                outbound = next(item for item in candidate['outbounds'] if item.get('tag') == tags[0])
+                self.assertEqual(outbound['tls']['utls'], {'enabled': True, 'fingerprint': 'chrome'})
+                self.assertEqual(outbound['tls']['reality']['public_key'], reality['publicKey'])
+                self.assertEqual(outbound['tls']['reality']['short_id'], reality['shortId'])
+                self.assertEqual(outbound['uuid'], settings['id'])
+                self.assertEqual(outbound['server'], settings['address'])
+                self.assertEqual(outbound['flow'], settings['flow'])
+                self.assertEqual(config['route']['final'], self.gateway['route']['final'])
+
+    def test_xray_reality_preserves_explicit_fingerprint_without_changing_plain_tls(self):
+        source = batch_import_fixture()[0]['outbounds'][0]
+        source['streamSettings']['realitySettings']['fingerprint'] = 'firefox'
+        self.assertEqual(app.import_xray_outbound(source, 'auto-1')['tls']['utls'], {'enabled': True, 'fingerprint': 'firefox'})
+        source['streamSettings'] = {'network': 'tcp', 'security': 'tls', 'tlsSettings': {'serverName': 'vpn.example.com'}}
+        self.assertNotIn('utls', app.import_xray_outbound(source, 'auto-1')['tls'])
+
     def test_batch_import_flat_vless_and_mixed_protocols(self):
         config = {'outbounds': [{'type': 'urltest', 'tag': 'vless-auto', 'outbounds': []}], 'route': {'final': 'vless-auto'}}
         validator = self.patch('check_candidate')

@@ -32,7 +32,7 @@ from happ_server import public_vless_link, subscription_content, subscription_in
 from happ_server_ui import page as happ_server_page
 from happ_stats import HappStatsError, live_connections as happ_live_connections
 from happ_stats import format_datetime
-from panel_ui import render_shell
+from panel_ui import render_shell, service_title
 from happ_users import HappUsers, user_link, validate_subscription_base_url
 from happ_history import HappHistory
 from happ_history_ui import render_history
@@ -1307,7 +1307,7 @@ def render_page(config, selected_tag, message='', kind='success'):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FOCUSLENS.DEV | VLESS Gateway</title>
+<title>{esc(service_title())}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="apple-touch-icon" href="/favicon.png">
@@ -1984,7 +1984,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_common_headers()
         self.send_header('Set-Cookie', self.session_cookie('', 0, self.request_is_secure()))
-        content = '<!doctype html><meta charset="utf-8"><title>FocusVPN</title><p>Сессия завершена.</p><p><a href="/login">Войти</a></p>'.encode('utf-8')
+        content = ('<!doctype html><meta charset="utf-8"><title>' + esc(service_title()) + '</title><p>Сессия завершена.</p><p><a href="/login">Войти</a></p>').encode('utf-8')
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(content)))
         self.end_headers()

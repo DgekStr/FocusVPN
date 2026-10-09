@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import quote
 from urllib.parse import urlsplit, urlunsplit
 
+from happ_stats import format_bytes
 from happ_users import parse_expiry
 
 STATE_PATH = Path('/etc/sing-box-admin/happ-server.json')
@@ -272,8 +273,7 @@ def subscription_content(user, traffic, information_url=None, title=DEFAULT_SUBS
     title, announcement = validate_subscription_content(title, announcement)
     encoded_title = base64.b64encode((title + ' ' + user['name'])[:25].encode('utf-8')).decode('ascii')
     headers = {'subscription-userinfo': userinfo, 'profile-update-interval': '1', 'profile-title': 'base64:' + encoded_title}
-    downloaded = f'{download / (1024 ** 3):.2f} ГБ' if download >= 1024 ** 3 else f'{download / (1024 ** 2):.2f} МБ'
-    announcement_text = (announcement + '\n' if announcement else '') + 'Скачано: ' + downloaded + ' / ∞'
+    announcement_text = (announcement + '\n' if announcement else '') + f'DL: {format_bytes(download)} / UL: {format_bytes(upload)}'
     headers['announce'] = 'base64:' + base64.b64encode(announcement_text.encode('utf-8')).decode('ascii')
     if information_url:
         headers['profile-web-page-url'] = information_url

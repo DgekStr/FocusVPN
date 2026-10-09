@@ -2,6 +2,8 @@ import html
 import json
 from pathlib import Path
 
+from happ_server import DEFAULT_SUBSCRIPTION_TITLE, load_state as load_happ_state, validate_subscription_content
+
 CONFIG_PATH = Path('/etc/sing-box/config.json')
 VERSION_PATH = Path(__file__).with_name('VERSION')
 if not VERSION_PATH.is_file():
@@ -11,6 +13,14 @@ PROJECT_VERSION = VERSION_PATH.read_text(encoding='utf-8').strip() if VERSION_PA
 
 def esc(value):
     return html.escape(str(value), quote=True)
+
+
+def service_title():
+  try:
+    title = load_happ_state().get('subscription_title', DEFAULT_SUBSCRIPTION_TITLE)
+    return validate_subscription_content(title, '')[0]
+  except (OSError, ValueError, AttributeError):
+    return DEFAULT_SUBSCRIPTION_TITLE
 
 
 def load_profile_tags():
@@ -36,7 +46,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{esc(title)} | FOCUSLENS.DEV</title>
+<title>{esc(service_title())}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="stylesheet" href="/panel.css?v=2.1.8-happ-list5-chart">

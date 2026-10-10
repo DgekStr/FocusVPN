@@ -489,7 +489,7 @@ class HappUserTests(unittest.TestCase):
         self.assertIn('type="button" data-happ-user-create-cancel>Отмена', modal)
         self.assertIn('type="submit">Создать пользователя', modal)
         self.assertEqual(page.count('action="/happ-users/create"'), 1)
-        self.assertIn('/panel.css?v=2.2.0', page)
+        self.assertIn('/panel.css?v=2.2.0-happ-settings', page)
         self.assertIn('/panel.js?v=2.2.0', page)
         self.assertIn('/happ-actions.js?v=10', page)
 

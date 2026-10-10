@@ -59,7 +59,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <title>{esc(service_title())}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=2.2.0">
+<link rel="stylesheet" href="/panel.css?v=2.2.0-happ-settings">
 </head>
 <body>
 <div class="app-shell">

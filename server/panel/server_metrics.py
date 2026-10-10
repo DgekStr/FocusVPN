@@ -4,6 +4,7 @@ import ipaddress
 import os
 import re
 import sqlite3
+import shutil
 import subprocess
 import threading
 import time
@@ -26,6 +27,12 @@ def format_uptime(seconds):
 
 def format_decimal(value, precision=1):
     return f'{float(value):,.{precision}f}'.replace(',', ' ').replace('.', ',')
+
+
+def format_storage_gb(value):
+    if value is None:
+        return '—'
+    return format_decimal(max(0, float(value)) / (1024 ** 3), 1)
 
 
 def parse_cpu_stat(content):
@@ -113,6 +120,14 @@ def read_raw():
     return {'uptime': uptime, 'cpu_total': cpu_total, 'cpu_idle': cpu_idle, 'rx_bytes': rx_bytes, 'tx_bytes': tx_bytes}
 
 
+def read_disk_usage(path='/'):
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return {}
+    return {'total_bytes': usage.total, 'used_bytes': usage.used}
+
+
 class ServerMetrics:
     def __init__(self, path='/mnt/stat/server-metrics.sqlite3', clock=time.time):
         self.path = Path(path)
@@ -191,7 +206,7 @@ class ServerMetrics:
         else:
             current = dict(latest)
         identity = server_identity()
-        return {'current': current, 'peaks': dict(peaks) if peaks else {}, 'identity': identity}
+        return {'current': current, 'peaks': dict(peaks) if peaks else {}, 'identity': identity, 'disk': read_disk_usage()}
 
 
 def collect_metrics(stop, metrics, interval=5):
@@ -209,6 +224,8 @@ def render_metrics_panel(snapshot):
         peaks = snapshot.get('peaks') or {}
         identity = snapshot.get('identity') or {}
         uptime = format_uptime(current.get('uptime', 0)) if current else 'Сбор…'
+        disk = snapshot.get('disk') or {}
+        disk_value = f'{format_storage_gb(disk.get("total_bytes"))} / {format_storage_gb(disk.get("used_bytes"))} ГБ'
         cpu = peaks.get('cpu')
         cpu_value = format_decimal(cpu) + '%' if cpu is not None else '—'
         since = peaks.get('observed_since')
@@ -225,6 +242,7 @@ def render_metrics_panel(snapshot):
     <div class="server-metrics-heading"><h2>Обзор сервера</h2><p>{ip}<span class="dot-separator">·</span>{os_name}</p></div>
     <div class="server-metrics-grid">
         <article class="server-metric-card"><div class="server-metric-label">Время работы</div><strong>{uptime}</strong><small>С момента загрузки ОС</small></article>
+        <article class="server-metric-card"><div class="server-metric-label">SSD-диск</div><strong>{disk_value}</strong><small>Всего / занято</small></article>
         <article class="server-metric-card"><div class="server-metric-label">Пиковая загрузка CPU</div><strong>{cpu_value}</strong><small>Наблюдение с {since_label}</small></article>
         <article class="server-metric-card"><div class="server-metric-label">Пиковая нагрузка LAN</div><strong>{lan_value}</strong><small>Максимум RX / TX · до 24 ч</small></article>
         <article class="server-metric-card server-network-total"><div class="server-metric-label">Сетевой трафик</div><div><strong>{rx_mb}</strong><span>МБ</span></div><div><strong>{tx_mb}</strong><span>МБ</span></div><small>Получено / отправлено · счётчики ОС</small></article>

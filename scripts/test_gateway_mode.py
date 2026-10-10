@@ -1,17 +1,73 @@
+import http.client
 import json
 import runpy
 import subprocess
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.parse import urlencode
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'server' / 'libexec' / 'focusvpn-gateway-mode'
 if sys.platform == 'win32':
     sys.modules.setdefault('grp', types.ModuleType('grp'))
+sys.path.insert(0, str(SCRIPT.parents[1] / 'panel'))
+import app
+
+
+class GatewayPanelModeTests(unittest.TestCase):
+    def test_removed_mode_cannot_start_gateway_unit(self):
+        with patch.object(app, 'command') as command:
+            with self.assertRaises(ValueError):
+                app.control_gateway_mode('wireguard')
+            command.assert_not_called()
+
+    def test_legacy_mode_is_not_exposed_as_supported_mode(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(app, 'GATEWAY_MODE_PATH', Path(directory) / 'gateway.json'):
+            for stored, expected in (('vless', 'vless'), ('default', 'default'), ('wireguard', 'vless')):
+                app.GATEWAY_MODE_PATH.write_text(json.dumps({'mode': stored}))
+                self.assertEqual(app.gateway_mode(), expected)
+
+    def test_supported_modes_preserve_monitor_events(self):
+        monitor = Mock()
+        with patch.object(app, 'gateway_mode', side_effect=['vless', 'default']), patch.object(app, 'command', return_value=subprocess.CompletedProcess([], 0, '')) as command, patch.object(app, 'VLESS_MONITOR', monitor):
+            app.control_gateway_mode('default')
+        command.assert_called_once_with([app.SYSTEMCTL_BIN, 'start', app.GATEWAY_MODE_UNIT.format('default')], timeout=120)
+        monitor.record_switch.assert_called_once_with('vless', 'default', 'manual_mode')
+
+
+class RemovedExternalClientTests(unittest.TestCase):
+    def test_client_backend_symbols_are_absent(self):
+        for name in ('WIREGUARD_CLIENT_CONFIG_PATH', 'validate_wireguard_client_config', 'save_wireguard_client_config', 'load_wireguard_client_text', 'collect_wireguard_client_state', 'wireguard_client_state', 'control_wireguard_client'):
+            self.assertFalse(hasattr(app, name), name)
+
+    def test_privileged_status_action_is_rejected(self):
+        namespace = runpy.run_path(str(SCRIPT.with_name('focusvpn-service-control')), run_name='focusvpn_service_control_test')
+        with patch.object(sys, 'argv', ['focusvpn-service-control', 'wireguard-client-status']), self.assertRaises(SystemExit):
+            namespace['main']()
+
+    def test_removed_routes_return_not_found_without_system_commands(self):
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+        try:
+            with patch.object(app.Handler, 'require_access', return_value=True), patch.object(app, 'command') as command:
+                for method, path in (('GET', '/settings/gateway/client/live'), ('POST', '/settings/gateway/client'), ('POST', '/settings/gateway/config')):
+                    connection.request(method, path, urlencode({'csrf': app.CSRF_TOKEN, 'operation': 'connect'}), {'Content-Type': 'application/x-www-form-urlencoded'})
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 404)
+                    response.read()
+                command.assert_not_called()
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
 
 
 class GatewayModeTests(unittest.TestCase):
@@ -137,55 +193,29 @@ class GatewayModeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'основной шлюз сервера'):
                 self.namespace['verify_default_gateway_route']()
 
-    def test_default_mode_stops_tproxy_and_external_peer_and_restores_happ_route(self):
-        with tempfile.TemporaryDirectory() as directory:
-            happ_config = Path(directory) / 'happ.json'
-            happ_config.write_text(json.dumps({'route': {'final': 'focusvpn-wg-direct'}}))
-            systemctl = Mock()
-            configure_happ = Mock(return_value='auto-10')
-            save_mode = Mock()
-            verify_route = Mock(return_value={'gateway': '192.168.0.6', 'dev': 'eth0'})
-            cleanup = Mock()
-            overrides = {
-                'HAPP_CONFIG_PATH': happ_config,
-                'load_mode_state': lambda: {'mode': 'wireguard', 'happ_route': 'auto-10'},
-                'verify_default_gateway_route': verify_route,
-                'cleanup_wireguard': cleanup,
-                'systemctl': systemctl,
-                'configure_happ_outbound': configure_happ,
-                'save_mode': save_mode,
-            }
-            with patch.dict(self.namespace, overrides):
-                self.namespace['apply_default']()
-
-        cleanup.assert_called_once_with()
+    def test_default_mode_stops_tproxy_without_restarting_happ(self):
+        systemctl = Mock()
+        save_mode = Mock()
+        verify_route = Mock(return_value={'gateway': '192.168.0.6', 'dev': 'eth0'})
+        with patch.dict(self.namespace, {'load_mode_state': lambda: {'mode': 'vless'}, 'verify_default_gateway_route': verify_route, 'systemctl': systemctl, 'save_mode': save_mode}):
+            self.namespace['apply_default']()
         systemctl.assert_has_calls([unittest.mock.call('stop', 'sing-box.service'), unittest.mock.call('start', 'sing-box-happ-server.service')])
-        configure_happ.assert_called_once_with('vless', 'auto-10')
         verify_route.assert_has_calls([unittest.mock.call(require_selected=False, install_missing=True), unittest.mock.call()])
         save_mode.assert_called_once_with('default')
 
-    def test_default_mode_restarts_happ_when_restoring_provider_route(self):
-        with tempfile.TemporaryDirectory() as directory:
-            happ_config = Path(directory) / 'happ.json'
-            happ_config.write_text(json.dumps({'route': {'final': 'focusvpn-wg-direct'}}))
-            systemctl = Mock()
+    def test_vless_mode_starts_only_existing_vpn_services(self):
+        systemctl = Mock()
+        save_mode = Mock()
+        with patch.dict(self.namespace, {'systemctl': systemctl, 'save_mode': save_mode}):
+            self.namespace['apply_vless']()
+        systemctl.assert_has_calls([unittest.mock.call('start', 'sing-box.service'), unittest.mock.call('start', 'sing-box-happ-server.service')])
+        save_mode.assert_called_once_with('vless')
 
-            def restore_provider(mode, original_route):
-                self.assertEqual((mode, original_route), ('vless', 'auto-10'))
-                happ_config.write_text(json.dumps({'route': {'final': 'auto-10'}}))
-
-            overrides = {
-                'HAPP_CONFIG_PATH': happ_config,
-                'load_mode_state': lambda: {'mode': 'wireguard', 'happ_route': 'auto-10'},
-                'verify_default_gateway_route': Mock(return_value={'gateway': '192.168.0.6', 'dev': 'eth0'}),
-                'cleanup_wireguard': Mock(),
-                'systemctl': systemctl,
-                'configure_happ_outbound': restore_provider,
-                'save_mode': Mock(),
-            }
-            with patch.dict(self.namespace, overrides):
-                self.namespace['apply_default']()
-            systemctl.assert_has_calls([unittest.mock.call('stop', 'sing-box.service'), unittest.mock.call('restart', 'sing-box-happ-server.service')])
+    def test_system_gateway_rejects_removed_mode_without_commands(self):
+        command = Mock()
+        with patch.dict(self.namespace, {'run': command}), patch.object(sys, 'argv', ['focusvpn-gateway-mode', 'wireguard']), self.assertRaises(SystemExit):
+            self.namespace['main']()
+        command.assert_not_called()
 
 
 if __name__ == '__main__':

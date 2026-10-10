@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 import time
@@ -11,12 +12,29 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 
+SERVER_TYPES = ('vless', 'hysteria2', 'trojan', 'shadowsocks')
+MESSAGE_FIELDS = ('date', 'time', 'old', 'new', 'source', 'latency')
+MAX_TEMPLATE_LENGTH = 1000
+FAILOVER_STRIKES = 3
+FAILOVER_RECHECK_SECONDS = 60
+DEFAULT_MESSAGE_TEMPLATE = (
+    '📢 VPN-шлюз: обновление статуса\n'
+    '📅 {date} | 🕐 {time}\n'
+    '🔁 Произошла смена шлюза:\n'
+    '➡️ Было: {old}\n'
+    '✅ Стало: {new} ({source})'
+)
+SOURCE_LABELS = {'manual': 'вручную', 'automatic': 'автовыбор', 'failover': 'недоступность шлюза', 'manual_mode': 'смена режима', 'test': 'test'}
+GATEWAY_LABELS = {'ok': 'доступен', 'suspect': 'проверка не пройдена, идёт подтверждение', 'down': 'недоступен', 'unknown': 'результат проверки неопределён', 'paused': 'проверка приостановлена вне режима VLESS', 'skipped': 'проверка не требуется'}
 DEFAULT_SETTINGS = {
     'enabled': False,
     'interval_minutes': 5,
     'auto_switch': False,
+    'failover_enabled': False,
     'mattermost_enabled': False,
     'webhook_url': '',
+    'message_template': DEFAULT_MESSAGE_TEMPLATE,
+    'utc_offset': '+03:00',
 }
 
 
@@ -47,6 +65,57 @@ def load_settings(directory):
     return {**DEFAULT_SETTINGS, **payload}
 
 
+def validate_template(value):
+    text = str(value or '').replace('\r\n', '\n').replace('\r', '\n').strip()
+    if not text:
+        return DEFAULT_MESSAGE_TEMPLATE
+    if len(text) > MAX_TEMPLATE_LENGTH:
+        raise ValueError(f'Сообщение не должно превышать {MAX_TEMPLATE_LENGTH} символов.')
+    unknown = sorted({name for name in re.findall(r'\{(\w+)\}', text) if name not in MESSAGE_FIELDS})
+    if unknown:
+        raise ValueError('Неизвестные подстановки в сообщении: ' + ', '.join('{' + name + '}' for name in unknown) + '.')
+    return text
+
+
+def offset_minutes(value):
+    match = re.fullmatch(r'([+-])(\d{2}):(\d{2})', str(value or '').strip())
+    if not match:
+        raise ValueError('Часовой пояс укажите смещением от UTC, например +03:00.')
+    total = (int(match[2]) * 60 + int(match[3])) * (-1 if match[1] == '-' else 1)
+    if int(match[3]) not in (0, 15, 30, 45) or not -720 <= total <= 840:
+        raise ValueError('Смещение часового пояса должно быть от -12:00 до +14:00.')
+    return total
+
+
+def validate_utc_offset(value):
+    total = offset_minutes(value)
+    return f'{"-" if total < 0 else "+"}{abs(total) // 60:02d}:{abs(total) % 60:02d}'
+
+
+def render_message(template, event, utc_offset=DEFAULT_SETTINGS['utc_offset']):
+    try:
+        moment = dt.datetime.fromisoformat(event['at'])
+    except (KeyError, TypeError, ValueError):
+        moment = dt.datetime.now(dt.timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=dt.timezone.utc)
+    try:
+        minutes = offset_minutes(utc_offset)
+    except ValueError:
+        minutes = offset_minutes(DEFAULT_SETTINGS['utc_offset'])
+    moment = moment.astimezone(dt.timezone(dt.timedelta(minutes=minutes)))
+    latency = event.get('latency_ms')
+    values = {
+        'date': moment.strftime('%d.%m.%Y'),
+        'time': moment.strftime('%H:%M'),
+        'old': str(event.get('old_route') or '—'),
+        'new': str(event.get('new_route') or '—'),
+        'source': SOURCE_LABELS.get(event.get('source'), str(event.get('source') or '—')),
+        'latency': f'{latency:g} мс' if isinstance(latency, (int, float)) and not isinstance(latency, bool) else '—',
+    }
+    return re.sub(r'\{(\w+)\}', lambda match: values.get(match.group(1), match.group(0)), template or DEFAULT_MESSAGE_TEMPLATE)
+
+
 def validate_settings(payload):
     try:
         interval = int(payload.get('interval_minutes', 5))
@@ -55,7 +124,7 @@ def validate_settings(payload):
     if not 1 <= interval <= 60:
         raise ValueError('Интервал проверки должен быть от 1 до 60 минут.')
     result = {**DEFAULT_SETTINGS, **payload, 'interval_minutes': interval}
-    for key in ('enabled', 'auto_switch', 'mattermost_enabled'):
+    for key in ('enabled', 'auto_switch', 'failover_enabled', 'mattermost_enabled'):
         if not isinstance(result[key], bool):
             raise ValueError('Некорректное значение переключателя проверки VLESS.')
     webhook = str(result.get('webhook_url', '')).strip()
@@ -66,7 +135,31 @@ def validate_settings(payload):
     if result['mattermost_enabled'] and not webhook:
         raise ValueError('Для уведомлений Mattermost укажите webhook URL.')
     result['webhook_url'] = webhook
+    result['message_template'] = validate_template(result['message_template'])
+    result['utc_offset'] = validate_utc_offset(result['utc_offset'])
     return result
+
+
+def usable_latency(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+
+
+def managed_servers(config):
+    return [item for item in config.get('outbounds', []) if item.get('type') in SERVER_TYPES and item.get('tag')]
+
+
+def fresh_probe(check, started):
+    if check.get('state') not in ('success', 'error'):
+        return False
+    try:
+        return dt.datetime.fromisoformat(check['checked_at']) >= started
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def fastest_available(checks, excluded):
+    candidates = sorted((check['latency_ms'], check['tag']) for check in checks if check.get('tag') != excluded and check.get('state') == 'success' and usable_latency(check.get('latency_ms')))
+    return (candidates[0][1], candidates[0][0]) if candidates else None
 
 
 def fastest_vless(config, checks):
@@ -74,7 +167,7 @@ def fastest_vless(config, checks):
     candidates = []
     for check in checks:
         latency = check.get('latency_ms')
-        if check.get('tag') in available and check.get('state') == 'success' and isinstance(latency, (int, float)) and not isinstance(latency, bool) and math.isfinite(latency) and latency >= 0:
+        if check.get('tag') in available and check.get('state') == 'success' and usable_latency(latency):
             candidates.append((latency, check['tag']))
     if not candidates:
         return None
@@ -85,10 +178,22 @@ def fastest_vless(config, checks):
     return current if current in tied else tied[0]
 
 
-def notify_mattermost(url, event):
-    text = f'FocusVPN: шлюз изменён {event["old_route"]} -> {event["new_route"]} ({event["source"]}).'
-    if event.get('latency_ms') is not None:
-        text += f' Задержка: {event["latency_ms"]} мс.'
+def gateway_text(state, settings):
+    if not settings.get('failover_enabled'):
+        return 'Автопроверка доступности выключена.'
+    label = GATEWAY_LABELS.get(state.get('gateway_state'))
+    if label is None:
+        return 'Автопроверка доступности включена; первая проверка ещё не выполнена.'
+    try:
+        checked = dt.datetime.fromisoformat(state['gateway_checked_at']).astimezone(dt.timezone.utc).strftime('%d.%m.%Y %H:%M:%S')
+    except (KeyError, TypeError, ValueError):
+        checked = '—'
+    suffix = f' ({state.get("gateway_strikes", 0)}/{FAILOVER_STRIKES})' if state.get('gateway_state') == 'suspect' else ''
+    return f'Шлюз по умолчанию {state.get("gateway_route") or "—"}: {label}{suffix}. Проверено {checked} UTC.'
+
+
+def notify_mattermost(url, event, template=None, utc_offset=None):
+    text = render_message(template, event, utc_offset or DEFAULT_SETTINGS['utc_offset'])
     request = Request(url, data=json.dumps({'text': text}, ensure_ascii=False).encode('utf-8'), headers={'Content-Type': 'application/json'}, method='POST')
     with urlopen(request, timeout=5) as response:
         if not 200 <= response.status < 300:
@@ -124,11 +229,17 @@ class VlessMonitor:
             saved = json.loads((self.directory / 'vless-monitor-state.json').read_text(encoding='utf-8'))
         except (OSError, ValueError):
             saved = {}
-        return {**saved, 'running': False, 'candidate': None, 'streak': 0, 'next_check_at': None}
+        return {**saved, 'running': False, 'candidate': None, 'streak': 0, 'next_check_at': None, 'gateway_route': None, 'gateway_state': None, 'gateway_strikes': 0, 'gateway_checked_at': None}
 
     def status(self):
         with self.lock:
-            return json.loads(json.dumps(self.state))
+            state = json.loads(json.dumps(self.state))
+        try:
+            settings = load_settings(self.directory)
+        except (OSError, ValueError):
+            settings = DEFAULT_SETTINGS
+        state['gateway_text'] = gateway_text(state, settings)
+        return state
 
     def save_settings(self, payload):
         settings = validate_settings(payload)
@@ -136,6 +247,8 @@ class VlessMonitor:
             write_private_json(self.directory / 'vless-monitor-settings.json', settings)
             self.revision += 1
             self.state.update(candidate=None, streak=0)
+            if not settings['failover_enabled']:
+                self.state.update(gateway_route=None, gateway_state=None, gateway_strikes=0, gateway_checked_at=None)
             self.next_cycle = time.monotonic()
         self.wakeup.set()
         return settings
@@ -186,7 +299,8 @@ class VlessMonitor:
 
     def deliver_notification(self, url, event):
         try:
-            notify_mattermost(url, event)
+            settings = load_settings(self.directory)
+            notify_mattermost(url, event, settings['message_template'], settings['utc_offset'])
             self.append_event({'event': 'mattermost_sent', 'new_route': event['new_route']})
         except Exception:
             self.append_event({'event': 'mattermost_failed', 'new_route': event['new_route'], 'message': 'Уведомление не доставлено; смена маршрута не отменена.'})
@@ -211,8 +325,83 @@ class VlessMonitor:
 
     def check_cycle(self):
         settings = load_settings(self.directory)
-        if not settings['enabled']:
+        if settings['failover_enabled']:
+            try:
+                self.failover_cycle()
+            except Exception:
+                with self.lock:
+                    route = self.state.get('gateway_route')
+                self.set_gateway(route, 'unknown')
+                self.append_event({'event': 'monitor_error', 'message': 'Ошибка проверки доступности шлюза; повтор будет выполнен по расписанию.'})
+            with self.lock:
+                confirming = self.state.get('gateway_state') == 'suspect'
+            if confirming:
+                return
+        if settings['enabled']:
+            self.selection_cycle()
+
+    def set_gateway(self, route, state, strikes=0):
+        with self.lock:
+            self.state.update(gateway_route=route, gateway_state=state, gateway_strikes=strikes, gateway_checked_at=dt.datetime.now(dt.timezone.utc).isoformat())
+
+    def probe(self, tags):
+        started = dt.datetime.now(dt.timezone.utc)
+        for future in self.queue_checks(self.load_config(), tags):
+            try:
+                future.result(timeout=80)
+            except Exception:
+                continue
+        return {item['tag']: item for item in self.check_states(self.load_config())['checks'] if item.get('tag') in tags and fresh_probe(item, started)}
+
+    def failover_cycle(self):
+        config = self.load_config()
+        route = config.get('route', {}).get('final')
+        tags = [item['tag'] for item in managed_servers(config)]
+        with self.lock:
+            revision = self.revision
+            self.state['running'] = True
+        if route not in tags:
+            self.set_gateway(route, 'skipped')
             return
+        if self.mode() != 'vless':
+            self.set_gateway(route, 'paused')
+            return
+        state = self.probe([route]).get(route, {}).get('state')
+        if state == 'success':
+            self.set_gateway(route, 'ok')
+            return
+        if state != 'error':
+            self.set_gateway(route, 'unknown')
+            return
+        with self.lock:
+            known = self.state.get('gateway_route') == route
+            was_down = known and self.state.get('gateway_state') == 'down'
+            strikes = (self.state.get('gateway_strikes', 0) if known else 0) + 1
+        if not was_down and strikes < FAILOVER_STRIKES:
+            self.set_gateway(route, 'suspect', strikes)
+            self.append_event({'event': 'gateway_check_failed', 'old_route': route, 'message': f'Проверка шлюза по умолчанию не прошла ({strikes}/{FAILOVER_STRIKES}); повтор через {FAILOVER_RECHECK_SECONDS} с.'})
+            return
+        self.set_gateway(route, 'down', strikes)
+        if not was_down:
+            self.append_event({'event': 'gateway_down', 'old_route': route, 'message': f'Шлюз по умолчанию недоступен: {FAILOVER_STRIKES} проверки подряд не прошли.'})
+        others = [tag for tag in tags if tag != route]
+        winner = fastest_available(list(self.probe(others).values()), route) if others else None
+        if winner is None:
+            if not was_down:
+                self.append_event({'event': 'failover_no_candidate', 'old_route': route, 'message': 'Рабочий сервер для перехода не найден; прежний шлюз сохранён.'})
+            return
+        tag, latency = winner
+        servers = managed_servers(self.load_config())
+        try:
+            switched = self.switch_route(tag, route, servers, latency, revision, 'failover')
+        except Exception:
+            self.append_event({'event': 'switch_failed', 'old_route': route, 'new_route': tag, 'message': 'Применение маршрута не удалось; прежний маршрут сохранён.', 'latency_ms': latency})
+            return
+        if switched:
+            self.set_gateway(tag, 'ok')
+
+    def selection_cycle(self):
+        settings = load_settings(self.directory)
         snapshot = self.load_config()
         tags = [item['tag'] for item in snapshot.get('outbounds', []) if item.get('type') == 'vless']
         with self.lock:
@@ -253,7 +442,8 @@ class VlessMonitor:
     def run(self):
         while not self.stop_event.is_set():
             settings = load_settings(self.directory)
-            wait_seconds = max(0, self.next_cycle - time.monotonic()) if settings['enabled'] else None
+            active = settings['enabled'] or settings['failover_enabled']
+            wait_seconds = max(0, self.next_cycle - time.monotonic()) if active else None
             if self.wakeup.wait(timeout=wait_seconds):
                 self.wakeup.clear()
                 continue
@@ -268,9 +458,12 @@ class VlessMonitor:
             finally:
                 settings = load_settings(self.directory)
                 with self.lock:
+                    delay = settings['interval_minutes'] * 60
+                    if settings['failover_enabled'] and self.state.get('gateway_state') == 'suspect':
+                        delay = min(delay, FAILOVER_RECHECK_SECONDS)
                     self.state['running'] = False
-                    self.next_cycle = time.monotonic() + settings['interval_minutes'] * 60
-                    self.state['next_check_at'] = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=settings['interval_minutes'])).isoformat() if settings['enabled'] else None
+                    self.next_cycle = time.monotonic() + delay
+                    self.state['next_check_at'] = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=delay)).isoformat() if settings['enabled'] or settings['failover_enabled'] else None
                     write_private_json(self.directory / 'vless-monitor-state.json', self.state)
 
     def start(self):

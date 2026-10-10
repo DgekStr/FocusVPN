@@ -465,8 +465,8 @@ class HappUserTests(unittest.TestCase):
         self.assertIn('type="button" data-happ-user-create-cancel>Отмена', modal)
         self.assertIn('type="submit">Создать пользователя', modal)
         self.assertEqual(page.count('action="/happ-users/create"'), 1)
-        self.assertIn('/panel.css?v=2.1.8-happ-list5-chart', page)
-        self.assertIn('/panel.js?v=2.1.8-happ-list5-chart', page)
+        self.assertIn('/panel.css?v=2.1.9', page)
+        self.assertIn('/panel.js?v=2.1.9', page)
         self.assertIn('/happ-actions.js?v=10', page)
 
     def test_happ_server_vip_endpoint_brackets_ipv6_subscription_host(self):

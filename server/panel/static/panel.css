@@ -76,6 +76,7 @@ h1 { margin: 0; font-size: clamp(26px, 3vw, 36px); line-height: 1.1; letter-spac
 input, select, textarea { width: 100%; min-height: 40px; padding: 9px 10px; border: 1px solid rgba(142, 160, 190, .42); border-radius: 4px; background: rgba(5, 8, 22, .72); color: var(--text); font: inherit; }
 textarea { min-height: 260px; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; resize: vertical; }
 .public-link-field { min-height: 86px; margin-top: 16px; overflow-wrap: anywhere; word-break: break-all; }
+.monitor-message-field { min-height: 150px; }
 input:focus, select:focus, textarea:focus { outline: 0; border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(34, 211, 238, .14); }
 option { background: #111b34; color: var(--text); }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
@@ -90,7 +91,7 @@ option { background: #111b34; color: var(--text); }
 .server-metrics-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 12px; }
 .server-metrics-heading h2 { margin: 0; font-size: 18px; }
 .server-metrics-heading p { margin: 0; color: var(--muted); font-size: 12px; }
-.server-metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.server-metrics-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
 .server-metric-card { display: grid; align-content: start; gap: 6px; min-width: 0; min-height: 132px; padding: 16px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
 .server-metric-label { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .server-metric-card > strong { font-size: 24px; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }

@@ -11,12 +11,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock, patch
 from subprocess import CompletedProcess
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 if sys.platform == 'win32':
     sys.modules.setdefault('grp', types.ModuleType('grp'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
 import app
+from vless_monitor import DEFAULT_SETTINGS, VlessMonitor
 
 
 def batch_import_fixture():
@@ -91,12 +92,10 @@ class RouteSyncTests(unittest.TestCase):
         self.assertEqual(result['inbounds'], self.happ['inbounds'])
         self.happ_restart.assert_called_once()
 
-    def test_wireguard_keeps_direct_and_updates_return_route(self):
+    def test_legacy_mode_uses_provider_without_client_route(self):
         self.mode_path.write_text(json.dumps({'mode': 'wireguard', 'happ_route': 'auto-4'}))
-        self.gateway_restart.return_value = False
-        self.assertFalse(app.apply_configuration(self.gateway))
-        self.assertEqual(json.loads(self.happ_path.read_text())['route']['final'], 'focusvpn-wg-direct')
-        self.assertEqual(json.loads(self.mode_path.read_text())['happ_route'], 'auto-8')
+        self.assertTrue(app.apply_configuration(self.gateway))
+        self.assertEqual(json.loads(self.happ_path.read_text())['route']['final'], 'auto-8')
 
     def test_gateway_default_mode_persists_and_blocks_tproxy_restart(self):
         self.mode_path.write_text(json.dumps({'mode': 'default'}))
@@ -111,13 +110,12 @@ class RouteSyncTests(unittest.TestCase):
 
     def test_gateway_default_mode_does_not_require_external_peer_config(self):
         self.patch('GATEWAY_MODE_PATH', self.mode_path)
-        self.patch('WIREGUARD_CLIENT_CONFIG_PATH', Path(self.directory.name) / 'missing-wg-client.conf')
         command = self.patch('command', return_value=CompletedProcess([], 0, ''))
         self.patch('VLESS_MONITOR', None)
         with patch.object(app, 'gateway_mode', side_effect=['vless', 'default']):
             app.control_gateway_mode('default')
         self.assertEqual(command.call_args.args[0], [app.SYSTEMCTL_BIN, 'start', app.GATEWAY_MODE_UNIT.format('default')])
-        self.assertFalse((Path(self.directory.name) / 'missing-wg-client.conf').exists())
+        self.assertFalse(hasattr(app, 'WIREGUARD_CLIENT_CONFIG_PATH'))
 
     def test_failed_restart_restores_both_configs_and_mode(self):
         previous = [path.read_bytes() for path in (self.gateway_path, self.happ_path, self.mode_path)]
@@ -211,10 +209,8 @@ class RouteSyncTests(unittest.TestCase):
         self.patch('public_vless_link', return_value='vless://demo@vpn.example.com:9445')
         self.patch('load_service_control', return_value={'wireguard_fallback_gateway': '192.168.0.6'})
         self.patch('gateway_mode', return_value='default')
-        self.patch('WIREGUARD_CLIENT_CONFIG_PATH', Path(self.directory.name) / 'missing-wg.conf')
-        self.patch('load_wireguard_client_text', return_value='')
         self.patch('VLESS_MONITOR', None)
-        self.patch('load_monitor_settings', return_value={'enabled': False, 'interval_minutes': 5, 'auto_switch': False, 'mattermost_enabled': False, 'webhook_url': ''})
+        self.patch('load_monitor_settings', return_value={**DEFAULT_SETTINGS})
         self.patch('HAPP_HISTORY', None)
         self.patch('wireguard_state', return_value='active')
         self.patch('service_state', return_value='active')
@@ -226,7 +222,15 @@ class RouteSyncTests(unittest.TestCase):
         self.assertEqual(page.count('class="panel service-control-panel"'), 1)
         self.assertNotIn('settings-wide', page)
         self.assertLess(page.index('Режим работы VPN-шлюза'), page.index('Публичный URL подписки HAPP'))
-        self.assertEqual(page.count('data-gateway-mode='), 3)
+        self.assertLess(page.index('VIP-ссылка HAPP'), page.index('Доступ к панели'))
+        self.assertLess(page.index('happ_vip_link'), page.index('new_password'))
+        self.assertEqual(page.count('action="/settings/password"'), 1)
+        self.assertEqual(page.count('data-gateway-mode='), 2)
+        self.assertNotIn('data-gateway-mode="wireguard"', page)
+        self.assertNotIn('data-wg-client-live', page)
+        self.assertNotIn('wireguard_client_config', page)
+        self.assertNotIn('/settings/gateway/client', page)
+        self.assertIn('action="/settings/service/wireguard"', page)
         self.assertIn('id="happ_public_key"', page)
         self.assertIn('id="happ_vip_uuid"', page)
         self.assertNotIn('Существующая общая ссылка', page)
@@ -235,6 +239,22 @@ class RouteSyncTests(unittest.TestCase):
         self.assertIn('Шлюз по умолчанию', page)
         self.assertEqual(page.count('class="panel service-control-panel"'), 1)
         self.assertNotIn('settings-wide', page)
+        self.assertIn('name="failover_enabled">', page)
+        self.assertIn('Автопроверка доступности VLESS', page)
+        self.assertLess(page.index('name="failover_enabled"'), page.index('name="auto_switch"'))
+        self.assertIn('id="mattermost_message"', page)
+        self.assertIn('📢 VPN-шлюз: обновление статуса\n📅 {date} | 🕐 {time}', page)
+        self.assertIn('{date}, {time}, {old}, {new}, {source}, {latency}', page)
+        self.assertIn('name="utc_offset" value="+03:00"', page)
+        self.assertIn('data-monitor-status>', page)
+
+        self.patch('load_monitor_settings', return_value={**DEFAULT_SETTINGS, 'failover_enabled': True, 'message_template': '</textarea><script>alert(1)</script> "{old}"'})
+        self.patch('VLESS_MONITOR', types.SimpleNamespace(status=lambda: {'last_checked_at': None, 'candidate': None, 'streak': 0, 'gateway_text': 'Шлюз по умолчанию auto-10: доступен. Проверено 10.10.2026 19:41:05 UTC.'}))
+        page = app.render_settings_page({}, {})
+        self.assertIn('name="failover_enabled" checked>', page)
+        self.assertNotIn('<script>alert(1)</script>', page)
+        self.assertIn('&lt;/textarea&gt;&lt;script&gt;alert(1)&lt;/script&gt; &quot;{old}&quot;', page)
+        self.assertIn('data-gateway-status>Шлюз по умолчанию auto-10: доступен. Проверено 10.10.2026 19:41:05 UTC.</p>', page)
 
     def test_connection_result_is_bound_to_profile(self):
         root = Path(self.directory.name)
@@ -420,6 +440,78 @@ class RouteSyncTests(unittest.TestCase):
         self.assertTrue(app.switch_monitored_route('auto-2', 'auto-1', servers, 40, 2))
         self.assertEqual(json.loads(self.happ_path.read_text())['route']['final'], 'auto-2')
         monitor.record_switch.assert_called_once_with('auto-1', 'auto-2', 'automatic', 40)
+
+    def test_failover_switch_uses_its_own_flag_and_covers_every_server_type(self):
+        root = Path(self.directory.name)
+        self.patch('APP_DIR', root)
+        self.mode_path.write_text(json.dumps({'mode': 'vless'}))
+        config = {'outbounds': [{'type': 'trojan', 'tag': 'auto-1'}, {'type': 'vless', 'tag': 'auto-2'}, {'type': 'hysteria2', 'tag': 'auto-3'}], 'route': {'final': 'auto-1'}}
+        self.gateway_path.write_text(json.dumps(config))
+        self.patch('load_config', side_effect=lambda: json.loads(self.gateway_path.read_text()))
+        monitor = types.SimpleNamespace(lock=threading.Lock(), revision=2, record_switch=Mock(), append_event=Mock())
+        self.patch('VLESS_MONITOR', monitor)
+        settings = root / 'vless-monitor-settings.json'
+        servers = app.managed_server_outbounds(config)
+        settings.write_text(json.dumps({'enabled': True, 'auto_switch': True, 'failover_enabled': False}))
+        self.assertFalse(app.switch_monitored_route('auto-2', 'auto-1', servers, 40, 2, 'failover'))
+        settings.write_text(json.dumps({'enabled': False, 'auto_switch': False, 'failover_enabled': True}))
+        self.assertFalse(app.switch_monitored_route('auto-2', 'auto-1', servers, 40, 2))
+        self.assertFalse(app.switch_monitored_route('auto-2', 'auto-1', servers, 40, 1, 'failover'))
+        self.assertFalse(app.switch_monitored_route('auto-2', 'auto-1', servers[:2], 40, 2, 'failover'))
+        self.assertEqual(json.loads(self.gateway_path.read_text())['route']['final'], 'auto-1')
+        self.assertTrue(app.switch_monitored_route('auto-2', 'auto-1', servers, 40, 2, 'failover'))
+        self.assertEqual(json.loads(self.gateway_path.read_text())['route']['final'], 'auto-2')
+        self.assertEqual(json.loads(self.happ_path.read_text())['route']['final'], 'auto-2')
+        monitor.record_switch.assert_called_once_with('auto-1', 'auto-2', 'failover', 40)
+        self.mode_path.write_text(json.dumps({'mode': 'default'}))
+        self.assertFalse(app.switch_monitored_route('auto-3', 'auto-2', app.managed_server_outbounds(json.loads(self.gateway_path.read_text())), 40, 2, 'failover'))
+
+    def test_monitor_settings_post_saves_failover_message_and_offset_and_rejects_invalid(self):
+        root = Path(self.directory.name)
+        self.patch('APP_DIR', root)
+        monitor = VlessMonitor(root, lambda: {}, Mock(), Mock(), Mock(), lambda: 'vless')
+        self.addCleanup(monitor.stop)
+        self.patch('VLESS_MONITOR', monitor)
+        access = patch.object(app.Handler, 'require_access', return_value=True)
+        access.start()
+        self.addCleanup(access.stop)
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+
+        def post(fields):
+            connection.request('POST', '/settings/vless-monitor', urlencode({'csrf': app.CSRF_TOKEN, 'interval_minutes': '7', **fields}), {'Content-Type': 'application/x-www-form-urlencoded'})
+            response = connection.getresponse()
+            response.read()
+            self.assertEqual(response.status, 303)
+            location = urlparse(response.getheader('Location'))
+            self.assertEqual(location.path, '/settings')
+            return parse_qs(location.query)
+
+        try:
+            result = post({'monitor_enabled': 'on', 'failover_enabled': 'on', 'message_template': '🔁 {old} → {new}\r\n{date} {time}', 'utc_offset': '+05:00'})
+            self.assertEqual(result['kind'], ['success'])
+            saved = json.loads((root / 'vless-monitor-settings.json').read_text(encoding='utf-8'))
+            self.assertEqual((saved['enabled'], saved['failover_enabled'], saved['auto_switch'], saved['mattermost_enabled']), (True, True, False, False))
+            self.assertEqual((saved['interval_minutes'], saved['utc_offset'], saved['message_template']), (7, '+05:00', '🔁 {old} → {new}\n{date} {time}'))
+
+            for fields in ({'message_template': '{secret}'}, {'message_template': 'x' * 1001}, {'utc_offset': 'MSK'}, {'utc_offset': '+15:00'}):
+                self.assertEqual(post({'failover_enabled': 'on', **fields})['kind'], ['error'])
+                self.assertEqual(json.loads((root / 'vless-monitor-settings.json').read_text(encoding='utf-8')), saved)
+
+            self.assertEqual(post({'failover_enabled': 'on'})['kind'], ['success'])
+            kept = json.loads((root / 'vless-monitor-settings.json').read_text(encoding='utf-8'))
+            self.assertEqual((kept['message_template'], kept['utc_offset'], kept['enabled']), (saved['message_template'], '+05:00', False))
+
+            self.assertEqual(post({'message_template': '  ', 'utc_offset': '-03:30'})['kind'], ['success'])
+            reset = json.loads((root / 'vless-monitor-settings.json').read_text(encoding='utf-8'))
+            self.assertEqual((reset['message_template'], reset['utc_offset'], reset['failover_enabled']), (DEFAULT_SETTINGS['message_template'], '-03:30', False))
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
 
     def test_completed_check_replaces_legacy_started_banner(self):
         self.patch('service_state', return_value='active')

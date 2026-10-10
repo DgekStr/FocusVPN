@@ -62,7 +62,16 @@ class HappHistory:
                     user_key TEXT NOT NULL,
                     download_bytes INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS traffic_reset_baselines (
+                    connection_key TEXT PRIMARY KEY,
+                    live_id TEXT,
+                    user_key TEXT NOT NULL,
+                    download_bytes INTEGER NOT NULL DEFAULT 0,
+                    upload_bytes INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS rate_user_time ON download_rate_samples (user_key,sampled_at);
+                CREATE INDEX IF NOT EXISTS reset_baseline_live_id ON traffic_reset_baselines (live_id);
             ''')
             for table, column, definition in (
                 ('download_rate_samples', 'upload_bytes_per_second', 'REAL'),
@@ -117,6 +126,7 @@ class HappHistory:
         with self.lock, self.connect() as database:
             cursor = database.execute('DELETE FROM connections WHERE last_seen_at < ?', (cutoff,))
             count = cursor.rowcount
+            database.execute('DELETE FROM traffic_reset_baselines WHERE updated_at < ?', (cutoff,))
         if count:
             with self.connect() as database:
                 database.execute('VACUUM')
@@ -145,7 +155,7 @@ class HappHistory:
             removed = 0
             placeholders = ','.join('?' for key in keys)
             with self.connect() as database:
-                for table in ('connections', 'user_traffic_totals', 'download_rate_samples', 'download_rate_counters'):
+                for table in ('connections', 'user_traffic_totals', 'download_rate_samples', 'download_rate_counters', 'traffic_reset_baselines'):
                     removed += database.execute('DELETE FROM ' + table + ' WHERE user_key NOT IN (' + placeholders + ')', tuple(keys)).rowcount
             self.registered_user_keys = keys
         self.secure_files()
@@ -198,6 +208,8 @@ class HappHistory:
                 key = visit.get('connection_key')
                 if not key or not visit.get('started_at'):
                     continue
+                if database.execute('SELECT 1 FROM traffic_reset_baselines WHERE connection_key=?', (key,)).fetchone() is not None:
+                    continue
                 database.execute('''
                     INSERT INTO connections (connection_key,user_key,user_name,started_at,last_seen_at,source_ip,source_port,destination,network,download_bytes,upload_bytes,active)
                     VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL,0)
@@ -212,11 +224,18 @@ class HappHistory:
                 previous = database.execute('SELECT connection_key,user_key,user_name,download_bytes,upload_bytes FROM connections WHERE connection_key=?', (key,)).fetchone()
                 live_id = str(item.get('id') or '')
                 legacy = database.execute('SELECT connection_key,user_key,user_name,download_bytes,upload_bytes FROM connections WHERE live_id=?', (live_id,)).fetchone() if live_id else None
+                reset_baseline = database.execute('SELECT * FROM traffic_reset_baselines WHERE connection_key=?', (key,)).fetchone()
+                if reset_baseline is None and live_id:
+                    reset_baseline = database.execute('SELECT * FROM traffic_reset_baselines WHERE live_id=? ORDER BY connection_key LIMIT 1', (live_id,)).fetchone()
                 prior_rows = [row for row in (previous, legacy) if row is not None]
                 previous_download = max((row['download_bytes'] or 0 for row in prior_rows), default=0)
                 previous_upload = max((row['upload_bytes'] or 0 for row in prior_rows), default=0)
-                download = max(0, int(item.get('download_bytes', 0)), previous_download)
-                upload = max(0, int(item.get('upload_bytes', 0)), previous_upload)
+                baseline_download = reset_baseline['download_bytes'] if reset_baseline is not None else 0
+                baseline_upload = reset_baseline['upload_bytes'] if reset_baseline is not None else 0
+                raw_download = max(0, int(item.get('download_bytes', 0)))
+                raw_upload = max(0, int(item.get('upload_bytes', 0)))
+                download = max(previous_download, raw_download - baseline_download)
+                upload = max(previous_upload, raw_upload - baseline_upload)
                 counted_rows = [row for row in prior_rows if row['download_bytes'] is not None or row['upload_bytes'] is not None]
                 old_identity = next((row for row in counted_rows if row['user_key'] != 'unknown'), counted_rows[0] if counted_rows else None)
                 old_user_key = old_identity['user_key'] if old_identity else 'unknown'
@@ -247,6 +266,8 @@ class HappHistory:
                         upload_bytes=excluded.upload_bytes,active=1,live_id=excluded.live_id,
                         network=excluded.network,source_ip=excluded.source_ip,source_port=excluded.source_port
                     ''', (key, user_key, user_name, item['started_at'], observed, item.get('ip', '—'), item.get('source_port'), item.get('destination', '—'), item.get('network', ''), download, upload, live_id or None))
+                if reset_baseline is not None:
+                    database.execute('UPDATE traffic_reset_baselines SET updated_at=? WHERE connection_key=?', (observed, reset_baseline['connection_key']))
             database.execute("INSERT OR REPLACE INTO settings VALUES ('last_collected_at', ?)", (observed,))
             database.execute("DELETE FROM settings WHERE key='last_error'")
         self.secure_files()
@@ -451,9 +472,23 @@ class HappHistory:
         if not isinstance(user_key, str) or not user_key or len(user_key) > 128:
             raise ValueError('Пользователь статистики указан некорректно.')
         with self.lock, self.connect() as database:
-            cursor = database.execute('DELETE FROM user_traffic_totals WHERE user_key=?', (user_key,))
+            active_rows = database.execute('''
+                SELECT connection_key,live_id,download_bytes,upload_bytes
+                FROM connections WHERE user_key=? AND active=1
+            ''', (user_key,)).fetchall()
+            database.execute('DELETE FROM traffic_reset_baselines WHERE user_key=?', (user_key,))
+            for row in active_rows:
+                if row['connection_key']:
+                    database.execute('''
+                        INSERT OR REPLACE INTO traffic_reset_baselines
+                        (connection_key,live_id,user_key,download_bytes,upload_bytes,updated_at)
+                        VALUES (?,?,?,?,?,?)
+                    ''', (row['connection_key'], row['live_id'], user_key, row['download_bytes'] or 0, row['upload_bytes'] or 0, utc_text()))
+            removed = 0
+            for table in ('connections', 'user_traffic_totals', 'download_rate_samples', 'download_rate_counters'):
+                removed += database.execute('DELETE FROM ' + table + ' WHERE user_key=?', (user_key,)).rowcount
         self.secure_files()
-        return cursor.rowcount > 0
+        return removed > 0
 
     def user_options(self):
         with self.connect() as database:

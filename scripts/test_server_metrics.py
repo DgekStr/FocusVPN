@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
-from server_metrics import ServerMetrics, format_decimal, format_uptime, parse_cpu_stat, parse_net_dev, render_metrics_panel, selected_interfaces
+from server_metrics import ServerMetrics, format_decimal, format_storage_gb, format_uptime, parse_cpu_stat, parse_net_dev, read_disk_usage, render_metrics_panel, selected_interfaces
 
 
 class ServerMetricsTests(unittest.TestCase):
@@ -21,12 +21,20 @@ class ServerMetricsTests(unittest.TestCase):
         self.assertEqual(format_uptime(17 * 86400 + 18 * 3600), '17дн 18ч')
         self.assertEqual(format_decimal(53.1), '53,1')
         self.assertEqual(format_decimal(811274, 0), '811 274')
+        self.assertEqual(format_storage_gb(64 * 1024 ** 3), '64,0')
+
+    def test_reads_root_disk_usage(self):
+        usage = type('Usage', (), {'total': 64 * 1024 ** 3, 'used': 12 * 1024 ** 3})()
+        with patch('server_metrics.shutil.disk_usage', return_value=usage) as disk_usage:
+            self.assertEqual(read_disk_usage(), {'total_bytes': 64 * 1024 ** 3, 'used_bytes': 12 * 1024 ** 3})
+        disk_usage.assert_called_once_with('/')
 
     def test_metrics_panel_renders_server_identity_peaks_and_escaped_values(self):
         panel = render_metrics_panel({
             'current': {'uptime': 17 * 86400 + 18 * 3600, 'rx_bytes': 811_274_000_000, 'tx_bytes': 820_873_000_000},
             'peaks': {'cpu': 53.1, 'rx_rate': 54_612_500, 'tx_rate': 30_000_000, 'observed_since': 1_759_673_400},
             'identity': {'ip': '192.0.2.4', 'os': '<Ubuntu 24.10>'},
+            'disk': {'total_bytes': 64 * 1024 ** 3, 'used_bytes': 12 * 1024 ** 3},
         })
         self.assertIn('192.0.2.4', panel)
         self.assertIn('&lt;Ubuntu 24.10&gt;', panel)
@@ -35,6 +43,9 @@ class ServerMetricsTests(unittest.TestCase):
         self.assertIn('436,9 Мбит/с', panel)
         self.assertIn('811 274', panel)
         self.assertIn('820 873', panel)
+        self.assertIn('SSD-диск', panel)
+        self.assertIn('64,0 / 12,0 ГБ', panel)
+        self.assertLess(panel.index('Время работы'), panel.index('SSD-диск'))
 
     def test_parses_cpu_and_network_counters_and_selects_physical_interfaces(self):
         total, idle = parse_cpu_stat('cpu  100 2 30 800 20 3 4 1 0 0\ncpu0 1 0 0 9')

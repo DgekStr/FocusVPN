@@ -639,11 +639,13 @@
         }
         if (!response.ok) throw new Error('Status refresh failed');
         const payload = await response.json();
-        const monitorStatus = document.querySelector(formSelector('/settings/vless-monitor'))?.closest('section')?.querySelector('p.muted');
+        const monitorStatus = document.querySelector(formSelector('/settings/vless-monitor'))?.closest('section')?.querySelector('[data-monitor-status]');
         if (monitorStatus && payload.automation) {
           const automation = payload.automation;
           const text = `Последняя проверка: ${formatDateTime(automation.last_checked_at, 'ещё не выполнялась')}. Кандидат: ${automation.candidate || 'нет'} · ${automation.streak || 0}/3.${automation.running ? ' Цикл выполняется.' : ''}`;
           if (monitorStatus.textContent !== text) monitorStatus.textContent = text;
+          const gatewayStatus = monitorStatus.parentElement?.querySelector('[data-gateway-status]');
+          if (gatewayStatus && typeof automation.gateway_text === 'string' && gatewayStatus.textContent !== automation.gateway_text) gatewayStatus.textContent = automation.gateway_text;
         }
         const checks = new Map((Array.isArray(payload.checks) ? payload.checks : []).map((check) => [check.tag, check]));
         const summary = document.querySelector('[data-outbound-summary]');
@@ -800,7 +802,6 @@
     const message = dialog.querySelector('[data-gateway-dialog-message]');
     const confirmations = {
       vless: ['Переключить на VLESS?', 'Шлюз по умолчанию или внешний WireGuard остановится. VPN-клиенты вернутся на VLESS; действующие соединения переподключатся.'],
-      wireguard: ['Переключить на внешний WireGuard?', 'VLESS/TPROXY остановится. Весь внешний трафик VPN-клиентов пойдёт через внешний WG-туннель; локальные сети останутся напрямую.'],
       default: ['Переключить на шлюз по умолчанию?', 'VLESS/TPROXY и внешний WireGuard остановятся. Внешний трафик VPN-клиентов пойдёт через основной шлюз сервера; локальные сети и индивидуальные LAN-запреты сохраняются.']
     };
     const [titleText, messageText] = confirmations[targetMode] || confirmations.vless;

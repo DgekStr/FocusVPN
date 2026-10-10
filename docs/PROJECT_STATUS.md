@@ -1,6 +1,6 @@
 # Project status
 
-Версия: **v2.1.7**. Дата фиксации: **2026-10-06**.
+Версия: **v2.1.9**. Дата фиксации: **2026-10-10**.
 
 ## Вехи
 
@@ -8,30 +8,32 @@
 |---|---|---|
 | M1. Базовый sing-box | Done | sing-box 1.14.2, systemd unit, проверка конфигурации |
 | M2. Исходящий VLESS | Done | VLESS Reality profiles, urltest и ручной route selector |
-| M3. WireGuard gateway | Done; endpoint egress pending | Переключение режимов, source-policy routing через `wg-client`, LAN bypass, scoped FORWARD/NAT; доступность внешнего выхода проверяется отдельно |
+| M3. External WireGuard client | Retired in 2.1.9 | Удалены внешний туннель, настройки, endpoints и policy routing; WireGuard-сервер сохранён |
 | M4. Server-side split | Done | RU aggregated CIDR direct, LAN/private direct, daily updater |
 | M5. Unified admin | Done | одна FocusLens Basic Auth для VLESS и WireGuard |
 | M6. WireGuard operations | Done | CRUD, config/QR, activity, per-client LAN deny |
 | M7. HAPP Direct | Retired | удалён из UI; server-side split-routing остаётся источником direct-маршрутизации |
-| M8. HAPP Server | Done | VLESS Reality inbound `9445`; в WireGuard mode HAPP outbound помечается и идёт через `wg-client`, inbound остаётся активен |
+| M8. HAPP Server | Done | VLESS Reality inbound `9445`, отдельный provider outbound без внешнего WG-клиента |
 | M9. UI consistency | Done | Основной раздел VPN-серверы, пункт VLESS скрыт; live статусы, ping, Settings, журнал, public HAPP QR |
 | M10. Publication package | Done | Код, units, документация и обезличенные fixtures; runtime-секреты не входят в пакет |
 | M11. JSON server manager | Done | Объект/массив sing-box/Xray, flat VLESS settings, VLESS TCP/gRPC, Hysteria2, Trojan и Shadowsocks; import/replace/delete синхронизируют selector и HAPP |
 | M12. Background checks | Done | POST не ждёт сеть; последовательная очередь, fingerprint-bound результаты, timeout/retry polling, стартовый баннер заменяется итогом |
-| M13. VLESS automation | Done, opt-in | Интервал 1-60 минут, HTTPS задержка, 3 последовательные победы, journal, фоновые Mattermost уведомления |
-| M14. Regression coverage | Done | 130 Python-тестов и 2 Node VM UI-сценария; local/clean-clone publication gates |
+| M13. VLESS automation | Done, opt-in | Интервал 1-60 минут, HTTPS задержка, 3 последовательные победы, journal, фоновые Mattermost уведомления с редактируемым шаблоном и смещением UTC |
+| M14. Regression coverage | Done | 210 Python-тестов и оба Node VM UI набора; регрессии удаления клиента, HTTP404, сохранения WG-сервера, failover-гистерезиса и сброса статистики HAPP |
 | M15. Персональные HAPP аккаунты | Done | UUID/QR, включение, отзыв, удаление, срок UTC; VIP сохраняется |
-| M16. Статистика и история | Done | Lifetime totals отдельно от 60-дневной SQLite history, TOP-5, per-user reset, `/happ-history` chart, XLS |
+| M16. Статистика и история | Done | Lifetime totals отдельно от 60-дневной SQLite history, TOP-5, per-user reset (итог, история и скорости, без возврата старых байтов), `/happ-history` chart, XLS |
 | M17. Подписки HAPP | Done server-side | Секретный токен аккаунта, трафик / безлимит, часовое обновление, название с emoji и короткое announce |
 | M18. Сетевой доступ | Done, explicit opt-in | `FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0` поддерживается конфигурацией; auth/token checks и защита 51821 сохранены |
-| M19. Версия и публикация | v2.1.7 | VERSION, README/changelog/status/roadmap обновлены; v1.0 закрепляет ранее опубликованную базу |
+| M19. Версия и публикация | v2.1.9 published | VERSION и документация обновлены; тег `v2.1.9` и `master` опубликованы; страница GitHub Release не создавалась |
 | M20. Default gateway mode | Done, opt-in | Прямой egress через основной gateway для WG-клиентов; route/FORWARD/NAT preflight, LAN deny сохранён |
 | M21. Standalone bootstrap | Done | Git-clone bootstrap, checksum-verified sing-box, интерактивный scrypt auth, все systemd units |
 | M22. HTTPS panel entry | Done | `vpn.focuslens.dev` Nginx proxy, trusted-proxy IP/session binding, Secure cookie, subscription origin |
 | M23. Clean-clone verification | Done | Обновление `.41` из Git-тега v2.1.7 прошло; HAPP config/ключи/VIP/пользователи сохранены, API wg-easy и HTTPS работают. Строка четырёх кнопок проверена браузером на 1440/390 px и на установленном renderer; 130 тестов прошли |
-| M24. Host metrics | Done | Settings показывает LAN IP/OS, uptime, CPU/LAN peaks за 24 часа и boot RX/TX; local collector сохраняет samples в `/mnt/stat/` |
+| M24. Host metrics | Done | Settings показывает LAN IP/OS, uptime, SSD-диск (всего / занято), CPU/LAN peaks за 24 часа и boot RX/TX; local collector сохраняет samples в `/mnt/stat/` |
 | M25. HAPP live/history UI | Done | Группировка IP/protocol, per-profile lifetime reset, history traffic chart, VIP endpoint из subscription URL |
 | M26. Panel favicon | Done | Зелёная Canvas-анимация; сохраняется PNG fallback |
+| M27. Gateway failover | Done, opt-in | Проверка шлюза по умолчанию любого типа; 3 неудачные проверки подряд (повтор 60 с), только свежие результаты, переход на самый быстрый сервер, общая gateway/HAPP-транзакция с откатом |
+| M28. Mattermost template | Done | Редактируемый шаблон `{date} {time} {old} {new} {source} {latency}`, смещение от UTC, безопасная подстановка по белому списку; доставка подтверждена тестовой кнопкой на тестовом сервере |
 
 ## Проверенные runtime-факты
 
@@ -46,8 +48,7 @@
 - WireGuard network: `10.8.0.0/24`.
 - Active gateway mode remains `vless`. Default-gateway mode passed route/FORWARD/NAT preflight and is available in Settings; it was deliberately not enabled during deployment.
 - Публичный `https://vpn.focuslens.dev` проверен: login отдаёт Basic challenge, `/settings` требует login, `/happ-info` доступна. Прямой WAN mapping к `37.208.69.6:9443` закрыт и снаружи timeout.
-- When WireGuard mode is selected, HAPP route is `focusvpn-wg-direct` with `routing_mark=2`.
-- Внешний WireGuard egress требует отдельного подтверждения возвратного трафика и NAT на стороне endpoint; активный сервис не доказывает доступность выхода.
+- Поддерживаются только VLESS/default; внешний WireGuard mode и WG outbound для HAPP удалены.
 - Dedicated auto-8 settings are removed. Tags such as `auto-8` can be created again through JSON import; they are not reserved for a particular protocol.
 - The sing-box status indicator is on `/outbounds`. Background HTTPS checks do not change the active route; saved errors are shown as errors, not permanent pending notifications.
 - Автопроверка и автовыбор opt-in, default disabled, интервал 5 минут. Настройки и выбранный маршрут управляются владельцем; документация не фиксирует их как неизменный live-state.
@@ -58,7 +59,7 @@
 ## Ограничения
 
 - XHTTP не конвертируется в TCP/gRPC: пакетный импорт выводит явный пропуск.
-- WireGuard outbound из Xray настраивается через отдельный WG-client раздел, не через общий server selector.
+- WireGuard outbound из Xray не поддерживается; отдельный внешний WG-client раздел удалён.
 - Метрика ping - время до первого HTTPS-байта через туннель, а не ICMP. Внешний endpoint, TLS, auth и upstream connectivity могут быть причиной провала.
 - Автовыбор действует только для VLESS и только в режиме VLESS. Перезапуск, ручная смена, ошибка цикла или изменение профилей/настроек сбрасывают серию побед.
 - Default-gateway mode is direct, unencrypted egress through the server's ordinary uplink, not a VPN tunnel; it is scoped to the WireGuard client subnet and leaves HAPP on its separate outbound.

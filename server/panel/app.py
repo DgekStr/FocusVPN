@@ -38,7 +38,7 @@ from happ_history import HappHistory
 from happ_history_ui import render_history
 from server_metrics import ServerMetrics, collect_metrics, render_metrics_panel
 from happ_stats import acknowledge_history_visits
-from vless_monitor import VlessMonitor, load_settings as load_monitor_settings
+from vless_monitor import MESSAGE_FIELDS, VlessMonitor, load_settings as load_monitor_settings
 from crm_bridge import authorized as crm_authorized, embed as crm_embed, panel_url as crm_panel_url
 
 APP_DIR = Path('/etc/sing-box-admin')
@@ -52,8 +52,6 @@ HAPP_CONFIG_PATH = Path('/etc/sing-box-happ-server/config.json')
 HAPP_STATE_PATH = APP_DIR / 'happ-server.json'
 SERVICE_CONTROL_PATH = APP_DIR / 'service-control.json'
 GATEWAY_MODE_PATH = Path('/etc/focusvpn/gateway-mode.json')
-WIREGUARD_CLIENT_CONFIG_PATH = Path('/etc/wireguard/wg-client.conf')
-WIREGUARD_CLIENT_INPUT_PATH = Path('/etc/focusvpn/wireguard-client-input.conf')
 FAVICON_PATH = Path('/opt/sing-box-admin/static/favicon.png')
 FAVICON_SVG_PATH = Path('/opt/sing-box-admin/static/favicon.svg')
 PANEL_CSS_PATH = Path('/opt/sing-box-admin/static/panel.css')
@@ -175,136 +173,18 @@ def save_wireguard_fallback_gateway(value):
     return gateway
 
 
-def validate_wireguard_client_config(value):
-    sections = {}
-    current = None
-    for raw_line in value.splitlines():
-        line = raw_line.split('#', 1)[0].strip()
-        if not line:
-            continue
-        if line.startswith('[') and line.endswith(']'):
-            current = line[1:-1]
-            if current in sections or current not in ('Interface', 'Peer'):
-                raise ValueError('Конфигурация должна содержать секции [Interface] и один [Peer].')
-            sections[current] = {}
-            continue
-        if current is None or '=' not in line:
-            raise ValueError('Некорректная строка в конфигурации WireGuard.')
-        key, item = (part.strip() for part in line.split('=', 1))
-        if key in sections[current] or not item:
-            raise ValueError('В конфигурации WireGuard есть пустое или повторяющееся поле.')
-        sections[current][key] = item
-
-    if set(sections) != {'Interface', 'Peer'}:
-        raise ValueError('Конфигурация должна содержать секции [Interface] и один [Peer].')
-    interface, peer = sections['Interface'], sections['Peer']
-    if set(interface) - {'PrivateKey', 'Address', 'DNS', 'MTU'}:
-        raise ValueError('В [Interface] разрешены только PrivateKey, Address, DNS и MTU.')
-    if set(peer) - {'PublicKey', 'PresharedKey', 'Endpoint', 'AllowedIPs', 'PersistentKeepalive'}:
-        raise ValueError('В [Peer] найдены неподдерживаемые параметры.')
-    if not {'PrivateKey', 'Address'} <= set(interface) or not {'PublicKey', 'Endpoint', 'AllowedIPs'} <= set(peer):
-        raise ValueError('Не заданы обязательные ключ, адрес, peer, endpoint или AllowedIPs.')
-
-    def validate_key(name, secret=False):
-        encoded = interface[name] if secret else peer[name]
-        try:
-            decoded = base64.b64decode(encoded, validate=True)
-        except (ValueError, base64.binascii.Error) as error:
-            raise ValueError(f'{name}: ключ WireGuard должен быть base64-строкой.') from error
-        if len(decoded) != 32:
-            raise ValueError(f'{name}: ключ WireGuard должен содержать 32 байта.')
-
-    validate_key('PrivateKey', secret=True)
-    validate_key('PublicKey')
-    if 'PresharedKey' in peer:
-        validate_key('PresharedKey')
-    try:
-        addresses = [ipaddress.ip_interface(item.strip()) for item in interface['Address'].split(',')]
-        allowed_networks = [ipaddress.ip_network(item.strip(), strict=False) for item in peer['AllowedIPs'].split(',')]
-    except ValueError as error:
-        raise ValueError('Address или AllowedIPs содержит некорректную сеть.') from error
-    if not addresses or any(item.version != 4 for item in addresses):
-        raise ValueError('Для клиентского шлюза требуется IPv4 Address.')
-    if not allowed_networks or any(item.version != 4 for item in allowed_networks) or ipaddress.ip_network('0.0.0.0/0') not in allowed_networks:
-        raise ValueError('AllowedIPs должен включать IPv4-маршрут 0.0.0.0/0.')
-    endpoint = peer['Endpoint']
-    if endpoint.startswith('[') and ']:' in endpoint:
-        host, port = endpoint[1:].rsplit(']:', 1)
-        try:
-            if ipaddress.ip_address(host).version != 6:
-                raise ValueError
-        except ValueError as error:
-            raise ValueError('Endpoint содержит некорректный IPv6-адрес.') from error
-    else:
-        host, separator, port = endpoint.rpartition(':')
-        if not separator:
-            raise ValueError('Endpoint должен иметь формат host:port.')
-        try:
-            validate_server(host, 'Endpoint')
-        except ValueError as error:
-            raise ValueError('Endpoint содержит некорректный адрес сервера.') from error
-    require_port(port)
-    if 'DNS' in interface:
-        try:
-            for address in interface['DNS'].split(','):
-                ipaddress.ip_address(address.strip())
-        except ValueError as error:
-            raise ValueError('DNS должен содержать IP-адреса.') from error
-    try:
-        if 'MTU' in interface and not 576 <= int(interface['MTU']) <= 9000:
-            raise ValueError('MTU должен быть в диапазоне 576-9000.')
-        if 'PersistentKeepalive' in peer and not 0 <= int(peer['PersistentKeepalive']) <= 65535:
-            raise ValueError('PersistentKeepalive должен быть в диапазоне 0-65535.')
-    except ValueError as error:
-        if str(error).startswith(('MTU', 'PersistentKeepalive')):
-            raise
-        raise ValueError('MTU и PersistentKeepalive должны быть числами.') from error
-
-    lines = ['[Interface]', f"PrivateKey = {interface['PrivateKey']}", f"Address = {interface['Address']}", 'Table = off']
-    for key in ('MTU',):
-        if key in interface:
-            lines.append(f'{key} = {interface[key]}')
-    lines.extend(('', '[Peer]', f"PublicKey = {peer['PublicKey']}"))
-    for key in ('PresharedKey', 'Endpoint', 'AllowedIPs', 'PersistentKeepalive'):
-        if key in peer:
-            lines.append(f'{key} = {peer[key]}')
-    return '\n'.join(lines) + '\n'
-
-
-def save_wireguard_client_config(value):
-    if len(value.encode('utf-8')) > 32768:
-        raise ValueError('Конфигурация WireGuard слишком большая.')
-    original = value.replace('\r\n', '\n').replace('\r', '\n')
-    config = validate_wireguard_client_config(value).encode('utf-8')
-    WIREGUARD_CLIENT_CONFIG_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    WIREGUARD_CLIENT_INPUT_PATH.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
-    write_atomic_file(WIREGUARD_CLIENT_INPUT_PATH, original.encode('utf-8'), mode=0o600)
-    write_atomic_file(WIREGUARD_CLIENT_CONFIG_PATH, config, mode=0o600)
-
-
-def load_wireguard_client_text():
-    for path in (WIREGUARD_CLIENT_INPUT_PATH, WIREGUARD_CLIENT_CONFIG_PATH):
-        try:
-            return path.read_text(encoding='utf-8')
-        except FileNotFoundError:
-            continue
-    return ''
-
-
 def gateway_mode():
     try:
         payload = json.loads(GATEWAY_MODE_PATH.read_text(encoding='utf-8'))
-        return payload.get('mode') if payload.get('mode') in ('vless', 'wireguard', 'default') else 'vless'
+        return payload.get('mode') if payload.get('mode') in ('vless', 'default') else 'vless'
     except (OSError, json.JSONDecodeError, AttributeError):
         return 'vless'
 
 
 def control_gateway_mode(mode):
     previous_mode = gateway_mode()
-    if mode not in ('vless', 'wireguard', 'default'):
+    if mode not in ('vless', 'default'):
         raise ValueError('Неизвестный режим шлюза.')
-    if mode == 'wireguard' and not WIREGUARD_CLIENT_CONFIG_PATH.is_file():
-        raise ValueError('Сначала сохраните конфигурацию внешнего WireGuard-сервера.')
     result = command([SYSTEMCTL_BIN, 'start', GATEWAY_MODE_UNIT.format(mode)], timeout=120)
     if result.returncode != 0:
         detail = result.stdout.strip()
@@ -318,7 +198,7 @@ def control_gateway_mode(mode):
 def control_system_service(name, action):
     if action not in ('start', 'restart', 'stop'):
         raise ValueError('Неизвестная операция сервиса.')
-    if name == 'sing-box' and action in ('start', 'restart') and gateway_mode() in ('wireguard', 'default'):
+    if name == 'sing-box' and action in ('start', 'restart') and gateway_mode() == 'default':
         raise ValueError('Переключите режим шлюза на VLESS перед запуском sing-box/TPROXY.')
     result = command([SYSTEMCTL_BIN, action, name], timeout=75)
     expected = 'inactive' if action == 'stop' else 'active'
@@ -831,21 +711,22 @@ def outbound_check_states(config):
     return {'checks': checks, 'automation': VLESS_MONITOR.status() if VLESS_MONITOR is not None else {}}
 
 
-def switch_monitored_route(tag, expected_route, expected_servers, latency_ms, revision):
+def switch_monitored_route(tag, expected_route, expected_servers, latency_ms, revision, source='automatic'):
     with SERVICE_CONTROL_LOCK:
         with CONFIG_LOCK:
             settings = load_monitor_settings(APP_DIR)
-            if VLESS_MONITOR is None or not settings['enabled'] or not settings['auto_switch'] or gateway_mode() != 'vless':
+            allowed = settings['failover_enabled'] if source == 'failover' else settings['enabled'] and settings['auto_switch']
+            if VLESS_MONITOR is None or not allowed or gateway_mode() != 'vless':
                 return False
             with VLESS_MONITOR.lock:
                 if VLESS_MONITOR.revision != revision:
                     return False
             config = load_config()
-            current_servers = [item for item in config.get('outbounds', []) if item.get('type') == 'vless']
+            current_servers = managed_server_outbounds(config) if source == 'failover' else [item for item in config.get('outbounds', []) if item.get('type') == 'vless']
             if config.get('route', {}).get('final') != expected_route or current_servers != expected_servers:
                 return False
             set_default_outbound(config, tag)
-            return apply_configuration(config, source='automatic', latency_ms=latency_ms)
+            return apply_configuration(config, source=source, latency_ms=latency_ms)
 
 
 def write_atomic_bytes(data):
@@ -890,7 +771,7 @@ def check_candidate(data):
 
 
 def restart_sing_box():
-    if gateway_mode() in ('wireguard', 'default'):
+    if gateway_mode() == 'default':
         return False
     result = command([SYSTEMCTL_BIN, 'restart', 'sing-box'], timeout=45)
     if result.returncode != 0 or service_state('sing-box') != 'active':
@@ -907,7 +788,7 @@ def synchronized_happ_config(config, happ_config, mode):
     if any(item.get('tag') in shared_tags for item in preserved):
         raise ValueError('Tag VPN-сервера конфликтует со служебным outbound HAPP.')
     candidate['outbounds'] = preserved + json.loads(json.dumps(shared))
-    final = 'focusvpn-wg-direct' if mode == 'wireguard' else config.get('route', {}).get('final')
+    final = config.get('route', {}).get('final')
     if not any(item.get('tag') == final for item in candidate['outbounds']):
         direct = next((item for item in config.get('outbounds', []) if item.get('tag') == final and item.get('type') == 'direct'), None)
         if direct is not None:
@@ -936,10 +817,6 @@ def apply_shared_configuration(config, source='manual', latency_ms=None):
     try:
         write_atomic_bytes(data)
         write_atomic_file(HAPP_CONFIG_PATH, happ_data, mode=0o640, group_name='sing-box')
-        if mode == 'wireguard':
-            state = json.loads(previous_mode_data) if previous_mode_data else {'mode': mode}
-            state['happ_route'] = config['route']['final']
-            write_atomic_file(GATEWAY_MODE_PATH, (json.dumps(state) + '\n').encode('utf-8'), mode=0o600)
         applied = restart_sing_box()
         restart_happ_server()
     except (RuntimeError, OSError, subprocess.SubprocessError):
@@ -1610,13 +1487,12 @@ def render_settings_page(config, query, message='', kind='success'):
                 happ_error = message_banner(f'HAPP Server: {error}', 'error')
         service_control = load_service_control()
         active_gateway_mode = gateway_mode()
-        client_configured = WIREGUARD_CLIENT_CONFIG_PATH.is_file()
-        wireguard_client_text = load_wireguard_client_text()
         vip_link = HAPP_USERS.vip()['link'] if HAPP_USERS is not None else public_vless_link()
         vip_link = vless_link_for_subscription(vip_link, happ_subscription_origin)
         monitor_settings = load_monitor_settings(APP_DIR)
         monitor_state = VLESS_MONITOR.status() if VLESS_MONITOR is not None else {}
         monitor_state = {**monitor_state, 'last_checked_at': format_datetime(monitor_state.get('last_checked_at'), 'ещё не выполнялась')}
+        message_fields = ', '.join('{' + name + '}' for name in MESSAGE_FIELDS)
         history_days = HAPP_HISTORY.retention_days() if HAPP_HISTORY is not None else 60
         service_states = {
             'wireguard': wireguard_state(),
@@ -1628,12 +1504,11 @@ def render_settings_page(config, query, message='', kind='success'):
             server_metrics_markup = render_metrics_panel(SERVER_METRICS.snapshot() if SERVER_METRICS is not None else {})
         except (OSError, sqlite3.Error, ValueError):
             server_metrics_markup = render_metrics_panel({})
-        gateway_mode_labels = {'vless': 'VLESS', 'wireguard': 'Внешний WireGuard', 'default': 'Шлюз по умолчанию'}
+        gateway_mode_labels = {'vless': 'VLESS', 'default': 'Шлюз по умолчанию'}
         gateway_mode_panel = f'''<section class="panel gateway-mode-panel"><h2>Режим работы VPN-шлюза</h2><p class="subtitle">Активный режим: <span class="badge {'ok' if active_gateway_mode == 'vless' else 'online'}">{esc(gateway_mode_labels[active_gateway_mode])}</span></p><div class="gateway-mode-actions">
         <form method="post" action="/settings/gateway/mode" data-gateway-mode="vless"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="vless"><button class="{'secondary' if active_gateway_mode != 'vless' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'vless' else ''}>VLESS-шлюз</button></form>
         <form method="post" action="/settings/gateway/mode" data-gateway-mode="default"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="default"><button class="{'secondary' if active_gateway_mode != 'default' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'default' else ''}>Шлюз по умолчанию</button></form>
-        <form method="post" action="/settings/gateway/mode" data-gateway-mode="wireguard"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="mode" value="wireguard"><button class="{'secondary' if active_gateway_mode != 'wireguard' else 'mode-active'}" type="submit"{' disabled' if active_gateway_mode == 'wireguard' or not client_configured else ''}>Внешний WireGuard{' · активен' if active_gateway_mode == 'wireguard' else ''}</button></form>
-    </div><p class="muted">«Шлюз по умолчанию» отключает VLESS/TPROXY и внешний WireGuard: интернет-трафик клиентов WireGuard идёт через основной шлюз сервера. Локальные сети маршрутизируются напрямую; индивидуальные LAN-запреты сохраняются. Основной маршрут сервера не меняется.</p></section>'''
+    </div><p class="muted">«Шлюз по умолчанию» отключает VLESS/TPROXY: интернет-трафик клиентов WireGuard идёт через основной шлюз сервера. Локальные сети маршрутизируются напрямую; индивидуальные LAN-запреты сохраняются. Основной маршрут сервера не меняется.</p></section>'''
         body = f'''<section class="page-head">
     <div><p class="eyebrow">Service control</p><h1>Настройки</h1><p class="subtitle">VLESS, WireGuard, HAPP Server и доступ к панели.</p></div>
 </section>
@@ -1645,9 +1520,8 @@ def render_settings_page(config, query, message='', kind='success'):
     <section class="panel"><h2>Публичный URL подписки HAPP</h2><form method="post" action="/settings/happ/subscription"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_subscription_base_url">WAN / DNS URL · пусто = публичный адрес HAPP</label><input id="happ_subscription_base_url" name="subscription_base_url" type="url" value="{esc(happ_subscription_setting)}" placeholder="{esc(happ_subscription_origin)}"></div><p class="muted">Текущий адрес: {esc(happ_subscription_origin)}. Внешний порт должен быть доступен клиенту; HTTPS задаётся только для настроенного TLS endpoint.</p><div class="actions"><button type="submit">Сохранить URL подписки</button></div></form></section>
     <section class="panel"><h2>Заголовок и объявление HAPP</h2><form method="post" action="/settings/happ/announcement"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_subscription_title">Заголовок сервера</label><input id="happ_subscription_title" name="subscription_title" maxlength="80" value="{esc(happ_subscription_title)}" required></div><div class="field"><label for="happ_subscription_announcement">Текст объявления</label><textarea id="happ_subscription_announcement" name="subscription_announcement" rows="5" maxlength="2000">{esc(happ_subscription_announcement)}</textarea></div><p class="muted">Заголовок отображается перед именем пользователя; итоговое имя HAPP ограничено 25 символами. Объявление обновится при следующем обновлении подписки; строка «Скачано» формируется автоматически.</p><div class="actions"><button type="submit">Сохранить блок HAPP</button></div></form></section>
     <section class="panel"><h2>Хранение статистики HAPP</h2><form method="post" action="/settings/happ-history"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_retention_days">Хранить дней · старые записи очищаются автоматически</label><input id="happ_retention_days" name="retention_days" type="number" min="1" max="3650" step="1" value="{history_days}" required></div><div class="actions"><button type="submit">Сохранить срок хранения</button><a class="button secondary" href="/happ-history">История HAPP</a></div></form><p class="muted">База хранится в /mnt/stat/. По умолчанию 60 дней; уменьшение срока сразу удалит записи старше выбранного периода.</p></section>
-    <section class="panel"><h2>VIP-ссылка HAPP</h2><div class="field"><label for="happ_vip_link">Ссылка подключения</label><textarea id="happ_vip_link" class="public-link-field" readonly spellcheck="false">{esc(vip_link)}</textarea></div></section>
-    <section class="panel"><h2>Автопроверка VLESS</h2><form method="post" action="/settings/vless-monitor"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label><input class="inline-checkbox" type="checkbox" name="monitor_enabled"{' checked' if monitor_settings['enabled'] else ''}> Проверять VLESS по расписанию</label></div><div class="field"><label for="monitor_interval_minutes">Интервал между циклами, минуты</label><input id="monitor_interval_minutes" name="interval_minutes" type="number" min="1" max="60" step="1" value="{monitor_settings['interval_minutes']}" required></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="auto_switch"{' checked' if monitor_settings['auto_switch'] else ''}> Автовыбор: минимальная задержка в трёх циклах подряд</label></div><div class="field"><label><input class="inline-checkbox" type="checkbox" name="mattermost_enabled"{' checked' if monitor_settings['mattermost_enabled'] else ''}> Уведомлять Mattermost о смене шлюза</label></div><div class="field"><label for="mattermost_webhook">Webhook Mattermost{' · сохранён' if monitor_settings['webhook_url'] else ''}</label><input id="mattermost_webhook" name="webhook_url" type="password" autocomplete="new-password" placeholder="{'Оставьте пустым для сохранения webhook' if monitor_settings['webhook_url'] else 'https://mattermost.example/hooks/...'}"></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="clear_webhook"> Удалить сохранённый webhook</label></div></div><div class="actions"><button type="submit">Сохранить автоматизацию</button><a class="button secondary" href="/gateway-journal">Журнал переключений</a></div></form><form method="post" action="/settings/vless-monitor/test-webhook"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit"{' disabled' if not monitor_settings['webhook_url'] else ''}>Проверить webhook</button></div></form><p class="muted">Последняя проверка: {esc(monitor_state.get('last_checked_at', 'ещё не выполнялась'))}. Кандидат: {esc(monitor_state.get('candidate') or 'нет')} · {monitor_state.get('streak', 0)}/3.</p></section>
-    <section class="panel"><h2>Клиент внешнего WireGuard</h2><p class="muted">Последняя сохранённая конфигурация показывается только в этой авторизованной панели. На диске исходный текст и рабочий конфиг хранятся с правами 0600.</p><form method="post" action="/settings/gateway/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="wireguard_client_config">Конфигурация клиента</label><textarea id="wireguard_client_config" name="wireguard_client_config" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.0.0.2/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = vpn.example.com:51820&#10;AllowedIPs = 0.0.0.0/0" required>{esc(wireguard_client_text)}</textarea></div><div class="actions"><button type="submit">{'Обновить конфигурацию' if client_configured else 'Сохранить конфигурацию'}</button><span class="service-status">{'Конфигурация сохранена' if client_configured else 'Конфигурация ещё не задана'}</span></div></form></section>
+    <section class="panel"><h2>VIP-ссылка HAPP</h2><div class="field"><label for="happ_vip_link">Ссылка подключения</label><textarea id="happ_vip_link" class="public-link-field" readonly spellcheck="false">{esc(vip_link)}</textarea></div><h2>Доступ к панели</h2><form method="post" action="/settings/password" autocomplete="new-password"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="new_password">Новый пароль</label><input id="new_password" name="new_password" type="password" minlength="12" required></div><div class="field"><label for="confirm_password">Повторите пароль</label><input id="confirm_password" name="confirm_password" type="password" minlength="12" required></div></div><div class="actions"><button class="danger" type="submit">Обновить пароль</button></div></form></section>
+    <section class="panel"><h2>Автопроверка VLESS</h2><form method="post" action="/settings/vless-monitor"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label><input class="inline-checkbox" type="checkbox" name="monitor_enabled"{' checked' if monitor_settings['enabled'] else ''}> Проверять VLESS по расписанию</label></div><div class="field"><label for="monitor_interval_minutes">Интервал между циклами, минуты</label><input id="monitor_interval_minutes" name="interval_minutes" type="number" min="1" max="60" step="1" value="{monitor_settings['interval_minutes']}" required></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="failover_enabled"{' checked' if monitor_settings['failover_enabled'] else ''}> Автопроверка доступности VLESS: если шлюз по умолчанию недоступен, переключить на самый быстрый по пингу сервер</label></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="auto_switch"{' checked' if monitor_settings['auto_switch'] else ''}> Автовыбор: минимальная задержка в трёх циклах подряд</label></div><div class="field"><label><input class="inline-checkbox" type="checkbox" name="mattermost_enabled"{' checked' if monitor_settings['mattermost_enabled'] else ''}> Уведомлять Mattermost о смене шлюза</label></div><div class="field"><label for="mattermost_webhook">Webhook Mattermost{' · сохранён' if monitor_settings['webhook_url'] else ''}</label><input id="mattermost_webhook" name="webhook_url" type="password" autocomplete="new-password" placeholder="{'Оставьте пустым для сохранения webhook' if monitor_settings['webhook_url'] else 'https://mattermost.example/hooks/...'}"></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="clear_webhook"> Удалить сохранённый webhook</label></div><div class="field full"><label for="mattermost_message">Сообщение Mattermost</label><textarea id="mattermost_message" class="monitor-message-field" name="message_template" maxlength="1000" spellcheck="false">{esc(monitor_settings['message_template'])}</textarea><small>Подстановки: {esc(message_fields)}. Пустое поле возвращает стандартный текст.</small></div><div class="field"><label for="mattermost_utc_offset">Время сообщения: смещение от UTC</label><input id="mattermost_utc_offset" name="utc_offset" value="{esc(monitor_settings['utc_offset'])}" maxlength="6" placeholder="+03:00" required></div></div><div class="actions"><button type="submit">Сохранить автоматизацию</button><a class="button secondary" href="/gateway-journal">Журнал переключений</a></div></form><form method="post" action="/settings/vless-monitor/test-webhook"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit"{' disabled' if not monitor_settings['webhook_url'] else ''}>Проверить webhook</button></div></form><p class="muted" data-monitor-status>Последняя проверка: {esc(monitor_state.get('last_checked_at', 'ещё не выполнялась'))}. Кандидат: {esc(monitor_state.get('candidate') or 'нет')} · {monitor_state.get('streak', 0)}/3.</p><p class="muted" data-gateway-status>{esc(monitor_state.get('gateway_text', ''))}</p></section>
     <dialog class="gateway-dialog" data-gateway-dialog aria-labelledby="gateway-dialog-title"><form method="dialog"><h2 id="gateway-dialog-title" data-gateway-dialog-title>Сменить шлюз?</h2><p data-gateway-dialog-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-gateway-dialog-confirm>Переключить</button></div></form></dialog>
     <section class="panel service-control-panel"><h2>Управление сервисами</h2><p class="subtitle">При остановке WireGuard-моста маршрут сервера переключается на LAN-шлюз.</p><div class="service-control-grid">
         <div class="service-control-item"><h3>WireGuard</h3><p class="service-status">Состояние: <span class="badge {status_class(service_states['wireguard'])}">{esc(service_states['wireguard'])}</span></p><form method="post" action="/settings/wireguard/gateway"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="wireguard_fallback_gateway">Шлюз при остановке WireGuard</label><input id="wireguard_fallback_gateway" name="wireguard_fallback_gateway" value="{esc(service_control['wireguard_fallback_gateway'])}" inputmode="decimal" required></div><div class="actions"><button class="secondary" type="submit">Сохранить шлюз</button></div></form><form method="post" action="/settings/service/wireguard"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="inline-actions"><button class="secondary" name="operation" value="start" type="submit">Запустить</button><button class="secondary" name="operation" value="restart" type="submit">Перезапустить</button><button class="danger" name="operation" value="stop" type="submit">Остановить</button></div></form></div>
@@ -1658,7 +1532,6 @@ def render_settings_page(config, query, message='', kind='success'):
     <section class="panel"><h2>WireGuard</h2><div class="settings-grid"><form method="post" action="/settings/wireguard/general"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="general_json">General JSON</label><textarea id="general_json" name="general_json" spellcheck="false">{esc(wg_general)}</textarea></div><div class="actions"><button type="submit">Сохранить General</button></div></form><form method="post" action="/settings/wireguard/interface"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="interface_json">Interface JSON</label><textarea id="interface_json" name="interface_json" spellcheck="false">{esc(wg_interface)}</textarea></div><div class="actions"><button type="submit">Сохранить Interface</button></div></form></div><form method="post" action="/settings/wireguard/restart"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit">Перезапустить интерфейс WireGuard</button></div></form></section>
     <section class="panel"><h2>Reality-ключи HAPP</h2><div class="form-grid"><div class="field"><label for="happ_vip_uuid">UUID VIP</label><input id="happ_vip_uuid" value="{esc(happ_state_payload.get('uuid', ''))}" readonly></div><div class="field"><label for="happ_public_key">Публичный Reality-ключ</label><input id="happ_public_key" value="{esc(happ_state_payload.get('public_key', '')) if PUBLIC_KEY_PATTERN.fullmatch(str(happ_state_payload.get('public_key', ''))) else ''}" readonly placeholder="Не сгенерирован"></div></div>{happ_key_form(happ_state_payload.get('server', ''), happ_state_payload.get('sni', 'www.cloudflare.com'), happ_state_payload.get('port', 9445))}</section>
     <section class="panel"><h2>HAPP Server</h2><div class="settings-grid"><form method="post" action="/settings/happ/state"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_state_json">JSON публичной ссылки</label><textarea id="happ_state_json" name="happ_state_json" spellcheck="false">{esc(happ_state)}</textarea></div><div class="actions"><button type="submit">Сохранить публичную ссылку</button></div></form><form method="post" action="/settings/happ/config"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_config_json">sing-box HAPP Server JSON</label><textarea id="happ_config_json" name="happ_config_json" spellcheck="false">{esc(happ_config)}</textarea></div><div class="actions"><button class="danger" type="submit">Проверить и применить HAPP config</button></div></form></div><form method="post" action="/settings/happ/restart"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit">Перезапустить HAPP Server</button></div></form></section>
-    <section class="panel"><h2>Доступ к панели</h2><form method="post" action="/settings/password" autocomplete="new-password"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="new_password">Новый пароль</label><input id="new_password" name="new_password" type="password" minlength="12" required></div><div class="field"><label for="confirm_password">Повторите пароль</label><input id="confirm_password" name="confirm_password" type="password" minlength="12" required></div></div><div class="actions"><button class="danger" type="submit">Обновить пароль</button></div></form></section>
 </div>'''
         return render_shell('Настройки', body, 'settings', [item.get('tag', '') for item in managed_server_outbounds(config)], selected_tag)
 
@@ -2280,8 +2153,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
                 return
             events = VLESS_MONITOR.journal()
-            labels = {'route_changed': 'Шлюз переключён', 'route_selected_deferred': 'Маршрут сохранён, применение отложено', 'check_cycle': 'Цикл проверки', 'monitor_error': 'Ошибка проверки', 'switch_failed': 'Ошибка переключения', 'mattermost_sent': 'Mattermost: доставлено', 'mattermost_failed': 'Mattermost: ошибка', 'mattermost_test_queued': 'Mattermost: тест в очереди'}
-            sources = {'manual': 'Вручную', 'automatic': 'Автоматически', 'manual_mode': 'Смена режима', 'test': 'Тест'}
+            labels = {'route_changed': 'Шлюз переключён', 'route_selected_deferred': 'Маршрут сохранён, применение отложено', 'check_cycle': 'Цикл проверки', 'gateway_down': 'Шлюз недоступен', 'failover_no_candidate': 'Нет сервера для перехода', 'monitor_error': 'Ошибка проверки', 'switch_failed': 'Ошибка переключения', 'mattermost_sent': 'Mattermost: доставлено', 'mattermost_failed': 'Mattermost: ошибка', 'mattermost_test_queued': 'Mattermost: тест в очереди'}
+            sources = {'manual': 'Вручную', 'automatic': 'Автоматически', 'failover': 'Недоступность шлюза', 'manual_mode': 'Смена режима', 'test': 'Тест'}
             rows = []
             for event in events:
                 details = event.get('message', '')
@@ -2361,8 +2234,11 @@ class Handler(BaseHTTPRequestHandler):
                             'enabled': form_value(values, 'monitor_enabled') == 'on',
                             'interval_minutes': form_value(values, 'interval_minutes'),
                             'auto_switch': form_value(values, 'auto_switch') == 'on',
+                            'failover_enabled': form_value(values, 'failover_enabled') == 'on',
                             'mattermost_enabled': form_value(values, 'mattermost_enabled') == 'on',
                             'webhook_url': webhook,
+                            'message_template': form_value(values, 'message_template') if 'message_template' in values else settings['message_template'],
+                            'utc_offset': form_value(values, 'utc_offset') if 'utc_offset' in values else settings['utc_offset'],
                         })
                     self.redirect_settings('', 'Настройки автоматизации сохранены. Проверки выполняются последовательно в фоне.')
                     return
@@ -2399,20 +2275,12 @@ class Handler(BaseHTTPRequestHandler):
                         gateway = save_wireguard_fallback_gateway(form_value(values, 'wireguard_fallback_gateway'))
                     self.redirect_settings('', f'Шлюз WireGuard сохранён: {gateway}.')
                     return
-                if path == '/settings/gateway/config':
-                    with SERVICE_CONTROL_LOCK:
-                        save_wireguard_client_config(form_value(values, 'wireguard_client_config'))
-                        if gateway_mode() == 'wireguard':
-                            control_gateway_mode('wireguard')
-                    self.redirect_settings('', 'Конфигурация внешнего WireGuard сохранена.')
-                    return
                 if path == '/settings/gateway/mode':
                     mode = form_value(values, 'mode')
                     with SERVICE_CONTROL_LOCK:
                         control_gateway_mode(mode)
                     messages = {
-                        'vless': 'Включён VLESS-шлюз. Внешний WireGuard остановлен.',
-                        'wireguard': 'Включён внешний WireGuard-шлюз. VLESS приостановлен.',
+                        'vless': 'Включён VLESS-шлюз.',
                         'default': 'Включён шлюз по умолчанию. Весь внешний трафик клиентов идёт через основной шлюз сервера.',
                     }
                     self.redirect_settings('', messages[mode])

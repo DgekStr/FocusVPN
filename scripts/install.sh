@@ -115,11 +115,9 @@ check_legacy_wireguard() {
 
   if command -v systemctl >/dev/null 2>&1; then
     while IFS= read -r unit; do
-      [[ "$unit" == "wg-quick@wg-client.service" ]] && continue
       [[ -n "$unit" ]] && legacy_details+=("active service $unit")
     done < <(systemctl list-units --type=service --state=running --no-legend 'wg-quick@*.service' 2>/dev/null | awk '{print $1}')
     while IFS= read -r unit; do
-      [[ "$unit" == "wg-quick@wg-client.service" ]] && continue
       [[ -n "$unit" ]] && legacy_details+=("enabled service $unit")
     done < <(systemctl list-unit-files --type=service --state=enabled --no-legend 2>/dev/null | awk '$1 ~ /^wg-quick@.+\.service$/ {print $1}')
   fi
@@ -128,7 +126,7 @@ check_legacy_wireguard() {
   wireguard_configs=(/etc/wireguard/*.conf)
   shopt -u nullglob
   for answer in "${wireguard_configs[@]}"; do
-    [[ "${answer##*/}" == "wg-client.conf" ]] || legacy_configs+=("$answer")
+    legacy_configs+=("$answer")
   done
   if ((${#legacy_configs[@]})); then
     legacy_details+=("existing /etc/wireguard configuration files")
@@ -144,7 +142,6 @@ check_legacy_wireguard() {
       if (( managed_container )) && [[ "$interface" == "wg0" ]]; then
         continue
       fi
-      [[ "$interface" == "wg-client" ]] && continue
       legacy_interfaces+=("$interface")
       legacy_details+=("active WireGuard interface $interface")
     done < <(ip -o link show type wireguard 2>/dev/null | awk -F ': ' '{print $2}' | cut -d@ -f1)
@@ -165,10 +162,6 @@ check_legacy_wireguard() {
 
   backup_root="/root/focusvpn-wireguard-backup-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   install -d -m 0700 "$backup_root"
-  if [[ -f /etc/wireguard/wg-client.conf ]]; then
-    install -d -m 0700 "$backup_root/managed"
-    cp -a /etc/wireguard/wg-client.conf "$backup_root/managed/wg-client.conf"
-  fi
   if command -v docker >/dev/null 2>&1 && docker inspect wg-easy >/dev/null 2>&1 && (( ! managed_container )); then
     install -d -m 0700 "$backup_root/docker-wg-easy"
     docker inspect wg-easy > "$backup_root/docker-wg-easy/container-inspect.json"
@@ -177,23 +170,20 @@ check_legacy_wireguard() {
   fi
   if command -v systemctl >/dev/null 2>&1; then
     while IFS= read -r unit; do
-      [[ "$unit" == "wg-quick@wg-client.service" ]] && continue
       [[ -z "$unit" ]] || systemctl disable --now "$unit"
     done < <(systemctl list-units --type=service --state=running --no-legend 'wg-quick@*.service' 2>/dev/null | awk '{print $1}')
     while IFS= read -r unit; do
-      [[ "$unit" == "wg-quick@wg-client.service" ]] && continue
       [[ -z "$unit" ]] || systemctl disable "$unit"
     done < <(systemctl list-unit-files --type=service --state=enabled --no-legend 2>/dev/null | awk '$1 ~ /^wg-quick@.+\.service$/ {print $1}')
   fi
   for path in /etc/wireguard /etc/wg-easy; do
+    if (( managed_container )) && [[ "$path" == "/etc/wg-easy" ]]; then
+      continue
+    fi
     if [[ -d "$path" ]] && find "$path" -mindepth 1 -print -quit | grep -q .; then
       mv "$path" "$backup_root/${path##*/}"
     fi
   done
-  if [[ -f "$backup_root/managed/wg-client.conf" ]]; then
-    install -d -m 0700 /etc/wireguard
-    cp -a "$backup_root/managed/wg-client.conf" /etc/wireguard/wg-client.conf
-  fi
   for interface in "${legacy_interfaces[@]}"; do
     ip link delete dev "$interface" 2>/dev/null || log "could not remove WireGuard interface $interface; check it manually"
   done

@@ -7,7 +7,6 @@
 /etc/sing-box/config.json
 /etc/sing-box-happ-server/config.json
 /etc/sing-box-admin/
-/etc/wireguard/wg-client.conf
 /etc/focusvpn/gateway-mode.json
 /usr/local/libexec/
 /etc/systemd/system/
@@ -24,9 +23,15 @@ systemctl is-enabled sing-box sing-box-admin sing-box-ru-zone-update.timer
 ss -ltnp | grep -E '9443|9445|12345'
 ```
 
+## Gateway Modes
+
+Version 2.1.9 removes the external WireGuard client. Settings provides only VLESS and the server's ordinary default gateway. WireGuard server management, client accounts, QR/config export and per-client LAN restrictions remain available.
+
+Before updating a legacy installation, privately back up and disable its external client unit, retire only its owned routing/NAT artifacts, and remove the working/input/status files. Preserve the managed WG server, HAPP credentials and subscription registry. Do not remove the system's wg-quick template or change the main default route. Keep private backups outside the repository.
+
 ## VPN Host Metrics
 
-Settings shows the VPN host LAN address and OS, uptime, rolling 24-hour CPU/LAN peaks, and OS RX/TX byte counters since boot. The panel samples `/proc/stat`, `/proc/net/dev`, and `/proc/uptime` every five seconds; physical interfaces are preferred, with virtual interfaces excluded. Samples are stored in `/mnt/stat/server-metrics.sqlite3` (directory mode `0700`, database mode `0600`) and pruned after 24 hours. CPU/LAN peak history begins when this collector is installed; RX/TX totals reset when the operating system reboots. These are host metrics, not billing counters.
+Settings shows the VPN host LAN address and OS, uptime, root filesystem usage (total/used GiB, shown as ГБ), rolling 24-hour CPU/LAN peaks, and OS RX/TX byte counters since boot. In an LXC container the panel unit must keep `BindReadOnlyPaths=/proc/uptime` (alongside `ProtectKernelTunables=true`), otherwise the panel namespace reads the physical host's uptime; compare `cat /proc/uptime` with `nsenter -t <panel-pid> -m cat /proc/uptime`. The five overview cards share one row on wide screens. The panel samples `/proc/stat`, `/proc/net/dev`, and `/proc/uptime` every five seconds; physical interfaces are preferred, with virtual interfaces excluded. Samples are stored in `/mnt/stat/server-metrics.sqlite3` (directory mode `0700`, database mode `0600`) and pruned after 24 hours. CPU/LAN peak history begins when this collector is installed; RX/TX totals reset when the operating system reboots. These are host metrics, not billing counters.
 
 ## Validation
 
@@ -90,21 +95,41 @@ Server JSON import queues `focusvpn-outbound-test@<tag>.service` checks after sa
 5. `systemctl restart sing-box-admin`.
 6. Check panel HTTP status and service status.
 
-The current `master` additions retain runtime version `2.1.7`; the published `v2.1.7` tag is not moved. `scripts/install.sh` validates the required panel modules, static assets and `VERSION` before package/service changes, copies the complete runtime, and compiles its Python files before starting the panel. HAPP routing is bundled in `happ_server.py`, not installed by overwriting live user/configuration files. Run the updated installer only in a maintenance window: its apt/Docker/Nginx workflow is broader than a focused panel-file deployment. Test full privileged installation separately in a disposable VM.
+Runtime version is `2.1.9`; published tags are not moved. `scripts/install.sh` validates the required panel modules, static assets and `VERSION` before package/service changes, copies the complete runtime, and compiles its Python files before starting the panel. HAPP routing is bundled in `happ_server.py`, not installed by overwriting live user/configuration files. Run the updated installer only in a maintenance window: its apt/Docker/Nginx workflow is broader than a focused panel-file deployment. Test full privileged installation separately in a disposable VM.
 
 ## Firewall deployment
 
-The libexec scripts are paired with units in `server/systemd/`. `focusvpn-gateway-mode@.service` switches among VLESS/TProxy, the system's default gateway, and external `wg-client`. In default mode it stops sing-box TPROXY and external WG, keeps the main default route unchanged, restores HAPP's normal provider outbound, and sends forwarded WireGuard-client Internet traffic through the existing default-device FORWARD/MASQUERADE rules. Before changing mode it verifies the main default route, the post-transition route decision for a `wg0` client, IPv4 forwarding, return-path FORWARD, and subnet MASQUERADE; it refuses the transition if any prerequisite is absent. The existing `wg_lan_deny` policy remains active. VLESS mode keeps the RU/private split; external WG mode remains source-policy scoped to `FOCUSVPN_WG_NETWORK`; `FOCUSVPN_LAN_NETWORK` uses the main route table in tunnel modes. Default mode provides ordinary gateway egress without TPROXY; this is not a VPN tunnel and does not encrypt traffic beyond the server. The mode is for the WireGuard client subnet; HAPP inbound clients remain on their separate configured HAPP outbound. Keep the current ruleset backup for rollback.
+The libexec scripts are paired with units in `server/systemd/`. `focusvpn-gateway-mode@.service` switches between VLESS/TProxy and the system's default gateway. Default mode stops sing-box TPROXY, keeps the main default route and HAPP configuration unchanged, and sends forwarded WireGuard-server client traffic through subnet-scoped default-device FORWARD/MASQUERADE rules. Before changing mode it verifies the main route, IPv4 forwarding, return-path FORWARD and subnet MASQUERADE. The existing `wg_lan_deny` policy remains active. VLESS mode keeps the RU/private split. Default mode is not a VPN tunnel and does not encrypt traffic beyond the server. HAPP clients remain on their separate configured outbound. Keep the current ruleset backup for rollback.
 
-The external peer configuration is entered in the authenticated Settings page and stored root-only at `/etc/wireguard/wg-client.conf`. Use a single peer with IPv4 `AllowedIPs = 0.0.0.0/0`; do not add `PostUp`, `PreUp`, or other shell hooks. The selected mode is restored by `focusvpn-gateway-mode.service` after reboot. Do not switch to WireGuard until the external peer is provisioned and reachable.
+The selected VLESS/default mode is restored by `focusvpn-gateway-mode.service` after reboot. Removed external mode values are not accepted by the panel or command-line controller.
 
 ## VLESS Automation
 
 Settings provides scheduled VLESS checks with a 1-60 minute interval between completed cycles, a separate automatic-route switch, and Mattermost notifications. New installations default to disabled monitoring/auto-switch and a five-minute interval; enabling checks starts the first cycle immediately. Profiles are tested sequentially in the existing background queue, not in the HTTP request.
 
-The displayed ping is HTTPS time to first byte through the VLESS tunnel, including tunnel setup, not ICMP to the provider IP. Results and timestamps are retained in `/etc/sing-box-admin/outbound-checks/`; failed profiles are red. Only successful VLESS profiles with measured latency participate in auto-selection. The same profile must win three consecutive complete cycles before a switch. Ties prefer the current route. Failures, manual changes, settings/profile edits and service restarts reset the streak; automatic changes are suppressed while WireGuard mode is active.
+The displayed ping is HTTPS time to first byte through the VLESS tunnel, including tunnel setup, not ICMP to the provider IP. Results and timestamps are retained in `/etc/sing-box-admin/outbound-checks/`; failed profiles are red. Only successful VLESS profiles with measured latency participate in auto-selection. The same profile must win three consecutive complete cycles before a switch. Ties prefer the current route. Failures, manual changes, settings/profile edits and service restarts reset the streak; automatic changes are suppressed outside VLESS mode.
 
 Successful changes use the shared gateway/HAPP apply-and-rollback transaction. The private journal `/etc/sing-box-admin/gateway-switches.jsonl` retains the latest 500 events; `/gateway-journal` shows the latest 100 under the panel authentication boundary. Settings and state are stored at `/etc/sing-box-admin/vless-monitor-settings.json` and `/etc/sing-box-admin/vless-monitor-state.json` with mode `0600`.
+
+### Gateway availability failover
+
+The separate setting "Автопроверка доступности VLESS" (`failover_enabled`, off by default) is independent of scheduled latency checks and automatic selection, but uses the same interval. Each cycle probes only the current default route (any server type: VLESS, Hysteria2, Trojan, Shadowsocks; `urltest` selectors are skipped because sing-box balances them itself). A switch restarts sing-box and the HAPP server, so a single failed probe is never enough: probes on live hosts fail transiently (observed on `.39`: two consecutive failures of a working Trojan gateway within 30 seconds). The first failure puts the gateway into `suspect` (1/3) and the monitor rechecks every 60 seconds (the scheduled VLESS selection cycle is skipped meanwhile, so its three-win streak is not accelerated); any success resets the counter. After three consecutive failed checks (about three minutes) the gateway is declared unavailable. Only fresh results count: `checked_at` must not be earlier than the probe start, so a stale result or a broken probe unit resets the counter instead of failing the gateway. The monitor then probes all other servers, excludes failed ones and switches to the fastest by HTTPS latency through the same gateway/HAPP apply-and-rollback transaction with source `failover`. While the gateway stays down, every interval repeats the candidate search without waiting for new failures; if no server answers, the current gateway is kept and `failover_no_candidate` is journaled once until the state changes. Failover pauses outside VLESS mode and stops if settings or the server list change mid-cycle.
+
+Journal events: `gateway_check_failed` (1/3, 2/3), `gateway_down`, `failover_no_candidate`, `route_changed` (source `failover`), `switch_failed`. Settings shows the last gateway state (`/outbounds/checks` exposes it as `automation.gateway_text`).
+
+### Mattermost message
+
+The message is a template stored as `message_template` with a `utc_offset` (default `+03:00`, `-12:00..+14:00` in quarter-hour steps; the server clock is UTC). The default text is:
+
+```
+📢 VPN-шлюз: обновление статуса
+📅 {date} | 🕐 {time}
+🔁 Произошла смена шлюза:
+➡️ Было: {old}
+✅ Стало: {new} ({source})
+```
+
+Only `{date}` (DD.MM.YYYY), `{time}` (HH:MM), `{old}`, `{new}`, `{source}` and `{latency}` are substituted by a plain whitelist replacement (no format-string evaluation); unknown `{names}` are rejected on save and the text is limited to 1000 characters. An empty field restores the default. `{source}` is a label (`вручную`, `автовыбор`, `недоступность шлюза`, `смена режима`, `test`); the test-webhook button renders the same template with `{old}` = `{new}` = the current default and source `test`. Notifications still require the "Уведомлять Mattermost" switch.
 
 Enter the Mattermost incoming-webhook URL in Settings; the URL is never displayed back or included in journal/API output. Delivery is asynchronous with a bounded timeout, and failures are journaled without undoing the route change. The test-webhook button verifies delivery using the same queue. Run `py -3 scripts/test_vless_monitor.py` and `py -3 scripts/test_route_sync.py` before deploying changes to this feature.
 
@@ -134,7 +159,7 @@ Local regression tests require `xlwt==1.3.0`: `py -3 -m pip install xlwt==1.3.0`
 
 ## HAPP Account Traffic And Subscriptions
 
-The personal user row and TOP-5 show cumulative observed download/upload after Open HAPP, including closed sessions. Browser polling refreshes these account totals independently from active-connection totals. Lifetime totals survive history retention cleanup and can be reset for one profile from its row. Existing retained rows are backfilled on first initialization; previously pruned data is unavailable. They are sampled lower bounds, not exact billing or enforced quotas.
+The personal user row and TOP-5 show cumulative observed download/upload after Open HAPP, including closed sessions. Browser polling refreshes these account totals independently from active-connection totals. Lifetime totals survive history retention cleanup and can be reset for one profile from its row. The reset clears that profile's lifetime totals, `/happ-history` rows and rate samples (other profiles are unaffected); the counters of currently open sessions become the new baseline (`traffic_reset_baselines`, purged by the retention cleanup) so bytes accumulated before the reset are not counted again. Existing retained rows are backfilled on first initialization; previously pruned data is unavailable. They are sampled lower bounds, not exact billing or enforced quotas.
 
 Open HAPP and Copy subscription use an account-specific HTTP subscription. VIP and personal QR codes now encode that same WAN/DNS subscription URL for mobile import, not a standalone VLESS URI. Scan inside HAPP to import the subscription and receive metadata. The original VLESS copy remains unchanged. Previously imported standalone configurations must be replaced or supplemented by importing the new subscription; they are not converted automatically. Responses carry `subscription-userinfo: upload=...; download=...; total=0`, optional UTC expiry, `profile-title`, and `profile-update-interval: 1`, also represented as metadata lines in the body. HAPP's standard usage bar shows upload plus download against an unlimited allowance, not download alone. Automatic refresh is requested hourly; execution depends on the client, and manual refresh retrieves current collected counters.
 
@@ -176,7 +201,7 @@ Only `sing-box-admin` needs restarting when installing the bridge. Do not reinst
 
 `/happ-server` shows per-user connection state, source IPs, connection counts, recorded lifetime Download/Upload totals, current rates and peak rates in a selectable 1-60 second trailing window. Rates are counter deltas measured by the background collector on a nominal one-second cycle, not instantaneous link capacity. A disconnected VPN client cannot be detected until it has an observable connection; idle connected rows mean open connections without measured traffic.
 
-The history chart switches between Download and Upload and retains the existing 10/30/60/90 minute ranges and top-10 peak ranking. Upload-rate history starts after this deployment; old rows remain unknown, not reconstructed. Lifetime totals survive retention cleanup but retain the existing manual per-user reset semantics. Journal-only visits without counters are marked separately; bytes missed between samples cannot be recovered from those log entries. Collector errors or samples older than ten seconds clear live states instead of displaying stale rates as current.
+The history chart switches between Download and Upload and retains the existing 10/30/60/90 minute ranges and top-10 peak ranking. Upload-rate history starts after this deployment; old rows remain unknown, not reconstructed. Lifetime totals survive retention cleanup and can still be reset per user (the reset also clears that user's history rows and rate samples). Journal-only visits without counters are marked separately; bytes missed between samples cannot be recovered from those log entries. Collector errors or samples older than ten seconds clear live states instead of displaying stale rates as current.
 
 Deployment adds nullable Upload columns to the existing SQLite sample/counter tables. Back up `/mnt/stat/happ-stat.sqlite3` with the SQLite backup API before restarting `sing-box-admin`; no VPN service restart or runtime credential change is required.
 

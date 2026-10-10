@@ -53,6 +53,9 @@ async function main() {
     },
   };
   const cell = { dataset: { outboundCheckTag: 'auto-8' }, textContent: 'Проверяется', closest: () => row };
+  const gatewayStatus = { textContent: '' };
+  const monitorStatus = { textContent: '', parentElement: { querySelector: (selector) => selector === '[data-gateway-status]' ? gatewayStatus : null } };
+  const monitorForm = { closest: () => ({ querySelector: (selector) => selector === '[data-monitor-status]' ? monitorStatus : null }) };
   const timeouts = [];
   const faviconLinks = [{ href: '/favicon.svg' }, { href: '/favicon.png' }];
   let faviconFrames = 0;
@@ -81,6 +84,7 @@ async function main() {
       querySelector(selector) {
         if (selector === '[data-outbound-summary]') return summary;
         if (selector.startsWith('[data-outbound-checks]')) return {};
+        if (selector === 'form[action="/settings/vless-monitor"]') return monitorForm;
         if (selector === '[data-gateway-dialog]') return gatewayDialog;
         if (selector === '[data-outbound-edit-dialog]') return editDialog;
         if (selector === '[data-happ-setup-dialog]') return setupDialog;
@@ -110,7 +114,10 @@ async function main() {
       return Promise.resolve({
         status: 200,
         ok: true,
-        json: async () => ({ checks: [{ tag: 'auto-8', state: 'error', message: 'Нет HTTPS-ответа', checked_at: '2026-10-02T21:05:23.914301+00:00' }] }),
+        json: async () => ({
+          checks: [{ tag: 'auto-8', state: 'error', message: 'Нет HTTPS-ответа', checked_at: '2026-10-02T21:05:23.914301+00:00' }],
+          automation: { last_checked_at: '2026-10-10T19:41:05+00:00', candidate: 'auto-2', streak: 2, running: true, gateway_text: 'Шлюз по умолчанию auto-10: недоступен. Проверено 10.10.2026 19:41:05 UTC.' },
+        }),
       });
     },
   };
@@ -146,7 +153,10 @@ async function main() {
   assert.equal(checkedAt.textContent, '02.10.2026 21:05:23');
   assert.equal(row.classList.values.has('outbound-failed'), true);
   assert.equal(summary.classList.values.has('error'), true);
+  assert.equal(monitorStatus.textContent, 'Последняя проверка: 10.10.2026 19:41:05. Кандидат: auto-2 · 2/3. Цикл выполняется.');
+  assert.equal(gatewayStatus.textContent, 'Шлюз по умолчанию auto-10: недоступен. Проверено 10.10.2026 19:41:05 UTC.');
   console.log('PASS: timeout recovers polling, HTTP errors surface, completed check replaces stale banner');
+  console.log('PASS: automation and gateway availability status update live without replacing the form');
 
   const gatewayForm = { dataset: { gatewayMode: 'default' } };
   documentEvents.get('submit')({
@@ -190,6 +200,10 @@ async function main() {
   assert.equal(editButton.disabled, true);
   assert.equal(editButton.textContent, 'Сохраняется…');
   console.log('PASS: outbound editor opens existing JSON, cancels and validates before replace-submit');
+
+  assert.equal(source.includes('/settings/gateway/client/live'), false);
+  assert.equal(source.includes('syncWireGuardClientLive'), false);
+  console.log('PASS: external WireGuard polling has been removed');
 }
 
 main().catch((error) => {

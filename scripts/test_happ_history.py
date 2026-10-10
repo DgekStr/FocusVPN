@@ -191,6 +191,48 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual((totals['personal-a']['download_bytes'], totals['personal-a']['upload_bytes']), (20, 20))
         self.assertEqual((totals['personal-b']['download_bytes'], totals['personal-b']['upload_bytes']), (500, 60))
 
+    def test_reset_clears_history_and_rate_sources_without_readding_old_active_bytes(self):
+        payload = self.rate_payload(180, self.at)
+        payload['connections'] = [self.row(download=180, upload=80)]
+        self.history.ingest(payload, self.at)
+        self.assertTrue(self.history.reset_user_totals('personal-a'))
+        self.assertEqual(self.history.query('personal-a')['count'], 0)
+        self.assertEqual(self.history.traffic_chart('personal-a'), [])
+        with self.history.connect() as database:
+            for table in ('user_traffic_totals', 'connections', 'download_rate_samples', 'download_rate_counters'):
+                self.assertEqual(database.execute('SELECT COUNT(*) FROM ' + table + ' WHERE user_key=?', ('personal-a',)).fetchone()[0], 0)
+            self.assertEqual(database.execute('SELECT COUNT(*) FROM traffic_reset_baselines WHERE user_key=?', ('personal-a',)).fetchone()[0], 1)
+
+        payload['sampled_at'] = (self.at + dt.timedelta(seconds=2)).isoformat()
+        payload['traffic_samples'][0]['download_bytes'] = 200
+        payload['connections'][0]['download_bytes'] = 200
+        payload['connections'][0]['upload_bytes'] = 100
+        self.history.ingest(payload, self.at + dt.timedelta(seconds=2))
+        totals = self.history.user_totals()['personal-a']
+        self.assertEqual((totals['download_bytes'], totals['upload_bytes']), (20, 20))
+        self.assertEqual(self.history.query('personal-a')['download_bytes'], 20)
+
+    def test_reset_baseline_persists_until_retention_cleanup(self):
+        payload = self.rate_payload(180, self.at)
+        payload['connections'] = [self.row(download=180, upload=80)]
+        self.history.ingest(payload, self.at)
+        self.assertTrue(self.history.reset_user_totals('personal-a'))
+        for offset, download, upload, expected in ((2, 200, 100, (20, 20)), (4, 260, 130, (80, 50)), (6, 300, 150, (120, 70))):
+            observed = self.at + dt.timedelta(seconds=offset)
+            payload['sampled_at'] = observed.isoformat()
+            payload['traffic_samples'][0]['download_bytes'] = download
+            payload['connections'][0].update(download_bytes=download, upload_bytes=upload)
+            self.history.ingest(payload, observed)
+            totals = self.history.user_totals()['personal-a']
+            self.assertEqual((totals['download_bytes'], totals['upload_bytes']), expected)
+            self.assertEqual(self.history.query('personal-a')['download_bytes'], expected[0])
+        self.history.cleanup(at=self.at + dt.timedelta(days=1))
+        with self.history.connect() as database:
+            self.assertEqual(database.execute('SELECT COUNT(*) FROM traffic_reset_baselines').fetchone()[0], 1)
+        self.history.cleanup(at=self.at + dt.timedelta(days=62))
+        with self.history.connect() as database:
+            self.assertEqual(database.execute('SELECT COUNT(*) FROM traffic_reset_baselines').fetchone()[0], 0)
+
     def test_deleted_users_are_purged_and_delayed_samples_cannot_restore_them(self):
         rows = [self.row(), self.row(key='bob', user='personal-b', name='Bob', download=300), self.row(key='vip', user='VIP', name='VIP', download=700), self.row(key='unresolved', user='unknown', name='Не определён')]
         payload = {'connections': rows, 'users': [{'user_key': row['user_key'], 'user_name': row['user_name'], 'connections': 1} for row in rows], 'traffic_samples': [{'id': row['id'], 'user_key': row['user_key'], 'download_bytes': row['download_bytes'], 'upload_bytes': row['upload_bytes']} for row in rows], 'sampled_at': self.at.isoformat()}
@@ -532,6 +574,8 @@ class HistoryTests(unittest.TestCase):
                 self.assertEqual(urlparse(response.getheader('Location')).path, '/happ-server')
                 response.read()
                 self.assertNotIn('personal-a', self.history.user_totals())
+                self.assertEqual(self.history.query('personal-a')['count'], 0)
+                self.assertEqual(self.history.traffic_chart('personal-a'), [])
                 self.assertEqual(self.history.user_totals()['personal-b']['download_bytes'], 900)
 
                 connection.request('POST', '/happ-users/traffic/reset', urlencode({'csrf': app.CSRF_TOKEN, 'id': 'missing'}), {'Content-Type': 'application/x-www-form-urlencoded'})

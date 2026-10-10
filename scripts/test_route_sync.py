@@ -157,6 +157,10 @@ class RouteSyncTests(unittest.TestCase):
     def test_manager_renders_edit_modal_and_short_check_button(self):
         self.patch('service_state', return_value='inactive')
         page = app.render_outbounds_page(self.gateway, {})
+        import_form = page.split('<h2>Импорт JSON</h2>', 1)[1].split('</form>', 1)[0]
+        self.assertIn('name="tls_spki_pin"', import_form)
+        self.assertIn('name="allow_insecure_tls"', import_form)
+        self.assertIn('принимается любой сертификат', import_form)
         self.assertIn('data-outbound-edit=', page)
         self.assertIn('data-outbound-edit-dialog', page)
         self.assertIn('data-outbound-edit-form', page)
@@ -214,7 +218,7 @@ class RouteSyncTests(unittest.TestCase):
         self.assertEqual(page.count('target="_blank"'), 6)
         self.assertEqual(page.count('rel="noopener noreferrer"'), 6)
         self.assertIn('class="nav-link nav-about active"', page)
-        self.assertIn('/panel.css?v=2.2.0-happ-settings', page)
+        self.assertIn('/panel.css?v=2.2.0-happ-dual-ul-dl', page)
 
     def test_about_route_requires_login_and_renders_for_signed_in_admin(self):
         server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
@@ -364,6 +368,34 @@ class RouteSyncTests(unittest.TestCase):
         self.assertNotIn('insecure', app.import_xray_outbound(source, 'auto-8')['tls'])
         source['streamSettings']['tlsSettings']['allowInsecure'] = True
         self.assertTrue(app.import_xray_outbound(source, 'auto-8')['tls']['insecure'])
+
+    def test_json_import_can_pin_self_signed_tls_or_explicitly_disable_verification(self):
+        payload = [
+            {'type': 'trojan', 'tag': 'trojan', 'server': 'vpn.example.com', 'server_port': 9446,
+             'password': 'test-only', 'tls': {'enabled': True, 'server_name': 'vpn.example.com'}},
+            {'type': 'hysteria2', 'tag': 'hy2', 'server': 'vpn.example.com', 'server_port': 9448,
+             'password': 'test-only', 'tls': {'enabled': True, 'server_name': 'vpn.example.com'}},
+        ]
+        pin = 'aTrvD8z7tPNTkcWTlPDq7ulhu8XwNVxOcMrfTGhqSkY='
+        config = {'outbounds': [{'type': 'urltest', 'tag': 'vless-auto', 'outbounds': []}], 'route': {'final': 'vless-auto'}}
+        tags, skipped = app.import_server_batch(json.dumps(payload), config, tls_spki_pin=pin)
+        self.assertEqual(len(tags), 2)
+        self.assertEqual(skipped, [])
+        for outbound in app.managed_server_outbounds(config):
+            self.assertEqual(outbound['tls']['certificate_public_key_sha256'], [pin])
+            self.assertFalse(outbound['tls']['insecure'])
+
+        insecure_config = {'outbounds': [{'type': 'urltest', 'tag': 'vless-auto', 'outbounds': []}], 'route': {'final': 'vless-auto'}}
+        tags, skipped = app.import_server_batch(json.dumps(payload), insecure_config, allow_insecure_tls=True)
+        self.assertEqual((len(tags), skipped), (2, []))
+        for outbound in app.managed_server_outbounds(insecure_config):
+            self.assertTrue(outbound['tls']['insecure'])
+            self.assertNotIn('certificate_public_key_sha256', outbound['tls'])
+
+        with self.assertRaisesRegex(ValueError, 'Base64'):
+            app.import_server_batch(json.dumps(payload), config, tls_spki_pin='not-a-pin')
+        with self.assertRaisesRegex(ValueError, 'не оба варианта'):
+            app.import_server_batch(json.dumps(payload), config, tls_spki_pin=pin, allow_insecure_tls=True)
 
     def test_full_xray_reality_import_defaults_empty_fingerprint_to_chrome(self):
         source = batch_import_fixture()[0]['outbounds'][0]

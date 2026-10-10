@@ -615,7 +615,12 @@ def flatten_import_entries(payload):
     return entries
 
 
-def import_server_batch(raw, config, replace_tag='', requested_tag='', validator=None):
+def import_server_batch(raw, config, replace_tag='', requested_tag='', validator=None, tls_spki_pin='', allow_insecure_tls=False):
+    tls_spki_pin = str(tls_spki_pin or '').strip()
+    if tls_spki_pin and not re.fullmatch(r'[A-Za-z0-9+/]{43}=', tls_spki_pin):
+        raise ValueError('SPKI SHA-256 pin должен быть Base64-строкой из 44 символов.')
+    if tls_spki_pin and allow_insecure_tls:
+        raise ValueError('Выберите SPKI pin или отключение TLS-проверки, но не оба варианта.')
     text = str(raw or '').strip()
     if text.lower().startswith('tt://'):
         payload = [line.strip() for line in text.splitlines() if line.strip()]
@@ -632,11 +637,23 @@ def import_server_batch(raw, config, replace_tag='', requested_tag='', validator
     manager = TRUSTTUNNEL_CLIENTS
     working = json.loads(json.dumps(config))
     imported, skipped = [], []
+    tls_policy_applied = False
     for label, entry in entries:
         candidate = json.loads(json.dumps(working))
         staged = manager.pending_tags() if manager is not None else set()
         try:
             tag = import_server_json(json.dumps(entry), candidate, replace_tag, requested_tag)
+            if tls_spki_pin or allow_insecure_tls:
+                outbound = next(item for item in candidate['outbounds'] if item.get('tag') == tag)
+                tls = outbound.get('tls')
+                if outbound.get('type') in ('vless', 'trojan', 'hysteria2') and isinstance(tls, dict) and tls.get('enabled'):
+                    if tls_spki_pin:
+                        tls['certificate_public_key_sha256'] = [tls_spki_pin]
+                        tls['insecure'] = False
+                    else:
+                        tls.pop('certificate_public_key_sha256', None)
+                        tls['insecure'] = True
+                    tls_policy_applied = True
             if validator is not None:
                 validator((json.dumps(candidate, ensure_ascii=False) + '\n').encode('utf-8'))
         except (ValueError, RuntimeError) as error:
@@ -653,6 +670,8 @@ def import_server_batch(raw, config, replace_tag='', requested_tag='', validator
         imported.append(tag)
     if not imported:
         raise ValueError('Ничего не импортировано. ' + ' '.join(skipped))
+    if (tls_spki_pin or allow_insecure_tls) and not tls_policy_applied:
+        raise ValueError('TLS-доверие можно задать только для импортируемого TLS outbound.')
     config.clear()
     config.update(working)
     return imported, skipped
@@ -668,12 +687,15 @@ def finalize_trusttunnel(config):
         pass
 
 
-def import_and_apply(raw, config, replace_tag='', requested_tag=''):
+def import_and_apply(raw, config, replace_tag='', requested_tag='', tls_spki_pin='', allow_insecure_tls=False):
     manager = TRUSTTUNNEL_CLIENTS
     if manager is not None:
         manager.pending.clear()
     try:
-        imported, skipped = import_server_batch(raw, config, replace_tag, requested_tag, validator=check_candidate)
+        imported, skipped = import_server_batch(
+            raw, config, replace_tag, requested_tag, validator=check_candidate,
+            tls_spki_pin=tls_spki_pin, allow_insecure_tls=allow_insecure_tls,
+        )
         if manager is not None:
             manager.prepare()
         try:
@@ -1707,7 +1729,7 @@ def render_outbounds_page(config, query, message='', kind='success'):
 {notice}
 <div class="panel-stack">
     <section class="panel" data-outbound-checks><h2>Настроенные серверы</h2><div class="table-wrap"><table><thead><tr><th>Tag</th><th>Тип</th><th>Сервер</th><th>Порт</th><th>Маршрут</th><th>Проверка</th><th>Пинг, мс</th><th>Проверен UTC</th><th>Действия</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div><p class="muted">Текущий маршрут: <strong>{esc(current_route)}</strong></p></section>
-    <section class="panel"><h2>Импорт JSON</h2><form method="post" action="/outbounds/import"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="import_replace_tag">Заменить один существующий сервер</label><select id="import_replace_tag" name="replace_tag"><option value="">Добавить новые auto-N</option>{server_options}</select></div><div class="field"><label for="import_tag">Tag для одного профиля</label><input id="import_tag" name="import_tag" placeholder="Для массива оставьте пустым"></div><div class="field full"><label for="outbound_json">JSON sing-box / Xray / TrustTunnel: объект, массив или полный config со всеми серверами (VLESS, Hysteria2, Trojan, Shadowsocks, TrustTunnel) или ссылка tt://</label><textarea id="outbound_json" name="outbound_json" spellcheck="false" required placeholder="Вставьте JSON профиля, массив профилей, полный config или ссылку tt://"></textarea></div></div><div class="actions"><button type="submit">Проверить и импортировать</button></div></form></section>
+    <section class="panel"><h2>Импорт JSON</h2><form method="post" action="/outbounds/import"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="import_replace_tag">Заменить один существующий сервер</label><select id="import_replace_tag" name="replace_tag"><option value="">Добавить новые auto-N</option>{server_options}</select></div><div class="field"><label for="import_tag">Tag для одного профиля</label><input id="import_tag" name="import_tag" placeholder="Для массива оставьте пустым"></div><div class="field full"><label for="outbound_json">JSON sing-box / Xray / TrustTunnel: объект, массив или полный config со всеми серверами (VLESS, Hysteria2, Trojan, Shadowsocks, TrustTunnel) или ссылка tt://</label><textarea id="outbound_json" name="outbound_json" spellcheck="false" required placeholder="Вставьте JSON профиля, массив профилей, полный config или ссылку tt://"></textarea></div><div class="field full"><label for="tls_spki_pin">SPKI SHA-256 pin · Base64, 44 символа</label><input id="tls_spki_pin" name="tls_spki_pin" maxlength="44" pattern="[A-Za-z0-9+/]{43}=" placeholder="Предпочтительно для self-signed сертификата"><p class="muted">Закрепляет публичный ключ импортируемых TLS-профилей; проверка сертификата остаётся включённой.</p></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="allow_insecure_tls"> Отключить проверку TLS-сертификата для импортируемых TLS-профилей</label><p class="muted">Небезопасный режим: принимается любой сертификат. Используйте только для доверенного сервера, если pin недоступен.</p></div></div><div class="actions"><button type="submit">Проверить и импортировать</button></div></form></section>
 </div><dialog class="gateway-dialog" data-outbound-edit-dialog aria-labelledby="outbound-edit-title"><form method="post" action="/outbounds/import" data-outbound-edit-form><h2 id="outbound-edit-title">Редактировать VPN-сервер</h2><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="replace_tag" data-outbound-edit-tag><div class="field"><label for="outbound_edit_json">Конфигурация сервера</label><textarea id="outbound_edit_json" name="outbound_json" spellcheck="false" required data-outbound-edit-json></textarea></div><div class="actions"><button class="secondary" type="button" data-outbound-edit-cancel>Отмена</button><button type="submit">Сохранить</button></div></form></dialog><dialog class="gateway-dialog" data-outbound-delete-dialog><form method="dialog"><h2>Удалить VPN-сервер?</h2><p data-outbound-delete-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-outbound-delete-confirm>Удалить</button></div></form></dialog>'''
     return render_shell('VPN-серверы', body, 'outbounds', [item.get('tag', '') for item in servers], '')
 
@@ -2548,10 +2570,16 @@ class Handler(BaseHTTPRequestHandler):
                             config,
                             form_value(values, 'replace_tag'),
                             form_value(values, 'import_tag'),
+                            form_value(values, 'tls_spki_pin'),
+                            form_value(values, 'allow_insecure_tls') == 'on',
                         )
                         kind = 'error' if skipped else 'success'
                         queue_server_checks(config, imported)
                         message = f'Импортировано: {", ".join(imported)}. '
+                        if form_value(values, 'tls_spki_pin'):
+                            message += 'SPKI pin закреплён, TLS-проверка остаётся включённой. '
+                        elif form_value(values, 'allow_insecure_tls') == 'on':
+                            message += 'Внимание: TLS-проверка сертификата отключена для импортированных TLS-профилей. '
                         if not applied:
                             message += 'Применение маршрута отложено до режима VLESS. '
                         message += ' '.join(skipped)

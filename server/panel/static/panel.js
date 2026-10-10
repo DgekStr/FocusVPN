@@ -1,5 +1,5 @@
 (() => {
-  const views = new Set(['/', '/vless', '/outbounds', '/wireguard', '/happ-server', '/happ-history', '/settings', '/gateway-journal']);
+  const views = new Set(['/', '/vless', '/outbounds', '/wireguard', '/happ-server', '/happ-history', '/settings', '/gateway-journal', '/about']);
   const basePath = document.body?.dataset?.vpnBase || '';
   const panelPath = (value) => basePath + value;
   const relativePath = (value) => basePath && value.startsWith(basePath + '/') ? value.slice(basePath.length) : value;

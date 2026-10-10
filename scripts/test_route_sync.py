@@ -17,6 +17,7 @@ if sys.platform == 'win32':
     sys.modules.setdefault('grp', types.ModuleType('grp'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
 import app
+import panel_ui
 from vless_monitor import DEFAULT_SETTINGS, VlessMonitor
 
 
@@ -181,6 +182,66 @@ class RouteSyncTests(unittest.TestCase):
         self.assertNotIn('auto-1', page)
         self.assertIn('data-panel-nav="wireguard"', page)
         self.assertEqual(page.count('class="nav-section"'), 1)
+
+    def test_about_menu_item_is_pinned_below_main_navigation(self):
+        page = app.render_shell('VPN-серверы', '<p>content</p>', 'outbounds', [])
+        self.assertEqual(page.count('data-panel-nav="about"'), 1)
+        self.assertIn('<a class="nav-link nav-about" data-panel-nav="about" href="/about"><span class="nav-dot"></span>О программе</a>', page)
+        self.assertLess(page.index('href="/logout"'), page.index('data-panel-nav="about"'))
+        self.assertLess(page.index('data-panel-nav="about"'), page.index('class="sidebar-foot"'))
+        self.assertEqual(page.count('class="nav-section"'), 1)
+        active_page = app.render_shell('О программе', '', 'about', [])
+        self.assertIn('class="nav-link nav-about active" data-panel-nav="about"', active_page)
+        self.assertEqual(active_page.count(' active"'), 1)
+
+    def test_about_page_describes_program_with_version_license_and_external_links(self):
+        page = app.render_about_page()
+        self.assertIn('<h1>О программе</h1>', page)
+        self.assertIn('<h2 id="about-title">FocusVPN</h2><span class="muted">Версия ' + panel_ui.PROJECT_VERSION + '</span>', page)
+        self.assertIn('Русскоязычная self-hosted панель управления VPN-шлюзом на sing-box', page)
+        self.assertIn('Программа распространяется бесплатно по лицензии MIT.', page)
+        self.assertIn('клиентский биллинг и обязательные платежи не предусмотрены', page)
+        self.assertIn('Это не создаёт подписки или платных обязательств', page)
+        for label, url in (
+            ('GitHub', 'https://github.com/DgekStr/FocusVPN'),
+            ('Описание программы', 'https://github.com/DgekStr/FocusVPN/blob/master/README.md'),
+            ('Развёртывание', 'https://github.com/DgekStr/FocusVPN/blob/master/docs/OPERATIONS.md'),
+            ('Релизы', 'https://github.com/DgekStr/FocusVPN/releases'),
+            ('MIT License', 'https://github.com/DgekStr/FocusVPN/blob/master/LICENSE'),
+        ):
+            self.assertIn(f'<a href="{url}" target="_blank" rel="noopener noreferrer">{label}</a>', page)
+        self.assertIn('Copyright © 2026 <a href="https://github.com/DgekStr" target="_blank" rel="noopener noreferrer">DgekStr</a>', page)
+        self.assertEqual(page.count('target="_blank"'), 6)
+        self.assertEqual(page.count('rel="noopener noreferrer"'), 6)
+        self.assertIn('class="nav-link nav-about active"', page)
+        self.assertIn('/panel.css?v=2.1.9', page)
+
+    def test_about_route_requires_login_and_renders_for_signed_in_admin(self):
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+        try:
+            with patch.object(app.Handler, 'vpn_client_allowed', return_value=True), patch.object(app.Handler, 'crm_authenticated', return_value=False):
+                with patch.object(app.Handler, 'session_authenticated', return_value=False):
+                    connection.request('GET', '/about')
+                    response = connection.getresponse()
+                    response.read()
+                    self.assertEqual(response.status, 303)
+                    self.assertEqual(response.getheader('Location'), '/login')
+                with patch.object(app.Handler, 'session_authenticated', return_value=True):
+                    connection.request('GET', '/about')
+                    response = connection.getresponse()
+                    page = response.read().decode('utf-8')
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.getheader('Cache-Control'), 'no-store')
+                    self.assertIn('<h1>О программе</h1>', page)
+                    self.assertIn('Версия ' + panel_ui.PROJECT_VERSION, page)
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
 
     def test_editor_replacement_preserves_tag_route_and_nested_fields(self):
         config = {'outbounds': [{'type': 'vless', 'tag': 'auto-1', 'server': 'old.example.com'}], 'route': {'final': 'auto-1'}}

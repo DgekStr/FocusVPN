@@ -9,6 +9,15 @@ VERSION_PATH = Path(__file__).with_name('VERSION')
 if not VERSION_PATH.is_file():
   VERSION_PATH = Path(__file__).resolve().parents[2] / 'VERSION'
 PROJECT_VERSION = VERSION_PATH.read_text(encoding='utf-8').strip() if VERSION_PATH.is_file() else 'development'
+ABOUT_REPOSITORY_URL = 'https://github.com/DgekStr/FocusVPN'
+ABOUT_AUTHOR_URL = 'https://github.com/DgekStr'
+ABOUT_LINKS = (
+    ('GitHub', ABOUT_REPOSITORY_URL),
+    ('Описание программы', ABOUT_REPOSITORY_URL + '/blob/master/README.md'),
+    ('Развёртывание', ABOUT_REPOSITORY_URL + '/blob/master/docs/OPERATIONS.md'),
+    ('Релизы', ABOUT_REPOSITORY_URL + '/releases'),
+    ('MIT License', ABOUT_REPOSITORY_URL + '/blob/master/LICENSE'),
+)
 
 
 def esc(value):
@@ -41,6 +50,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
     settings_active = ' active' if active == 'settings' else ''
     history_active = ' active' if active == 'happ-history' else ''
     outbounds_active = ' active' if active == 'outbounds' else ''
+    about_active = ' active' if active == 'about' else ''
     return f'''<!doctype html>
 <html lang="ru">
 <head>
@@ -49,7 +59,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <title>{esc(service_title())}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=2.1.9-failover">
+<link rel="stylesheet" href="/panel.css?v=2.1.9-about">
 </head>
 <body>
 <div class="app-shell">
@@ -65,12 +75,36 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
         <a class="nav-link nav-logout" href="/logout"><span class="nav-dot"></span>Выход</a>
       </section>
     </nav>
-    <div class="sidebar-foot"><span>VPN control</span><small>FocusVPN @focuslens.dev v{esc(PROJECT_VERSION)}</small></div>
+    <div class="sidebar-bottom">
+      <a class="nav-link nav-about{about_active}" data-panel-nav="about" href="/about"><span class="nav-dot"></span>О программе</a>
+      <div class="sidebar-foot"><span>VPN control</span><small>FocusVPN @focuslens.dev v{esc(PROJECT_VERSION)}</small></div>
+    </div>
   </aside>
   <div class="app-content"><main class="main">{body}</main></div>
 </div>
 <script src="/chart.js?v=4.5.1" defer></script>
-  <script src="/panel.js?v=2.1.9-failover" defer></script>
+  <script src="/panel.js?v=2.1.9-about" defer></script>
 <script src="/happ-actions.js?v=10" defer></script>
 </body>
 </html>'''
+
+
+def render_about_page():
+    links = ''.join(
+        f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(label)}</a>'
+        for label, url in ABOUT_LINKS
+    )
+    body = f'''<section class="page-head">
+    <div><p class="eyebrow">FocusVPN / About</p><h1>О программе</h1></div>
+  </section>
+  <section class="panel about-content" aria-labelledby="about-title">
+    <div class="about-heading"><h2 id="about-title">FocusVPN</h2><span class="muted">Версия {esc(PROJECT_VERSION)}</span></div>
+    <p class="about-summary">Русскоязычная self-hosted панель управления VPN-шлюзом на sing-box: клиенты WireGuard, внешние VPN-серверы (VLESS, Hysteria2, Trojan, Shadowsocks), HAPP Server с персональными подписками, история трафика, проверки доступности и автоматическое переключение шлюза с уведомлениями в Mattermost.</p>
+    <nav class="about-links" aria-label="Ссылки о программе">{links}</nav>
+    <div class="about-terms">
+      <p>Программа распространяется бесплатно по лицензии MIT. В текущей версии клиентский биллинг и обязательные платежи не предусмотрены.</p>
+      <p>Если в будущем появятся платные услуги, дополнительные модули или отдельный сервис клиентского биллинга, их функции, стоимость и условия будут опубликованы отдельно. Это не создаёт подписки или платных обязательств для пользователей бесплатной версии.</p>
+    </div>
+    <p class="about-meta">Copyright © 2026 <a href="{esc(ABOUT_AUTHOR_URL)}" target="_blank" rel="noopener noreferrer">DgekStr</a></p>
+  </section>'''
+    return render_shell('О программе', body, 'about')

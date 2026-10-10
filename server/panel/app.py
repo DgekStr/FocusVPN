@@ -32,7 +32,7 @@ from happ_server import public_vless_link, subscription_content, subscription_in
 from happ_server_ui import page as happ_server_page
 from happ_stats import HappStatsError, live_connections as happ_live_connections
 from happ_stats import format_datetime
-from panel_ui import render_shell, service_title
+from panel_ui import render_about_page, render_shell, service_title
 from happ_users import HappUsers, user_link, validate_subscription_base_url
 from happ_history import HappHistory
 from happ_history_ui import render_history
@@ -2141,6 +2141,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_html(HTTPStatus.OK, render_settings_page(config, query, form_value(query, 'message'), form_value(query, 'kind') or 'success'))
             except (WgEasyApiError, ValueError, RuntimeError, OSError, json.JSONDecodeError) as error:
                 self.send_html(HTTPStatus.BAD_GATEWAY, f'<h1>Настройки временно недоступны</h1><p>{esc(error)}</p>')
+            return
+        if parsed.path == '/about':
+            self.send_html(HTTPStatus.OK, render_about_page())
             return
         if parsed.path == '/outbounds/checks':
             try:

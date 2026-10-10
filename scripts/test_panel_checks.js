@@ -204,6 +204,9 @@ async function main() {
   assert.equal(source.includes('/settings/gateway/client/live'), false);
   assert.equal(source.includes('syncWireGuardClientLive'), false);
   console.log('PASS: external WireGuard polling has been removed');
+
+  assert.match(source, /const views = new Set\(\[[^\]]*'\/about'[^\]]*\]\);/);
+  console.log('PASS: about page is part of in-panel navigation');
 }
 
 main().catch((error) => {

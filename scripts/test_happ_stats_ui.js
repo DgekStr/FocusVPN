@@ -201,6 +201,8 @@ async function testHappChartMotion() {
   const plain = (points) => points.map((point) => [point.x, point.y]);
 
   assert.equal(chart.options.animation, false);
+  assert.equal(chart.options.scales.y.position, 'right');
+  assert.equal(chart.options.scales.y.ticks.callback(2), '2.0');
   assert.equal(chart.options.scales.x.max, T0);
   assert.equal(chart.options.scales.x.min, T0 - 600000);
   assert.deepEqual(state.intervals.slice().sort((first, second) => first - second), [100, 1000]);
@@ -211,6 +213,9 @@ async function testHappChartMotion() {
   assert.equal(bar('B'), '100% 2px');
   assert.equal(bar('A'), '66.7% 2px');
   assert.notEqual(series('A').borderColor, series('B').borderColor);
+  assert.equal(series('A').fill, false);
+  assert.equal(series('A').tension, 0);
+  assert.equal(series('A').borderWidth, 1.5);
   assert.equal(series('A').pointBackgroundColor, series('A').borderColor);
   assert.deepEqual(series('B').peakPoint, { x: T0 - 500000, y: 6 });
   assert.equal(series('B').pointRadius({ raw: series('B').peakPoint, dataset: series('B') }), 5);
@@ -517,7 +522,7 @@ async function main() {
   assert.equal(chart.data.datasets[1].borderColor, colors[1]);
   assert.equal(chart.data.datasets[2].borderColor, colors[0]);
   assert.equal(new Set(chart.data.datasets.map((series) => series.borderColor)).size, 3);
-  assert.ok(chart.data.datasets.every((series) => series.cubicInterpolationMode === 'monotone'));
+  assert.ok(chart.data.datasets.every((series) => series.tension === 0 && series.fill === false));
   historyUsers = Array.from({ length: 12 }, (_, index) => ({ user_key: `user-${index}`, user_name: `User ${index}`, peak_bytes_per_second: 1048576, points: [{ x: historyAt, y: 1 }] }));
   historyCount = 12;
   await changeRange({ target: range });

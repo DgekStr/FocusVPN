@@ -236,8 +236,8 @@
           tooltip: { callbacks: { title: (items) => items.length ? clock(items[0].parsed.x) + ' UTC' : '', label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(2)} МБ/с` } },
         },
         scales: {
-          x: { type: 'linear', min: now - 600000, max: now, border: { display: false }, grid: { color: 'rgba(142,160,190,.07)' }, afterBuildTicks: alignHappTicks, ticks: { color: '#8ea0be', maxTicksLimit: 7, maxRotation: 0, font: { size: 10 }, callback: clock } },
-          y: { beginAtZero: true, suggestedMax: 1, border: { display: false }, grid: { color: 'rgba(142,160,190,.12)' }, ticks: { color: '#8ea0be', maxTicksLimit: 5, font: { size: 10 }, callback: (value) => `${Number(value).toFixed(1)} МБ/с` } },
+          x: { type: 'linear', min: now - 600000, max: now, border: { display: false }, grid: { color: 'rgba(169,179,196,.08)' }, afterBuildTicks: alignHappTicks, ticks: { color: '#aab0be', maxTicksLimit: 7, maxRotation: 0, font: { size: 10 }, callback: clock } },
+          y: { position: 'right', beginAtZero: true, suggestedMax: 1, border: { display: false }, grid: { color: 'rgba(169,179,196,.11)' }, ticks: { color: '#aab0be', padding: 8, maxTicksLimit: 6, font: { size: 10 }, callback: (value) => Number(value).toFixed(1) } },
         },
       },
     });
@@ -424,7 +424,7 @@
       for (const point of tail) pushHappPoint(points, point);
       maximum = Math.max(maximum, ...tail.map((point) => point.y));
       const dataset = previous.get(key) || { userKey: key };
-      Object.assign(dataset, { label: nameText, data: points, borderColor: color, backgroundColor: color + '0a', borderWidth: 2, pointRadius: happPeakRadius, pointHoverRadius: 5, pointBackgroundColor: color, pointBorderColor: '#0b1226', pointBorderWidth: 2, pointHitRadius: 8, tension: .3, cubicInterpolationMode: 'monotone', fill: true, spanGaps: false });
+      Object.assign(dataset, { label: nameText, data: points, borderColor: color, backgroundColor: color, borderWidth: 1.5, pointRadius: happPeakRadius, pointHoverRadius: 5, pointBackgroundColor: color, pointBorderColor: '#171a24', pointBorderWidth: 2, pointHitRadius: 8, tension: 0, fill: false, spanGaps: false });
       datasets.push(dataset);
     }
     state.live = tails;

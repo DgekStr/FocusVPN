@@ -199,7 +199,7 @@ th:last-child, td:last-child { padding-right: 0; }
 .happ-live-totals > div { min-width: 0; }
 .happ-live-totals span { display: block; color: var(--muted); font-size: 11px; }
 .happ-live-totals strong { display: block; font-size: 16px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.happ-chart-plot { position: relative; min-width: 0; min-height: 0; }
+.happ-chart-plot { position: relative; min-width: 0; min-height: 0; border: 1px solid #2b303b; background: #171a24; }
 .happ-chart-range { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .happ-chart-range label { display: grid; gap: 3px; color: var(--muted); font-size: 12px; min-width: 0; }
 .happ-chart-range select { width: 130px; min-height: 34px; padding: 4px 8px; font-size: 12px; }
@@ -237,7 +237,7 @@ th:last-child, td:last-child { padding-right: 0; }
 .happ-chart-legend { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: repeat(2, 44px); gap: 8px; align-content: start; }
 .happ-chart-legend > p { grid-column: 1 / -1; margin: 0; font-size: 12px; }
 .happ-chart-user { display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 2px 8px; align-items: center; min-width: 0; background-repeat: no-repeat; background-position: 0 100%; transition: background-size .4s ease; }
-.happ-chart-swatch { width: 8px; height: 8px; border-radius: 2px; }
+.happ-chart-swatch { width: 14px; height: 2px; border-radius: 0; }
 .happ-chart-user strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
 .happ-chart-user small { grid-column: 2; font-size: 11px; font-variant-numeric: tabular-nums; }
 .happ-chart-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }

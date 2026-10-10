@@ -59,7 +59,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <title>{esc(service_title())}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=2.2.0-happ-trading-chart">
+<link rel="stylesheet" href="/panel.css?v=2.2.0-happ-dual-ul-dl">
 </head>
 <body>
 <div class="app-shell">
@@ -70,7 +70,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
         <a class="nav-link{outbounds_active}" data-panel-nav="outbounds" href="/outbounds"><span class="nav-dot"></span>VPN-серверы</a>
         <a class="nav-link{wireguard_active}" data-panel-nav="wireguard" href="/wireguard"><span class="nav-dot"></span>WireGuard</a>
         <a class="nav-link{happ_active}" data-panel-nav="happ-server" href="/happ-server"><span class="nav-dot"></span>HAPP Server</a>
-        <a class="nav-link{history_active}" data-panel-nav="happ-history" href="/happ-history"><span class="nav-dot"></span>История HAPP</a>
+        <a class="nav-link{history_active}" data-panel-nav="happ-history" href="/happ-history"><span class="nav-dot"></span>HAPP история</a>
         <a class="nav-link{settings_active}" data-panel-nav="settings" href="/settings"><span class="nav-dot"></span>Настройки</a>
         <a class="nav-link nav-logout" href="/logout"><span class="nav-dot"></span>Выход</a>
       </section>
@@ -83,7 +83,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
   <div class="app-content"><main class="main">{body}</main></div>
 </div>
 <script src="/chart.js?v=4.5.1" defer></script>
-  <script src="/panel.js?v=2.2.0-happ-trading-chart" defer></script>
+  <script src="/panel.js?v=2.2.0-happ-dual-ul-dl" defer></script>
 <script src="/happ-actions.js?v=10" defer></script>
 </body>
 </html>'''

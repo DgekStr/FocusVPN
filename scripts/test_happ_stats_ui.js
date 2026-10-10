@@ -162,7 +162,9 @@ function createMotionHarness(options = {}) {
         const params = new URL(url, 'http://localhost').searchParams;
         const minutes = Number(params.get('minutes'));
         state.trafficRequests.push({ minutes, direction: params.get('direction') });
-        const result = { minutes, direction: params.get('direction'), since: state.clock - minutes * 60000, until: state.clock, sampled_at: state.history.sampledAt, user_count: state.history.users.length, users: state.history.users };
+        const direction = params.get('direction');
+        const users = direction === 'upload' ? state.history.users.map((user) => ({ ...user, peak_bytes_per_second: user.peak_bytes_per_second === null ? null : user.peak_bytes_per_second / 2, points: user.points.map((point) => ({ ...point, y: point.y === null ? null : point.y / 2 })) })) : state.history.users;
+        const result = { minutes, direction, since: state.clock - minutes * 60000, until: state.clock, sampled_at: state.history.sampledAt, user_count: state.history.users.length, users };
         return { status: 200, ok: true, json: async () => result };
       }
       assert.match(url, /^\/happ-server\/live\?seconds=\d+$/);
@@ -194,30 +196,34 @@ async function testHappChartMotion() {
   };
   await harness.start();
   const chart = state.chart;
-  const series = (key) => chart.data.datasets.find((dataset) => dataset.userKey === key);
+  const series = (key, direction = 'download') => chart.data.datasets.find((dataset) => dataset.userKey === key && dataset.direction === direction);
   const order = () => legend.children.map((item) => item.dataset.happUser);
-  const label = (key) => legend.children.find((item) => item.dataset.happUser === key).children[2].textContent;
-  const bar = (key) => legend.children.find((item) => item.dataset.happUser === key).style.backgroundSize;
+  const label = (key, direction = 'download') => legend.children.find((item) => item.dataset.happUser === key).children[direction === 'download' ? 2 : 4].textContent;
   const plain = (points) => points.map((point) => [point.x, point.y]);
 
   assert.equal(chart.options.animation, false);
   assert.equal(chart.options.scales.y.position, 'right');
-  assert.equal(chart.options.scales.y.ticks.callback(2), '2.0');
+  assert.equal(chart.options.scales.y.ticks.callback(2), '2.0 МБ/с');
   assert.equal(chart.options.scales.x.max, T0);
   assert.equal(chart.options.scales.x.min, T0 - 600000);
   assert.deepEqual(state.intervals.slice().sort((first, second) => first - second), [100, 1000]);
   assert.equal(typeof state.ticker, 'function');
+  assert.equal(chart.data.datasets.length, 4);
   assert.deepEqual(order(), ['B', 'A']);
-  assert.equal(label('B'), 'Пик: 6.00 МБ/с');
-  assert.equal(label('A'), 'Пик: 4.00 МБ/с');
-  assert.equal(bar('B'), '100% 2px');
-  assert.equal(bar('A'), '66.7% 2px');
+  assert.equal(label('B'), 'DL: 6.00');
+  assert.equal(label('B', 'upload'), 'UL: 3.00');
+  assert.equal(label('A'), 'DL: 4.00');
+  assert.equal(label('A', 'upload'), 'UL: 2.00');
   assert.notEqual(series('A').borderColor, series('B').borderColor);
+  assert.notEqual(series('A').borderColor, series('A', 'upload').borderColor);
+  assert.notEqual(series('A', 'upload').borderColor, series('B', 'upload').borderColor);
+  assert.deepEqual(Array.from(series('A', 'upload').borderDash), [5, 3]);
   assert.equal(series('A').fill, false);
   assert.equal(series('A').tension, 0);
   assert.equal(series('A').borderWidth, 1.5);
   assert.equal(series('A').pointBackgroundColor, series('A').borderColor);
   assert.deepEqual(series('B').peakPoint, { x: T0 - 500000, y: 6 });
+  assert.deepEqual(series('B', 'upload').peakPoint, { x: T0 - 500000, y: 3 });
   assert.equal(series('B').pointRadius({ raw: series('B').peakPoint, dataset: series('B') }), 5);
   assert.equal(series('B').pointRadius({ raw: series('B').data[1], dataset: series('B') }), 0);
   console.log('PASS: moving chart starts with per-user colors, pinned peak markers and a legend ordered by peak speed');
@@ -234,10 +240,10 @@ async function testHappChartMotion() {
   state.ticker();
   assert.equal(chart.options.scales.x.max, T0 + 120000);
   assert.deepEqual(order(), ['A', 'B']);
-  assert.equal(label('A'), 'Пик: 4.00 МБ/с');
-  assert.equal(label('B'), 'Пик: 3.00 МБ/с');
-  assert.equal(bar('A'), '100% 2px');
-  assert.equal(bar('B'), '75% 2px');
+  assert.equal(label('A'), 'DL: 4.00');
+  assert.equal(label('A', 'upload'), 'UL: 2.00');
+  assert.equal(label('B'), 'DL: 3.00');
+  assert.equal(label('B', 'upload'), 'UL: 1.50');
   assert.deepEqual(series('B').peakPoint, { x: T0 - 30000, y: 3 });
   state.hidden = true;
   const frozen = state.updates.length;
@@ -255,6 +261,7 @@ async function testHappChartMotion() {
   await state.refresh();
   await new Promise(setImmediate);
   assert.deepEqual(plain(series('A').data.slice(-3)), [[T0, 2], [T0 + 2000, null], [T0 + 119000, 8]]);
+  assert.deepEqual(plain(series('A', 'upload').data.slice(-3)), [[T0, 1], [T0 + 2000, null], [T0 + 119000, 2]]);
   assert.equal(series('B').data.at(-1).x, T0 - 30000);
   assert.equal(chart.options.scales.y.max, Math.max(1, 8 * 1.1));
   const length = series('A').data.length;
@@ -262,7 +269,7 @@ async function testHappChartMotion() {
   await new Promise(setImmediate);
   assert.equal(series('A').data.length, length);
   assert.deepEqual(order(), ['A', 'B']);
-  assert.equal(label('A'), 'Пик: 8.00 МБ/с');
+  assert.equal(label('A'), 'DL: 8.00');
   state.history.sampledAt = T0 + 119000;
   state.history.users[0].points.push({ x: T0 + 2000, y: null }, { x: T0 + 119000, y: 8 });
   state.live = { ...state.live, sampled_at: T0 + 125000, users: [{ user_key: 'A', status: 'active', download_rate: MB, upload_rate: 0 }] };
@@ -272,14 +279,14 @@ async function testHappChartMotion() {
   assert.deepEqual(plain(series('A').data.filter((point) => point.x >= T0 + 119000)), [[T0 + 119000, 8], [T0 + 121000, null], [T0 + 125000, 1]]);
   console.log('PASS: live samples extend the strip, insert gaps, ignore offline users and are replaced once history covers them');
 
-  const direction = { value: 'upload', closest(selector) { return selector === '[data-happ-chart-direction]' ? this : null; } };
-  await state.change({ target: direction });
-  assert.deepEqual(state.trafficRequests.at(-1), { minutes: 10, direction: 'upload' });
+  assert.ok(state.trafficRequests.some((request) => request.direction === 'download'));
+  assert.ok(state.trafficRequests.some((request) => request.direction === 'upload'));
   state.clock = T0 + 130000;
   state.live = { fresh: true, seconds: 5, sampled_at: T0 + 129000, users: [{ user_key: 'A', status: 'active', download_rate: 9 * MB, upload_rate: 3 * MB }] };
   await state.refresh();
   assert.equal(series('A').data.at(-1).x, T0 + 129000);
-  assert.equal(series('A').data.at(-1).y, 3);
+  assert.equal(series('A').data.at(-1).y, 9);
+  assert.equal(series('A', 'upload').data.at(-1).y, 3);
 
   const align = chart.options.scales.x.afterBuildTicks;
   for (const [minutes, step] of [[10, 120000], [30, 300000], [60, 600000], [90, 900000]]) {
@@ -330,6 +337,7 @@ async function testHappChartMotion() {
   assert.equal(calm.state.ticker, null);
   assert.deepEqual(calm.state.intervals, [1000]);
   assert.equal(calm.state.chart.options.scales.x.max, T0);
+  assert.equal(calm.state.chart.data.datasets.length, 2);
   assert.equal(calm.legend.children.length, 1);
   console.log('PASS: reduced motion keeps the chart stepwise without the continuous timer');
 }
@@ -343,6 +351,7 @@ async function main() {
   const topUsers = element();
   const liveRoot = element();
   const canvas = element();
+  canvas.ariaLabel = 'Скорость Download и Upload пользователей HAPP, МБ в секунду';
   const legend = element();
   const activityRows = element();
   let chart;
@@ -355,6 +364,7 @@ async function main() {
   let finishHistory;
   let heldSignal;
   const ranges = [];
+  const directions = [];
   const range = { value: '10', closest(selector) { return selector === '[data-happ-chart-range]' ? this : null; } };
   class FakeChart {
     constructor(target, config) {
@@ -421,9 +431,13 @@ async function main() {
     fetch: async (url, options) => {
       assert.ok(options.signal);
       if (url.startsWith('/happ-server/traffic?minutes=')) {
-        const minutes = Number(new URL(url, 'http://localhost').searchParams.get('minutes'));
+        const params = new URL(url, 'http://localhost').searchParams;
+        const minutes = Number(params.get('minutes'));
+        const direction = params.get('direction');
         ranges.push(minutes);
-        const result = { minutes, direction: new URL(url, 'http://localhost').searchParams.get('direction'), since: historyAt - minutes * 60000, until: historyAt, sampled_at: historyAt, user_count: historyCount, users: historyUsers };
+        directions.push(direction);
+        const users = direction === 'upload' ? historyUsers.map((user) => ({ ...user, peak_bytes_per_second: user.peak_bytes_per_second === null ? null : user.peak_bytes_per_second / 2, points: user.points.map((point) => ({ ...point, y: point.y === null ? null : point.y / 2 })) })) : historyUsers;
+        const result = { minutes, direction, since: historyAt - minutes * 60000, until: historyAt, sampled_at: historyAt, user_count: historyCount, users };
         const response = { status: historyStatus, ok: historyStatus === 200, json: async () => result };
         if (deferHistory) {
           deferHistory = false;
@@ -464,11 +478,13 @@ async function main() {
   assert.equal(received.textContent, '64.0 MB');
   assert.equal(sent.textContent, '8.0 MB');
   console.log('PASS: HAPP TOP-5 bars and IP/protocol aggregate rows render safely with live user totals');
-  assert.equal(chart.data.datasets.length, 2);
+  assert.equal(chart.data.datasets.length, 4);
   assert.equal(chart.data.datasets[0].data[0].y, null);
-  assert.equal(legend.children[0].children[1].textContent, name);
+  assert.equal(chart.data.datasets[1].data[0].y, null);
+  assert.equal(legend.children[0].children[0].textContent, name);
   assert.equal(chart.options.animation, false);
-  const colors = chart.data.datasets.map((series) => series.borderColor);
+  const colorFor = (key, direction) => chart.data.datasets.find((series) => series.userKey === key && series.direction === direction).borderColor;
+  const colors = new Map(['personal-a', 'personal-b'].flatMap((key) => ['download', 'upload'].map((direction) => [`${key}:${direction}`, colorFor(key, direction)])));
   payload = {
     sampled_at: '2026-10-08T00:00:02+00:00',
     users: [{ user_key: 'personal-b', user_name: 'Bob', connections: 1 }, { user_key: 'personal-a', user_name: name, connections: 2 }],
@@ -483,18 +499,24 @@ async function main() {
   await changeRange({ target: range });
   assert.equal(chart.data.datasets[0].data[0].y, 1);
   assert.equal(chart.data.datasets[1].data[0].y, .5);
-  assert.deepEqual(chart.data.datasets.map((series) => series.borderColor), colors);
+  assert.equal(chart.data.datasets[2].data[0].y, .5);
+  assert.equal(colorFor('personal-a', 'download'), colors.get('personal-a:download'));
+  assert.equal(colorFor('personal-a', 'upload'), colors.get('personal-a:upload'));
+  assert.equal(colorFor('personal-b', 'download'), colors.get('personal-b:download'));
+  assert.equal(colorFor('personal-b', 'upload'), colors.get('personal-b:upload'));
   assert.equal(metrics.get('[data-happ-speed]').textContent, '1.50 МБ/с');
-  assert.equal(legend.children[0].children[2].textContent, 'Пик: 1.00 МБ/с');
-  assert.equal(legend.children[1].children[2].textContent, 'Пик: 0.50 МБ/с');
+  assert.equal(legend.children[0].children[2].textContent, 'DL: 1.00');
+  assert.equal(legend.children[0].children[4].textContent, 'UL: 0.50');
+  assert.equal(legend.children[1].children[2].textContent, 'DL: 0.50');
+  assert.equal(legend.children[1].children[4].textContent, 'UL: 0.25');
   assert.equal(chart.options.scales.y.max, 1.1);
   payload.sampled_at = '2026-10-08T00:00:03+00:00';
   payload.traffic_samples = [{ id: 'connection-a', user_key: 'personal-a', download_bytes: 0 }];
   await refresh();
   assert.equal(chart.data.datasets[0].data.at(-1).y, 0);
   assert.equal(chart.data.datasets[1].data.at(-1).y, 0);
-  assert.equal(legend.children[0].children[2].textContent, 'Пик: 1.00 МБ/с');
-  assert.equal(legend.children[0].children[2].title, 'Максимум за 30 минут');
+  assert.equal(legend.children[0].children[2].textContent, 'DL: 1.00');
+  assert.equal(legend.children[0].children[2].title, 'Пик Download за 30 минут: 1.00 МБ/с');
   assert.equal(chart.options.scales.y.max, 1.1);
   const length = chart.data.datasets[0].data.length;
   await refresh();
@@ -503,7 +525,7 @@ async function main() {
     range.value = String(minutes);
     await changeRange({ target: range });
     assert.equal(chart.options.scales.x.max - chart.options.scales.x.min, minutes * 60000);
-    assert.equal(legend.children[0].children[2].textContent, 'Пик: 1.00 МБ/с');
+    assert.equal(legend.children[0].children[2].textContent, 'DL: 1.00');
   }
   deferHistory = true;
   range.value = '30';
@@ -519,15 +541,15 @@ async function main() {
   assert.equal(chart.options.scales.x.max - chart.options.scales.x.min, 90 * 60000);
   historyUsers = [{ user_key: 'new-user', user_name: 'New', peak_bytes_per_second: 2097152, points: [{ x: historyAt, y: 2 }] }, ...historyUsers.slice().reverse()];
   await changeRange({ target: range });
-  assert.equal(chart.data.datasets[1].borderColor, colors[1]);
-  assert.equal(chart.data.datasets[2].borderColor, colors[0]);
-  assert.equal(new Set(chart.data.datasets.map((series) => series.borderColor)).size, 3);
+  assert.equal(colorFor('personal-a', 'download'), colors.get('personal-a:download'));
+  assert.equal(colorFor('personal-b', 'upload'), colors.get('personal-b:upload'));
+  assert.equal(new Set(chart.data.datasets.map((series) => series.borderColor)).size, 6);
   assert.ok(chart.data.datasets.every((series) => series.tension === 0 && series.fill === false));
   historyUsers = Array.from({ length: 12 }, (_, index) => ({ user_key: `user-${index}`, user_name: `User ${index}`, peak_bytes_per_second: 1048576, points: [{ x: historyAt, y: 1 }] }));
   historyCount = 12;
   await changeRange({ target: range });
-  assert.equal(chart.data.datasets.length, 10);
-  assert.equal(new Set(chart.data.datasets.map((series) => series.borderColor)).size, 10);
+  assert.equal(chart.data.datasets.length, 20);
+  assert.equal(new Set(chart.data.datasets.map((series) => series.borderColor)).size, 20);
   assert.equal(legend.children.length, 10);
   assert.equal(metrics.get('[data-happ-chart-overflow]').textContent, 'Ещё 2 пользователей в истории');
   httpStatus = 503;
@@ -546,7 +568,7 @@ async function main() {
   historyUsers = [{ user_key: 'personal-a', user_name: name, peak_bytes_per_second: 2097152, points: [{ x: historyAt, y: 2 }] }];
   historyCount = 1;
   await changeRange({ target: range });
-  assert.equal(legend.children[0].children[2].textContent, 'Пик: 2.00 МБ/с');
+  assert.equal(legend.children[0].children[2].textContent, 'DL: 2.00');
   assert.equal(chart.options.scales.y.max, 2.2);
   const series = chart.data.datasets[0];
   const spikeAt = historyAt;
@@ -587,6 +609,7 @@ async function main() {
   await refresh();
   assert.equal(metrics.get('[data-happ-speed]').textContent, '2.00 МБ/с');
   assert.ok([10, 30, 60, 90].every((minutes) => ranges.includes(minutes)));
+  assert.ok(directions.includes('download') && directions.includes('upload'));
   console.log('PASS: HAPP live rates, persisted maxima, four ranges, request races, colors, limit and stale/empty states');
   payload.activity = { seconds: 5, fresh: true, sampled_at: historyAt, users: [
     { user_key: 'personal-a', user_name: name, status: 'active', connections: 3, ips: ['203.0.113.1', '2001:db8::1'], download_bytes: 1073741824, upload_bytes: 1048576, download_rate: 2097152, upload_rate: 1048576, download_peak: 4194304, upload_peak: 2097152 },
@@ -661,15 +684,13 @@ async function main() {
   secondsControl.value = '61';
   await changeRange({ target: secondsControl });
   assert.equal(secondsControl.value, '60');
-  const directionControl = { value: 'upload', closest(selector) { return selector === '[data-happ-chart-direction]' ? this : null; } };
-  await changeRange({ target: directionControl });
-  assert.equal(chart.data.datasets.length, 1);
-  assert.ok(canvas.ariaLabel.includes('отправки'));
+  assert.equal(chart.data.datasets.length, 2);
+  assert.ok(canvas.ariaLabel.includes('Download и Upload'));
   httpStatus = 503;
   await refresh();
   assert.equal(metrics.get('[data-happ-current]').textContent, '— / —');
   assert.equal(activityRows.children[0].children[0].textContent, 'Ожидание свежих данных.');
-  console.log('PASS: activity identity, IPs, lifetime totals, rates, peak window, upload mode, races and stale states');
+  console.log('PASS: activity identity, IPs, lifetime totals, rates, peak window, dual-direction history, races and stale states');
 }
 
 main().catch((error) => {

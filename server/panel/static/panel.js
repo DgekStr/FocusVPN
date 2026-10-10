@@ -237,11 +237,11 @@
         },
         scales: {
           x: { type: 'linear', min: now - 600000, max: now, border: { display: false }, grid: { color: 'rgba(169,179,196,.08)' }, afterBuildTicks: alignHappTicks, ticks: { color: '#aab0be', maxTicksLimit: 7, maxRotation: 0, font: { size: 10 }, callback: clock } },
-          y: { position: 'right', beginAtZero: true, suggestedMax: 1, border: { display: false }, grid: { color: 'rgba(169,179,196,.11)' }, ticks: { color: '#aab0be', padding: 8, maxTicksLimit: 6, font: { size: 10 }, callback: (value) => Number(value).toFixed(1) } },
+          y: { position: 'right', beginAtZero: true, suggestedMax: 1, border: { display: false }, grid: { color: 'rgba(169,179,196,.11)' }, ticks: { color: '#aab0be', padding: 8, maxTicksLimit: 6, font: { size: 10 }, callback: (value) => `${Number(value).toFixed(1)} МБ/с` } },
         },
       },
     });
-    const state = { chart, previous: new Map(), sampledAt: null, colors: new Map(), maximum: 0, minutes: 10, direction: 'download', seconds: 5, historyDue: 0, historyLoading: false, historyRequest: 0, historyController: null, clock: { until: now, at: now }, edge: now, drawnEdge: now, live: new Map(), liveAt: 0, loaded: false, legendAt: 0, legendItems: new Map(), legendOrder: null, tickTimer: null };
+    const state = { chart, previous: new Map(), sampledAt: null, colors: new Map(), maximum: 0, minutes: 10, seconds: 5, historyDue: 0, historyLoading: false, historyRequest: 0, historyController: null, clock: { until: now, at: now }, edge: now, drawnEdge: now, live: new Map(), liveAt: 0, loaded: false, legendAt: 0, legendItems: new Map(), legendOrder: null, tickTimer: null };
     happTraffic = state;
     if (!window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
       state.tickTimer = window.setInterval(() => { if (happTraffic === state) tickHappTraffic(state); }, 100);
@@ -262,7 +262,7 @@
         if (!peak || point.y >= peak.y) peak = point;
       }
       dataset.peakPoint = peak && peak.y > 0 ? peak : null;
-      return { key: dataset.userKey, name: dataset.label, color: dataset.borderColor, peak: peak ? peak.y : null };
+      return { key: dataset.userKey, direction: dataset.direction, name: dataset.userName, color: dataset.borderColor, peak: peak ? peak.y : null };
     });
   }
 
@@ -286,7 +286,17 @@
     state.legendAt = Date.now();
     const legend = document.querySelector('[data-happ-chart-legend]');
     if (!legend) return;
-    const entries = happPeaks(state, edge).sort((first, second) => (second.peak ?? -1) - (first.peak ?? -1));
+    const grouped = new Map();
+    for (const series of happPeaks(state, edge)) {
+      let entry = grouped.get(series.key);
+      if (!entry) {
+        entry = { key: series.key, name: series.name, download: null, upload: null, downloadColor: null, uploadColor: null };
+        grouped.set(series.key, entry);
+      }
+      entry[series.direction] = series.peak;
+      entry[`${series.direction}Color`] = series.color;
+    }
+    const entries = [...grouped.values()].sort((first, second) => Math.max(second.download || 0, second.upload || 0) - Math.max(first.download || 0, first.upload || 0));
     const order = entries.map((entry) => entry.key).join('\u0000');
     if (!entries.length) {
       if (state.legendOrder !== '' || !legend.children.length) {
@@ -300,29 +310,35 @@
       }
       return;
     }
-    const maximum = Math.max(0, ...entries.map((entry) => entry.peak || 0));
+    const maximum = Math.max(0, ...entries.flatMap((entry) => [entry.download || 0, entry.upload || 0]));
     const elements = entries.map((entry) => {
       let item = state.legendItems.get(entry.key);
       if (!item) {
         const root = document.createElement('div');
         root.className = 'happ-chart-user';
         root.dataset.happUser = entry.key;
-        const swatch = document.createElement('span');
-        swatch.className = 'happ-chart-swatch';
         const name = document.createElement('strong');
-        const amount = document.createElement('small');
-        root.append(swatch, name, amount);
-        item = { root, swatch, name, amount };
+        const downloadSwatch = document.createElement('span');
+        downloadSwatch.className = 'happ-chart-swatch download';
+        const downloadAmount = document.createElement('small');
+        const uploadSwatch = document.createElement('span');
+        uploadSwatch.className = 'happ-chart-swatch upload';
+        const uploadAmount = document.createElement('small');
+        root.append(name, downloadSwatch, downloadAmount, uploadSwatch, uploadAmount);
+        item = { root, name, downloadSwatch, downloadAmount, uploadSwatch, uploadAmount };
         state.legendItems.set(entry.key, item);
       }
-      const amountText = entry.peak === null ? 'Ожидание замера' : `Пик: ${entry.peak.toFixed(2)} МБ/с`;
       if (item.name.textContent !== entry.name) item.name.textContent = entry.name;
       item.name.title = entry.name;
-      if (item.amount.textContent !== amountText) item.amount.textContent = amountText;
-      item.amount.title = `Максимум за ${state.minutes} минут`;
-      item.swatch.style.backgroundColor = entry.color;
-      item.root.style.backgroundImage = `linear-gradient(${entry.color}, ${entry.color})`;
-      item.root.style.backgroundSize = `${maximum > 0 && entry.peak ? Math.round(entry.peak / maximum * 1000) / 10 : 0}% 2px`;
+      for (const direction of ['download', 'upload']) {
+        const amount = item[`${direction}Amount`];
+        const peak = entry[direction];
+        const amountText = peak === null ? `${direction === 'download' ? 'DL' : 'UL'}: —` : `${direction === 'download' ? 'DL' : 'UL'}: ${peak.toFixed(2)}`;
+        if (amount.textContent !== amountText) amount.textContent = amountText;
+        amount.title = `Пик ${direction === 'download' ? 'Download' : 'Upload'} за ${state.minutes} минут${peak === null ? ': нет замеров' : `: ${peak.toFixed(2)} МБ/с`}`;
+        item[`${direction}Swatch`].style.color = entry[`${direction}Color`];
+        item[`${direction}Swatch`].style.backgroundColor = direction === 'download' ? entry.downloadColor : 'transparent';
+      }
       return item.root;
     });
     for (const key of [...state.legendItems.keys()]) {
@@ -343,21 +359,28 @@
     return true;
   }
 
+  function happSeriesKey(userKey, direction) {
+    return `${userKey}\u0000${direction}`;
+  }
+
   function appendHappLivePoints(activity) {
     const state = happTraffic;
     if (!state || activity?.fresh !== true || !Number.isFinite(activity.sampled_at) || activity.sampled_at <= state.liveAt) return;
     state.liveAt = activity.sampled_at;
-    const field = state.direction === 'upload' ? 'upload_rate' : 'download_rate';
-    const datasets = new Map(state.chart.data.datasets.map((dataset) => [dataset.userKey, dataset]));
+    const datasets = new Map(state.chart.data.datasets.map((dataset) => [happSeriesKey(dataset.userKey, dataset.direction), dataset]));
     for (const user of Array.isArray(activity.users) ? activity.users : []) {
       const key = String(user.user_key);
-      const dataset = datasets.get(key);
-      const rate = user[field];
-      if (!dataset || !['active', 'connected'].includes(user.status) || !Number.isFinite(rate)) continue;
-      const point = { x: activity.sampled_at, y: Math.max(0, rate) / 1048576 };
-      if (!pushHappPoint(dataset.data, point)) continue;
-      state.live.set(key, [...(state.live.get(key) || []), point]);
-      state.maximum = Math.max(state.maximum, point.y);
+      if (!['active', 'connected'].includes(user.status)) continue;
+      for (const direction of ['download', 'upload']) {
+        const dataset = datasets.get(happSeriesKey(key, direction));
+        const rate = user[`${direction}_rate`];
+        if (!dataset || !Number.isFinite(rate)) continue;
+        const point = { x: activity.sampled_at, y: Math.max(0, rate) / 1048576 };
+        if (!pushHappPoint(dataset.data, point)) continue;
+        const seriesKey = happSeriesKey(key, direction);
+        state.live.set(seriesKey, [...(state.live.get(seriesKey) || []), point]);
+        state.maximum = Math.max(state.maximum, point.y);
+      }
     }
     state.chart.options.scales.y.max = Math.max(1, state.maximum * 1.1);
   }
@@ -401,31 +424,55 @@
   }
 
   function renderHappTrafficHistory(payload, state) {
-    const palette = ['#22d3ee', '#f472b6', '#5eead4', '#fbbf24', '#a78bfa', '#fb7185', '#38bdf8', '#a3e635', '#fb923c', '#c4b5fd'];
-    const users = (Array.isArray(payload.users) ? payload.users : []).slice(0, 10);
-    const reserved = new Set(users.map((user) => state.colors.get(String(user.user_key))).filter(Boolean));
+    const downloadPalette = ['#22d3ee', '#f472b6', '#5eead4', '#fbbf24', '#a78bfa', '#fb7185', '#38bdf8', '#a3e635', '#fb923c', '#c4b5fd'];
+    const uploadPalette = ['#f97316', '#818cf8', '#14b8a6', '#e879f9', '#84cc16', '#ef4444', '#0ea5e9', '#d946ef', '#eab308', '#2dd4bf'];
+    const userMap = new Map();
+    for (const direction of ['download', 'upload']) {
+      for (const user of Array.isArray(payload[direction]?.users) ? payload[direction].users : []) {
+        const key = String(user.user_key);
+        let combined = userMap.get(key);
+        if (!combined) {
+          combined = { user_key: key, user_name: user.user_name || 'Не определён', download: null, upload: null };
+          userMap.set(key, combined);
+        }
+        combined[direction] = user;
+      }
+    }
+    const users = [...userMap.values()].sort((first, second) => {
+      const peak = (user, direction) => Math.max(0, Number(user[direction]?.peak_bytes_per_second) || 0);
+      return Math.max(peak(second, 'download'), peak(second, 'upload')) - Math.max(peak(first, 'download'), peak(first, 'upload'));
+    }).slice(0, 10);
+    const reserved = new Set(users.map((user) => state.colors.get(user.user_key)?.download).filter(Boolean));
     const used = new Set();
-    const previous = new Map(state.chart.data.datasets.map((dataset) => [dataset.userKey, dataset]));
+    const previous = new Map(state.chart.data.datasets.map((dataset) => [happSeriesKey(dataset.userKey, dataset.direction), dataset]));
     const datasets = [];
     const tails = new Map();
     let maximum = 0;
     for (const user of users) {
-      const key = String(user.user_key);
-      let color = state.colors.get(key);
-      if (!color || used.has(color)) color = palette.find((value) => !reserved.has(value) && !used.has(value)) || palette.find((value) => !used.has(value));
-      state.colors.set(key, color);
-      used.add(color);
-      const nameText = user.user_name || 'Не определён';
-      const peak = user.peak_bytes_per_second === null ? null : Math.max(0, Number(user.peak_bytes_per_second) || 0) / 1048576;
-      const points = Array.isArray(user.points) ? user.points.slice() : [];
-      maximum = Math.max(maximum, peak || 0, ...points.map((point) => Number.isFinite(point.y) ? Math.max(0, point.y) : 0));
-      const tail = (state.live.get(key) || []).filter((point) => payload.sampled_at === null || point.x > payload.sampled_at);
-      tails.set(key, tail);
-      for (const point of tail) pushHappPoint(points, point);
-      maximum = Math.max(maximum, ...tail.map((point) => point.y));
-      const dataset = previous.get(key) || { userKey: key };
-      Object.assign(dataset, { label: nameText, data: points, borderColor: color, backgroundColor: color, borderWidth: 1.5, pointRadius: happPeakRadius, pointHoverRadius: 5, pointBackgroundColor: color, pointBorderColor: '#171a24', pointBorderWidth: 2, pointHitRadius: 8, tension: 0, fill: false, spanGaps: false });
-      datasets.push(dataset);
+      let colors = state.colors.get(user.user_key);
+      if (!colors || used.has(colors.download)) {
+        const index = downloadPalette.findIndex((value) => !reserved.has(value) && !used.has(value));
+        const colorIndex = index >= 0 ? index : downloadPalette.findIndex((value) => !used.has(value));
+        colors = { download: downloadPalette[colorIndex], upload: uploadPalette[colorIndex] };
+        state.colors.set(user.user_key, colors);
+      }
+      used.add(colors.download);
+      for (const direction of ['download', 'upload']) {
+        const source = user[direction];
+        const seriesKey = happSeriesKey(user.user_key, direction);
+        const color = colors[direction];
+        const peak = source?.peak_bytes_per_second == null ? null : Math.max(0, Number(source.peak_bytes_per_second) || 0) / 1048576;
+        const points = Array.isArray(source?.points) ? source.points.slice() : [];
+        maximum = Math.max(maximum, peak || 0, ...points.map((point) => Number.isFinite(point.y) ? Math.max(0, point.y) : 0));
+        const tail = (state.live.get(seriesKey) || []).filter((point) => payload.sampled_at === null || point.x > payload.sampled_at);
+        tails.set(seriesKey, tail);
+        for (const point of tail) pushHappPoint(points, point);
+        maximum = Math.max(maximum, ...tail.map((point) => point.y));
+        const dataset = previous.get(seriesKey) || { userKey: user.user_key, direction };
+        const directionLabel = direction === 'download' ? 'Download' : 'Upload';
+        Object.assign(dataset, { userName: user.user_name, label: `${user.user_name} · ${directionLabel}`, data: points, borderColor: color, backgroundColor: color, borderDash: direction === 'upload' ? [5, 3] : [], borderWidth: 1.5, pointRadius: happPeakRadius, pointHoverRadius: 5, pointBackgroundColor: color, pointBorderColor: '#171a24', pointBorderWidth: 2, pointHitRadius: 8, tension: 0, fill: false, spanGaps: false });
+        datasets.push(dataset);
+      }
     }
     state.live = tails;
     state.loaded = true;
@@ -455,14 +502,17 @@
     const request = ++state.historyRequest;
     const timeout = window.setTimeout(() => controller.abort(), 10000);
     try {
-      const response = await fetch(panelPath(`/happ-server/traffic?minutes=${state.minutes}&direction=${state.direction}`), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
-      if (response.status === 401) {
+      const responses = await Promise.all(['download', 'upload'].map((direction) => fetch(panelPath(`/happ-server/traffic?minutes=${state.minutes}&direction=${direction}`), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal })));
+      if (responses.some((response) => response.status === 401)) {
         window.location.reload();
         return;
       }
-      if (!response.ok) throw new Error('History unavailable');
-      const payload = await response.json();
-      if (happTraffic === state && state.historyRequest === request && payload.minutes === state.minutes && (payload.direction || 'download') === state.direction) renderHappTrafficHistory(payload, state);
+      if (responses.some((response) => !response.ok)) throw new Error('History unavailable');
+      const [download, upload] = await Promise.all(responses.map((response) => response.json()));
+      if (happTraffic === state && state.historyRequest === request && download.minutes === state.minutes && upload.minutes === state.minutes && download.direction === 'download' && upload.direction === 'upload') {
+        const sampledAt = download.sampled_at === null || upload.sampled_at === null ? null : Math.min(download.sampled_at, upload.sampled_at);
+        renderHappTrafficHistory({ download, upload, sampled_at: sampledAt, until: Math.min(download.until, upload.until), user_count: Math.max(download.user_count || 0, upload.user_count || 0) }, state);
+      }
     } catch (_) {
       if (happTraffic === state && state.historyRequest === request) happTrafficStatus('История недоступна', true);
     } finally {
@@ -483,17 +533,10 @@
       renderHappActivity(null);
       return;
     }
-    const directionControl = event.target.closest('[data-happ-chart-direction]');
     const control = event.target.closest('[data-happ-chart-range]');
     const minutes = control ? Number(control.value) : happTraffic?.minutes;
-    if (!directionControl && !control) return;
+    if (!control) return;
     if (!happTraffic || ![10, 30, 60, 90].includes(minutes)) return;
-    if (directionControl) {
-      if (!['download', 'upload'].includes(directionControl.value)) return;
-      happTraffic.direction = directionControl.value;
-      const canvas = document.querySelector('[data-happ-traffic-chart]');
-      if (canvas) canvas.ariaLabel = `Скорость ${happTraffic.direction === 'upload' ? 'отправки' : 'скачивания'} пользователей HAPP, МБ в секунду`;
-    }
     happTraffic.minutes = minutes;
     happTraffic.maximum = 0;
     happTraffic.chart.data.datasets = [];

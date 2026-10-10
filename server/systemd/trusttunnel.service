@@ -1,0 +1,30 @@
+[Unit]
+Description=TrustTunnel endpoint for HAPP users (FocusVPN)
+Wants=network-online.target
+After=network-online.target sing-box-happ-server.service
+
+[Service]
+Type=simple
+User=sing-box
+Group=sing-box
+ExecStart=/opt/trusttunnel/trusttunnel_endpoint /etc/sing-box-happ-server/trusttunnel/vpn.toml /etc/sing-box-happ-server/trusttunnel/hosts.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=1048576
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

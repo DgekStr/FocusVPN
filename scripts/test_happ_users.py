@@ -19,7 +19,7 @@ from urllib.parse import urlsplit, parse_qs, quote, unquote, urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server' / 'panel'))
 from happ_users import HappUsers, build_user_config, user_link, now_utc, write_private_json
-from happ_server import happ_add_link, subscription_content, HAPP_DIRECT_SITES, SUBSCRIPTION_ANNOUNCEMENT, subscription_information_page, validate_subscription_content, vless_link_for_subscription
+from happ_server import happ_add_link, subscription_content, HAPP_DIRECT_SITES, SUBSCRIPTION_ANNOUNCEMENT, subscription_information_page, update_interval_hours, validate_subscription_content, validate_update_minutes, vless_link_for_subscription
 from happ_history import HappHistory
 if sys.platform == 'win32':
     sys.modules.setdefault('grp', types.ModuleType('grp'))
@@ -257,6 +257,28 @@ class HappUserTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_subscription_content('OK', 'x' * 2001)
 
+    def test_update_minutes_accept_only_ten_to_six_hundred_whole_minutes(self):
+        for value, expected in ((10, 10), ('10', 10), (' 60 ', 60), ('600', 600), (359, 359)):
+            with self.subTest(value=value):
+                self.assertEqual(validate_update_minutes(value), expected)
+        for value in (9, 601, 0, -10, '', ' ', None, True, False, 'abc', '60.5', '1e2', '+60', '-10', '٣٠', '1' * 5, 60.0, [60]):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'от 10 до 600'):
+                validate_update_minutes(value)
+
+    def test_subscription_update_interval_is_whole_hours_rounded_from_minutes(self):
+        user = {'name': 'Alice', 'link': self.link}
+        expected = {10: '1', 29: '1', 30: '1', 60: '1', 89: '1', 90: '2', 119: '2', 120: '2', 150: '3', 359: '6', 600: '10'}
+        for minutes, hours in expected.items():
+            with self.subTest(minutes=minutes):
+                content, headers = subscription_content(user, {}, update_minutes=minutes)
+                self.assertEqual(headers['profile-update-interval'], hours)
+                self.assertIn(('#profile-update-interval: ' + hours + '\n').encode('ascii'), content)
+        self.assertEqual(subscription_content(user, {})[1]['profile-update-interval'], '1')
+        for broken in (None, '', 'abc', 5, 601, -60, '60.5', {}):
+            with self.subTest(broken=broken):
+                self.assertEqual(update_interval_hours(broken), 1)
+                self.assertEqual(subscription_content(user, {}, update_minutes=broken)[1]['profile-update-interval'], '1')
+
     def test_subscription_information_page_uses_and_escapes_custom_content(self):
         page = subscription_information_page('<b>Private VPN</b>', '<script>alert(1)</script>')
         self.assertIn('&lt;b&gt;Private VPN&lt;/b&gt;', page)
@@ -390,18 +412,23 @@ class HappUserTests(unittest.TestCase):
         user_id = self.manager.create('Alice')
         urls = self.manager.subscription_urls('http://127.0.0.1:9443')
         self.assertEqual(happ_add_link(urls[user_id]), 'happ://add/' + urls[user_id])
-        with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
-            page = happ_server_ui.page(self.manager.users(), traffic={'personal-' + user_id: {'download': '64.0 MB', 'upload': '8.0 MB'}}, subscriptions=urls, endpoint_host='subscriptions.example.net')
+        page = happ_server_ui.page(self.manager.users(), traffic={'personal-' + user_id: {'download': '64.0 MB', 'upload': '8.0 MB'}}, subscriptions=urls)
         self.assertIn('data-happ-link="happ://add/' + urls[user_id] + '"', page)
-        self.assertIn('data-happ-link="happ://add/' + urls['VIP'] + '"', page)
+        self.assertNotIn('data-happ-link="happ://add/' + urls['VIP'] + '"', page)
         self.assertIn('Открыть HAPP</a><div class="happ-account-traffic">', page)
         self.assertIn('data-account-download>64.0 MB', page)
         self.assertIn('data-account-upload>8.0 MB', page)
         self.assertIn('action="/happ-users/traffic/reset"', page)
         self.assertIn('data-happ-traffic-reset', page)
         self.assertIn('Нарастающий итог с момента включения накопительной статистики', page)
-        self.assertIn('Endpoint: subscriptions.example.net:9445', page)
-        self.assertGreater(page.index('VIP VLESS · существующая ссылка'), page.index('Журнал персонального доступа'))
+
+    def test_vip_link_block_is_not_duplicated_on_happ_server_page(self):
+        urls = self.manager.subscription_urls('http://127.0.0.1:9443')
+        page = happ_server_ui.page(self.manager.users(), 'test-csrf', subscriptions=urls)
+        for marker in ('VIP VLESS', 'существующая ссылка', 'data-qr-open="public"', 'public-link-field', 'Public VLESS link', 'Endpoint:', self.link):
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, page)
+        self.assertIn('data-qr-modal', page)
 
     def test_personal_access_log_formats_russian_utc(self):
         cases = (
@@ -416,8 +443,7 @@ class HappUserTests(unittest.TestCase):
             with self.subTest(timestamp=timestamp):
                 events = [{'at': timestamp, 'name': name, 'operation': operation}]
                 original = [item.copy() for item in events]
-                with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
-                    page = happ_server_ui.page([], events=events)
+                page = happ_server_ui.page([], events=events)
                 self.assertIn('<th>Время UTC</th>', page)
                 self.assertIn(f'<tr><td>{expected}</td><td>{name}</td><td>{label}</td></tr>', page)
                 if timestamp:
@@ -425,8 +451,7 @@ class HappUserTests(unittest.TestCase):
                 self.assertEqual(events, original)
 
     def test_live_connections_precede_user_management(self):
-        with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
-            page = happ_server_ui.page([])
+        page = happ_server_ui.page([])
         connections_position = page.index('Подключения HAPP')
         users_position = page.index('Пользователи HAPP')
         self.assertLess(connections_position, users_position)
@@ -450,8 +475,7 @@ class HappUserTests(unittest.TestCase):
         self.assertNotIn('не являются накопленным итогом закрытых сессий.', page)
 
     def test_user_creation_is_in_styled_modal(self):
-        with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
-            page = happ_server_ui.page([], 'test-csrf')
+        page = happ_server_ui.page([], 'test-csrf')
         users_panel = page.split('<h2>Пользователи HAPP</h2>', 1)[1].split('TOP-5 по трафику', 1)[0]
         self.assertIn('type="button" data-happ-user-create-open>Добавить нового пользователя', users_panel)
         self.assertNotIn('action="/happ-users/create"', users_panel)
@@ -465,14 +489,9 @@ class HappUserTests(unittest.TestCase):
         self.assertIn('type="button" data-happ-user-create-cancel>Отмена', modal)
         self.assertIn('type="submit">Создать пользователя', modal)
         self.assertEqual(page.count('action="/happ-users/create"'), 1)
-        self.assertIn('/panel.css?v=2.1.9', page)
-        self.assertIn('/panel.js?v=2.1.9', page)
+        self.assertIn('/panel.css?v=2.2.0', page)
+        self.assertIn('/panel.js?v=2.2.0', page)
         self.assertIn('/happ-actions.js?v=10', page)
-
-    def test_happ_server_vip_endpoint_brackets_ipv6_subscription_host(self):
-        with patch.object(happ_server_ui, 'load_state', return_value={'server': 'old.example.net'}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
-            page = happ_server_ui.page([], endpoint_host='2001:db8::10')
-        self.assertIn('Endpoint: [2001:db8::10]:9445', page)
 
     def test_subscription_origin_prefers_settings_then_env_then_public_host(self):
         with patch.object(app, 'HAPP_SUBSCRIPTION_BASE_URL', ''), patch.object(app, 'PORT', 9443):
@@ -540,10 +559,19 @@ class HappUserTests(unittest.TestCase):
             self.assertEqual(saved['link'], self.link)
             self.assertIn('<title>Focus VPN</title>', app.render_shell('Настройки', '', 'settings'))
             app.save_happ_subscription_content('Focus VPN', '')
-            self.assertEqual(json.loads(self.public_path.read_text(encoding='utf-8'))['subscription_announcement'], '')
+            saved = json.loads(self.public_path.read_text(encoding='utf-8'))
+            self.assertEqual((saved['subscription_announcement'], saved['subscription_update_minutes']), ('', 60))
+            app.save_happ_subscription_content('Focus VPN', '', '180')
+            self.assertEqual(json.loads(self.public_path.read_text(encoding='utf-8'))['subscription_update_minutes'], 180)
+            app.save_happ_subscription_content('Focus VPN', 'Текст', '')
+            self.assertEqual(json.loads(self.public_path.read_text(encoding='utf-8'))['subscription_update_minutes'], 180)
+            for invalid in ('9', '601', 'abc', '60.5', '-10'):
+                with self.subTest(minutes=invalid), self.assertRaisesRegex(ValueError, 'от 10 до 600'):
+                    app.save_happ_subscription_content('Other title', 'Другой текст', invalid)
             with self.assertRaises(ValueError):
                 app.save_happ_subscription_content('Bad\nTitle', 'Текст')
-            self.assertEqual(json.loads(self.public_path.read_text(encoding='utf-8'))['subscription_title'], 'Focus VPN')
+            saved = json.loads(self.public_path.read_text(encoding='utf-8'))
+            self.assertEqual((saved['subscription_title'], saved['subscription_announcement'], saved['subscription_update_minutes']), ('Focus VPN', 'Текст', 180))
         self.assertEqual(self.manager.vip()['link'], self.link)
         self.assertEqual(json.loads(self.config_path.read_text())['inbounds'][0]['users'], self.config['inbounds'][0]['users'])
 
@@ -567,6 +595,7 @@ class HappUserTests(unittest.TestCase):
                 'csrf': app.CSRF_TOKEN,
                 'subscription_title': 'Focus VPN',
                 'subscription_announcement': 'Обновлённый текст HAPP',
+                'subscription_update_minutes': '120',
             })
             with patch.object(app, 'HAPP_STATE_PATH', self.public_path), patch.object(app, 'load_happ_state', side_effect=lambda: json.loads(self.public_path.read_text(encoding='utf-8'))), patch.object(panel_ui, 'load_happ_state', side_effect=lambda: json.loads(self.public_path.read_text(encoding='utf-8'))), patch.object(app, 'backup_file'), patch.object(app, 'write_atomic_file', side_effect=lambda path, content, **kwargs: path.write_bytes(content)), patch.object(app.Handler, 'vpn_client_allowed', return_value=True), patch.object(app.Handler, 'session_authenticated', return_value=True):
                 connection.request('POST', '/settings/happ/announcement', body=form, headers={'Content-Type': 'application/x-www-form-urlencoded'})
@@ -581,7 +610,17 @@ class HappUserTests(unittest.TestCase):
             saved = json.loads(self.public_path.read_text(encoding='utf-8'))
             self.assertEqual(saved['subscription_title'], 'Focus VPN')
             self.assertEqual(saved['subscription_announcement'], 'Обновлённый текст HAPP')
+            self.assertEqual(saved['subscription_update_minutes'], 120)
             self.assertEqual(saved['link'], self.link)
+            rejected = urlencode({'csrf': app.CSRF_TOKEN, 'subscription_title': 'Changed', 'subscription_announcement': 'Changed', 'subscription_update_minutes': '5'})
+            with patch.object(app, 'HAPP_STATE_PATH', self.public_path), patch.object(app, 'load_happ_state', side_effect=lambda: json.loads(self.public_path.read_text(encoding='utf-8'))), patch.object(app, 'backup_file'), patch.object(app, 'write_atomic_file', side_effect=lambda path, content, **kwargs: path.write_bytes(content)), patch.object(app.Handler, 'vpn_client_allowed', return_value=True), patch.object(app.Handler, 'session_authenticated', return_value=True):
+                connection.request('POST', '/settings/happ/announcement', body=rejected, headers={'Content-Type': 'application/x-www-form-urlencoded'})
+                response = connection.getresponse()
+                response.read()
+                query = parse_qs(urlsplit(response.getheader('Location')).query)
+                self.assertEqual((response.status, query['kind']), (303, ['error']))
+                self.assertIn('от 10 до 600', query['message'][0])
+            self.assertEqual(json.loads(self.public_path.read_text(encoding='utf-8')), saved)
         finally:
             connection.close()
             server.shutdown()
@@ -653,10 +692,11 @@ class HappUserTests(unittest.TestCase):
                 self.assertIn('text-align:justify', information)
                 self.assertIn('focuslens.dev', information)
                 self.assertNotIn(users[0]['link'], information)
-                subscription_state.update(subscription_title='Private VPN', subscription_announcement='Новое объявление HAPP')
+                subscription_state.update(subscription_title='Private VPN', subscription_announcement='Новое объявление HAPP', subscription_update_minutes=600)
                 connection.request('GET', '/happ-subscription/' + token)
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
+                self.assertEqual(response.getheader('profile-update-interval'), '10')
                 self.assertEqual(
                     base64.b64decode(response.getheader('profile-title').removeprefix('base64:')).decode('utf-8'),
                     'Private VPN Alice',
@@ -710,11 +750,11 @@ class HappUserTests(unittest.TestCase):
     def test_vip_and_personal_open_buttons_use_configuration_deep_links(self):
         self.manager.create('Alice & Bob')
         users = self.manager.users()
-        with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com', 'port': 9445}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
-            page = happ_server_ui.page(users, 'test-csrf')
-        for link in (self.link, users[0]['link']):
-            expected = html.escape('happ://add/' + quote(link, safe=''), quote=True)
-            self.assertIn('href="' + expected + '" data-happ-action="open" data-happ-link="' + expected + '"', page)
+        page = happ_server_ui.page(users, 'test-csrf')
+        expected = html.escape('happ://add/' + quote(users[0]['link'], safe=''), quote=True)
+        self.assertIn('href="' + expected + '" data-happ-action="open" data-happ-link="' + expected + '"', page)
+        vip_expected = html.escape('happ://add/' + quote(self.link, safe=''), quote=True)
+        self.assertNotIn(vip_expected, page)
         self.vip_intact()
 
     def test_create_disable_enable_delete_preserve_vip(self):
@@ -789,12 +829,11 @@ class HappUserTests(unittest.TestCase):
         original_uuid = self.manager.registry()['users'][0]['uuid']
         self.manager.action(user_id, 'update', '<script>unsafe</script>', (now_utc() + dt.timedelta(days=1)).isoformat())
         self.assertEqual(self.manager.registry()['users'][0]['uuid'], original_uuid)
-        with patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com', 'port': 9445}), patch.object(happ_server_ui, 'public_vless_link', return_value=self.link):
-            page = happ_server_ui.page(self.manager.users(), 'test-csrf', events=self.manager.events())
+        page = happ_server_ui.page(self.manager.users(), 'test-csrf', events=self.manager.events())
         self.assertIn('&lt;script&gt;', page)
         self.assertNotIn('<script>unsafe</script>', page)
         self.assertIn('/happ-users/' + user_id + '/qr', page)
-        self.assertIn('VIP VLESS', page)
+        self.assertNotIn('VIP VLESS', page)
 
 
 if __name__ == '__main__':

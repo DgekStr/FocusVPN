@@ -10,6 +10,8 @@ import hashlib
 from pathlib import Path
 from urllib import error, request
 
+from happ_protocols import HYSTERIA2_TAG, TROJAN_TAG
+
 
 CLASH_API_URL = os.environ.get('FOCUSVPN_HAPP_CLASH_API_URL', 'http://127.0.0.1:9090').rstrip('/')
 USER_DIR = Path('/etc/sing-box-admin')
@@ -62,7 +64,7 @@ def authenticated_peers(events, names, vip_names, inbound_tag, records=None):
     pending_visits = records.setdefault('pending_visits', {})
     for event in events:
         message = journal_message(event)
-        match = re.search(r'\[(\d+) [^\]]+\] inbound/vless\[' + re.escape(inbound_tag) + r'\]: (.*)', message)
+        match = re.search(r'\[(\d+) [^\]]+\] inbound/(?:vless\[' + re.escape(inbound_tag) + r'\]|trojan\[' + re.escape(TROJAN_TAG) + r'\]|hysteria2\[' + re.escape(HYSTERIA2_TAG) + r'\]): (.*)', message)
         if not match:
             continue
         key = (str(event.get('_PID', '')), match.group(1))

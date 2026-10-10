@@ -26,10 +26,13 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlspl
 
 from wg_admin import WgAdmin
 from wg_easy_api import WgEasyApi, WgEasyApiError
-from happ_server import DEFAULT_SUBSCRIPTION_TITLE, SUBSCRIPTION_ANNOUNCEMENT
+from happ_server import DEFAULT_SUBSCRIPTION_TITLE, DEFAULT_UPDATE_MINUTES, MAX_UPDATE_MINUTES, MIN_UPDATE_MINUTES, SUBSCRIPTION_ANNOUNCEMENT
 from happ_server import load_state as load_happ_state
-from happ_server import public_vless_link, subscription_content, subscription_information_page, validate_subscription_content, vless_link_for_subscription
+from happ_server import normalize_update_minutes, public_vless_link, subscription_content, subscription_information_page, update_interval_hours, validate_subscription_content, validate_update_minutes, vless_link_for_subscription
 from happ_server_ui import page as happ_server_page
+from happ_protocols import HappProtocols
+from happ_protocols_ui import render_protocols_panel
+from trusttunnel_upstream import TrustTunnelClients, is_trusttunnel_entry, parse_profile as parse_trusttunnel_profile
 from happ_stats import HappStatsError, live_connections as happ_live_connections
 from happ_stats import format_datetime
 from panel_ui import render_about_page, render_shell, service_title
@@ -42,7 +45,11 @@ from vless_monitor import MESSAGE_FIELDS, VlessMonitor, load_settings as load_mo
 from crm_bridge import authorized as crm_authorized, embed as crm_embed, panel_url as crm_panel_url
 
 APP_DIR = Path('/etc/sing-box-admin')
-SERVER_OUTBOUND_TYPES = ('vless', 'hysteria2', 'trojan', 'shadowsocks')
+SERVER_OUTBOUND_TYPES = ('vless', 'hysteria2', 'trojan', 'shadowsocks', 'socks')
+IMPORTABLE_OUTBOUND_TYPES = ('vless', 'hysteria2', 'trojan', 'shadowsocks')
+XRAY_IMPORT_PROTOCOLS = ('vless', 'hysteria', 'hysteria2', 'trojan', 'shadowsocks', 'wireguard')
+SERVICE_OUTBOUND_TYPES = frozenset({'direct', 'block', 'dns', 'selector', 'urltest', 'bridge'})
+SERVICE_XRAY_PROTOCOLS = frozenset({'freedom', 'blackhole', 'dns', 'loopback'})
 AUTH_PATH = APP_DIR / 'auth.json'
 BACKUP_DIR = APP_DIR / 'backups'
 FIRST_LOGIN_PATH = APP_DIR / 'first-login.txt'
@@ -108,6 +115,8 @@ OUTBOUND_CHECK_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix='
 OUTBOUND_CHECK_JOBS = {}
 VLESS_MONITOR = None
 HAPP_USERS = None
+HAPP_PROTOCOLS = None
+TRUSTTUNNEL_CLIENTS = None
 HAPP_EXPIRY_STOP = threading.Event()
 HAPP_HISTORY = None
 HAPP_HISTORY_STOP = threading.Event()
@@ -413,6 +422,19 @@ def managed_server_outbounds(config):
     return [item for item in config.get('outbounds', []) if item.get('tag') and item.get('type') in SERVER_OUTBOUND_TYPES]
 
 
+def server_view(outbound):
+    view = {'type': outbound['type'], 'server': outbound.get('server', ''), 'server_port': outbound.get('server_port', ''), 'edit': outbound}
+    manager = TRUSTTUNNEL_CLIENTS
+    if outbound['type'] == 'socks' and manager is not None:
+        try:
+            if manager.owns(outbound['tag']):
+                host, port = manager.display(outbound['tag'])
+                view.update(type='trusttunnel', server=host, server_port=port, edit=manager.export(outbound['tag']))
+        except ValueError:
+            pass
+    return view
+
+
 def next_server_tag(config):
     tags = {item.get('tag') for item in config.get('outbounds', [])}
     for index in range(1, 1000):
@@ -533,17 +555,19 @@ def import_server_json(raw, config, replace_tag='', requested_tag=''):
         payload = json.loads(raw)
     except json.JSONDecodeError as error:
         raise ValueError('Импорт: некорректный JSON.') from error
-    if not isinstance(payload, dict):
-        raise ValueError('Импортируйте JSON-объект сервера или полный JSON config.')
+    if not isinstance(payload, (dict, str)) or (isinstance(payload, str) and not is_trusttunnel_entry(payload)):
+        raise ValueError('Импортируйте JSON-объект сервера, полный JSON config или ссылку tt://.')
     source = payload
-    xray_protocol = payload.get('protocol')
-    sing_box_type = payload.get('type')
-    if not xray_protocol and sing_box_type not in SERVER_OUTBOUND_TYPES:
-        source = next((item for item in payload.get('outbounds', []) if item.get('type') in SERVER_OUTBOUND_TYPES or item.get('protocol') in ('vless', 'hysteria', 'hysteria2', 'trojan', 'shadowsocks', 'wireguard')), None)
+    xray_protocol = payload.get('protocol') if isinstance(payload, dict) else None
+    sing_box_type = payload.get('type') if isinstance(payload, dict) else None
+    if sing_box_type == 'socks':
+        raise ValueError('SOCKS-outbound не импортируется напрямую: для TrustTunnel укажите type "trusttunnel" или ссылку tt://.')
+    if isinstance(payload, dict) and not is_trusttunnel_entry(payload) and not xray_protocol and sing_box_type not in IMPORTABLE_OUTBOUND_TYPES:
+        source = next((item for item in payload.get('outbounds', []) if isinstance(item, dict) and (is_trusttunnel_entry(item) or item.get('type') in IMPORTABLE_OUTBOUND_TYPES or item.get('protocol') in XRAY_IMPORT_PROTOCOLS)), None)
         if source is None:
             raise ValueError('В JSON не найден VPN outbound.')
-        xray_protocol = source.get('protocol')
-        sing_box_type = source.get('type')
+        xray_protocol = source.get('protocol') if isinstance(source, dict) else None
+        sing_box_type = source.get('type') if isinstance(source, dict) else None
     if replace_tag:
         tag = replace_tag
         if not any(item.get('tag') == tag for item in managed_server_outbounds(config)):
@@ -554,13 +578,17 @@ def import_server_json(raw, config, replace_tag='', requested_tag=''):
             raise ValueError('Tag содержит недопустимые символы.')
         if any(item.get('tag') == tag for item in config.get('outbounds', [])):
             raise ValueError('Такой tag уже существует; выберите его в списке замены.')
-    if sing_box_type in SERVER_OUTBOUND_TYPES:
+    if is_trusttunnel_entry(source):
+        if TRUSTTUNNEL_CLIENTS is None:
+            raise ValueError('TrustTunnel недоступен в этой установке.')
+        outbound = TRUSTTUNNEL_CLIENTS.stage(tag, parse_trusttunnel_profile(source))
+    elif sing_box_type in IMPORTABLE_OUTBOUND_TYPES:
         outbound = json.loads(json.dumps(source))
         outbound['tag'] = tag
-    elif xray_protocol in ('vless', 'hysteria', 'hysteria2', 'trojan', 'shadowsocks', 'wireguard'):
+    elif xray_protocol in XRAY_IMPORT_PROTOCOLS:
         outbound = import_xray_outbound(source, tag)
     else:
-        raise ValueError('Поддерживается импорт VLESS, Hysteria2, Trojan и Shadowsocks.')
+        raise ValueError('Поддерживается импорт VLESS, Hysteria2, Trojan, Shadowsocks и TrustTunnel.')
     if outbound.get('type') not in SERVER_OUTBOUND_TYPES:
         raise ValueError('Неподдерживаемый тип VPN outbound.')
     config['outbounds'] = [item for item in config.get('outbounds', []) if item.get('tag') != tag]
@@ -571,29 +599,55 @@ def import_server_json(raw, config, replace_tag='', requested_tag=''):
     return tag
 
 
+def is_service_outbound(item):
+    return isinstance(item, dict) and (item.get('type') in SERVICE_OUTBOUND_TYPES or item.get('protocol') in SERVICE_XRAY_PROTOCOLS)
+
+
+def flatten_import_entries(payload):
+    entries = []
+    for index, entry in enumerate(payload if isinstance(payload, list) else [payload], 1):
+        if isinstance(entry, dict) and isinstance(entry.get('outbounds'), list) and 'type' not in entry and 'protocol' not in entry:
+            servers = [item for item in entry['outbounds'] if not is_service_outbound(item)]
+            if servers:
+                entries.extend((f'Элемент {index}' if len(servers) == 1 else f'Элемент {index}.{number}', item) for number, item in enumerate(servers, 1))
+                continue
+        entries.append((f'Элемент {index}', entry))
+    return entries
+
+
 def import_server_batch(raw, config, replace_tag='', requested_tag='', validator=None):
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise ValueError('Импорт: некорректный JSON.') from error
-    entries = payload if isinstance(payload, list) else [payload]
+    text = str(raw or '').strip()
+    if text.lower().startswith('tt://'):
+        payload = [line.strip() for line in text.splitlines() if line.strip()]
+    else:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise ValueError('Импорт: некорректный JSON.') from error
+    entries = flatten_import_entries(payload)
     if not entries or len(entries) > 16:
         raise ValueError('За один импорт допускается от 1 до 16 конфигураций.')
     if len(entries) > 1 and (replace_tag or requested_tag):
         raise ValueError('Для массива выберите добавление новых auto-N без указания общего tag.')
+    manager = TRUSTTUNNEL_CLIENTS
     working = json.loads(json.dumps(config))
     imported, skipped = [], []
-    for index, entry in enumerate(entries, 1):
+    for label, entry in entries:
         candidate = json.loads(json.dumps(working))
+        staged = manager.pending_tags() if manager is not None else set()
         try:
             tag = import_server_json(json.dumps(entry), candidate, replace_tag, requested_tag)
             if validator is not None:
                 validator((json.dumps(candidate, ensure_ascii=False) + '\n').encode('utf-8'))
         except (ValueError, RuntimeError) as error:
-            skipped.append(f'Элемент {index}: {error}')
+            if manager is not None:
+                manager.discard(manager.pending_tags() - staged)
+            skipped.append(f'{label}: {error}')
             continue
         except (TypeError, KeyError, AttributeError):
-            skipped.append(f'Элемент {index}: неверная структура конфигурации.')
+            if manager is not None:
+                manager.discard(manager.pending_tags() - staged)
+            skipped.append(f'{label}: неверная структура конфигурации.')
             continue
         working = candidate
         imported.append(tag)
@@ -602,6 +656,38 @@ def import_server_batch(raw, config, replace_tag='', requested_tag='', validator
     config.clear()
     config.update(working)
     return imported, skipped
+
+
+def finalize_trusttunnel(config):
+    manager = TRUSTTUNNEL_CLIENTS
+    if manager is None:
+        return
+    try:
+        manager.finalize(config)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        pass
+
+
+def import_and_apply(raw, config, replace_tag='', requested_tag=''):
+    manager = TRUSTTUNNEL_CLIENTS
+    if manager is not None:
+        manager.pending.clear()
+    try:
+        imported, skipped = import_server_batch(raw, config, replace_tag, requested_tag, validator=check_candidate)
+        if manager is not None:
+            manager.prepare()
+        try:
+            applied = apply_configuration(config)
+        except Exception:
+            if manager is not None:
+                manager.rollback()
+            raise
+    except Exception:
+        if manager is not None:
+            manager.pending.clear()
+        raise
+    finalize_trusttunnel(config)
+    return imported, skipped, applied
 
 
 def remove_server_json(config, tag):
@@ -1047,6 +1133,26 @@ def resolve_happ_subscription_base_url(state=None):
     return validate_subscription_base_url(f'https://{host}:7445')
 
 
+def happ_public_host():
+    return urlsplit(resolve_happ_subscription_base_url()).hostname or ''
+
+
+def render_protocols_settings():
+    if HAPP_PROTOCOLS is None:
+        return ''
+    try:
+        settings = HAPP_PROTOCOLS.settings()
+        try:
+            host = happ_public_host()
+        except (ValueError, OSError):
+            host = ''
+        users = len(HAPP_USERS.active_users()) if HAPP_USERS is not None else 0
+        error = HAPP_USERS.protocol_error if HAPP_USERS is not None else ''
+        return render_protocols_panel(settings, HAPP_PROTOCOLS.status(settings), CSRF_TOKEN, error, host, users)
+    except (ValueError, OSError) as error:
+        return f'<section class="panel"><h2>Протоколы HAPP: Trojan, Hysteria2 и TrustTunnel</h2><div class="notice error" role="status">{html.escape(str(error))}</div></section>'
+
+
 def save_happ_subscription_base_url(value):
     value = str(value or '').strip()
     if value:
@@ -1061,10 +1167,11 @@ def save_happ_subscription_base_url(value):
     write_atomic_file(HAPP_STATE_PATH, (json.dumps(state, indent=2, ensure_ascii=False) + '\n').encode('utf-8'), mode=0o600)
 
 
-def save_happ_subscription_content(title, announcement):
+def save_happ_subscription_content(title, announcement, update_minutes=''):
     title, announcement = validate_subscription_content(title, announcement)
     state = load_happ_state()
-    state.update(subscription_title=title, subscription_announcement=announcement)
+    minutes = validate_update_minutes(update_minutes) if str(update_minutes or '').strip() else normalize_update_minutes(state.get('subscription_update_minutes'))
+    state.update(subscription_title=title, subscription_announcement=announcement, subscription_update_minutes=minutes)
     backup_file(HAPP_STATE_PATH, 'happ-subscription-content')
     write_atomic_file(HAPP_STATE_PATH, (json.dumps(state, indent=2, ensure_ascii=False) + '\n').encode('utf-8'), mode=0o600)
 
@@ -1474,6 +1581,7 @@ def render_settings_page(config, query, message='', kind='success'):
                 happ_subscription_setting = str(happ_state_payload.get('subscription_base_url', ''))
                 happ_subscription_title = str(happ_state_payload.get('subscription_title', DEFAULT_SUBSCRIPTION_TITLE))
                 happ_subscription_announcement = str(happ_state_payload.get('subscription_announcement', SUBSCRIPTION_ANNOUNCEMENT))
+                happ_subscription_minutes = normalize_update_minutes(happ_state_payload.get('subscription_update_minutes'))
                 happ_subscription_origin = resolve_happ_subscription_base_url(happ_state_payload)
                 happ_error = ''
         except (OSError, ValueError) as error:
@@ -1483,6 +1591,7 @@ def render_settings_page(config, query, message='', kind='success'):
                 happ_subscription_setting = ''
                 happ_subscription_title = DEFAULT_SUBSCRIPTION_TITLE
                 happ_subscription_announcement = SUBSCRIPTION_ANNOUNCEMENT
+                happ_subscription_minutes = DEFAULT_UPDATE_MINUTES
                 happ_subscription_origin = ''
                 happ_error = message_banner(f'HAPP Server: {error}', 'error')
         service_control = load_service_control()
@@ -1518,7 +1627,8 @@ def render_settings_page(config, query, message='', kind='success'):
 <div class="settings-layout">
     {gateway_mode_panel}
     <section class="panel"><h2>Публичный URL подписки HAPP</h2><form method="post" action="/settings/happ/subscription"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_subscription_base_url">WAN / DNS URL · пусто = публичный адрес HAPP</label><input id="happ_subscription_base_url" name="subscription_base_url" type="url" value="{esc(happ_subscription_setting)}" placeholder="{esc(happ_subscription_origin)}"></div><p class="muted">Текущий адрес: {esc(happ_subscription_origin)}. Внешний порт должен быть доступен клиенту; HTTPS задаётся только для настроенного TLS endpoint.</p><div class="actions"><button type="submit">Сохранить URL подписки</button></div></form></section>
-    <section class="panel"><h2>Заголовок и объявление HAPP</h2><form method="post" action="/settings/happ/announcement"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_subscription_title">Заголовок сервера</label><input id="happ_subscription_title" name="subscription_title" maxlength="80" value="{esc(happ_subscription_title)}" required></div><div class="field"><label for="happ_subscription_announcement">Текст объявления</label><textarea id="happ_subscription_announcement" name="subscription_announcement" rows="5" maxlength="2000">{esc(happ_subscription_announcement)}</textarea></div><p class="muted">Заголовок отображается перед именем пользователя; итоговое имя HAPP ограничено 25 символами. Объявление обновится при следующем обновлении подписки; строка «Скачано» формируется автоматически.</p><div class="actions"><button type="submit">Сохранить блок HAPP</button></div></form></section>
+    <section class="panel"><h2>Заголовок и объявление HAPP</h2><form method="post" action="/settings/happ/announcement"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_subscription_title">Заголовок сервера</label><input id="happ_subscription_title" name="subscription_title" maxlength="80" value="{esc(happ_subscription_title)}" required></div><div class="field"><label for="happ_subscription_announcement">Текст объявления</label><textarea id="happ_subscription_announcement" name="subscription_announcement" rows="5" maxlength="2000">{esc(happ_subscription_announcement)}</textarea></div><div class="field"><label for="happ_subscription_update_minutes">Время обновления подписки, минут · от {MIN_UPDATE_MINUTES} до {MAX_UPDATE_MINUTES}</label><input id="happ_subscription_update_minutes" name="subscription_update_minutes" type="number" min="{MIN_UPDATE_MINUTES}" max="{MAX_UPDATE_MINUTES}" step="1" value="{happ_subscription_minutes}" required></div><p class="muted">Заголовок отображается перед именем пользователя; итоговое имя HAPP ограничено 25 символами. Объявление обновится при следующем обновлении подписки; строка «Скачано» формируется автоматически. Интервал передаётся клиенту в заголовке подписки и применится при её следующем обновлении; HAPP принимает только целые часы, поэтому сейчас клиентам отдаётся {update_interval_hours(happ_subscription_minutes)} ч (ближайшее целое, минимум 1 ч).</p><div class="actions"><button type="submit">Сохранить блок HAPP</button></div></form></section>
+    {render_protocols_settings()}
     <section class="panel"><h2>Хранение статистики HAPP</h2><form method="post" action="/settings/happ-history"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="field"><label for="happ_retention_days">Хранить дней · старые записи очищаются автоматически</label><input id="happ_retention_days" name="retention_days" type="number" min="1" max="3650" step="1" value="{history_days}" required></div><div class="actions"><button type="submit">Сохранить срок хранения</button><a class="button secondary" href="/happ-history">История HAPP</a></div></form><p class="muted">База хранится в /mnt/stat/. По умолчанию 60 дней; уменьшение срока сразу удалит записи старше выбранного периода.</p></section>
     <section class="panel"><h2>VIP-ссылка HAPP</h2><div class="field"><label for="happ_vip_link">Ссылка подключения</label><textarea id="happ_vip_link" class="public-link-field" readonly spellcheck="false">{esc(vip_link)}</textarea></div><h2>Доступ к панели</h2><form method="post" action="/settings/password" autocomplete="new-password"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="new_password">Новый пароль</label><input id="new_password" name="new_password" type="password" minlength="12" required></div><div class="field"><label for="confirm_password">Повторите пароль</label><input id="confirm_password" name="confirm_password" type="password" minlength="12" required></div></div><div class="actions"><button class="danger" type="submit">Обновить пароль</button></div></form></section>
     <section class="panel"><h2>Автопроверка VLESS</h2><form method="post" action="/settings/vless-monitor"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label><input class="inline-checkbox" type="checkbox" name="monitor_enabled"{' checked' if monitor_settings['enabled'] else ''}> Проверять VLESS по расписанию</label></div><div class="field"><label for="monitor_interval_minutes">Интервал между циклами, минуты</label><input id="monitor_interval_minutes" name="interval_minutes" type="number" min="1" max="60" step="1" value="{monitor_settings['interval_minutes']}" required></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="failover_enabled"{' checked' if monitor_settings['failover_enabled'] else ''}> Автопроверка доступности VLESS: если шлюз по умолчанию недоступен, переключить на самый быстрый по пингу сервер</label></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="auto_switch"{' checked' if monitor_settings['auto_switch'] else ''}> Автовыбор: минимальная задержка в трёх циклах подряд</label></div><div class="field"><label><input class="inline-checkbox" type="checkbox" name="mattermost_enabled"{' checked' if monitor_settings['mattermost_enabled'] else ''}> Уведомлять Mattermost о смене шлюза</label></div><div class="field"><label for="mattermost_webhook">Webhook Mattermost{' · сохранён' if monitor_settings['webhook_url'] else ''}</label><input id="mattermost_webhook" name="webhook_url" type="password" autocomplete="new-password" placeholder="{'Оставьте пустым для сохранения webhook' if monitor_settings['webhook_url'] else 'https://mattermost.example/hooks/...'}"></div><div class="field full"><label><input class="inline-checkbox" type="checkbox" name="clear_webhook"> Удалить сохранённый webhook</label></div><div class="field full"><label for="mattermost_message">Сообщение Mattermost</label><textarea id="mattermost_message" class="monitor-message-field" name="message_template" maxlength="1000" spellcheck="false">{esc(monitor_settings['message_template'])}</textarea><small>Подстановки: {esc(message_fields)}. Пустое поле возвращает стандартный текст.</small></div><div class="field"><label for="mattermost_utc_offset">Время сообщения: смещение от UTC</label><input id="mattermost_utc_offset" name="utc_offset" value="{esc(monitor_settings['utc_offset'])}" maxlength="6" placeholder="+03:00" required></div></div><div class="actions"><button type="submit">Сохранить автоматизацию</button><a class="button secondary" href="/gateway-journal">Журнал переключений</a></div></form><form method="post" action="/settings/vless-monitor/test-webhook"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="actions"><button class="secondary" type="submit"{' disabled' if not monitor_settings['webhook_url'] else ''}>Проверить webhook</button></div></form><p class="muted" data-monitor-status>Последняя проверка: {esc(monitor_state.get('last_checked_at', 'ещё не выполнялась'))}. Кандидат: {esc(monitor_state.get('candidate') or 'нет')} · {monitor_state.get('streak', 0)}/3.</p><p class="muted" data-gateway-status>{esc(monitor_state.get('gateway_text', ''))}</p></section>
@@ -1560,7 +1670,8 @@ def render_outbounds_page(config, query, message='', kind='success'):
     current_route = config.get('route', {}).get('final', '')
     sing_box_state = service_state('sing-box')
     status_class = 'ok' if sing_box_state == 'active' else ''
-    server_options = ''.join(f'<option value="{esc(item["tag"])}">{esc(item["tag"])} · {esc(item["type"])}</option>' for item in servers)
+    views = {item['tag']: server_view(item) for item in servers}
+    server_options = ''.join(f'<option value="{esc(item["tag"])}">{esc(item["tag"])} · {esc(views[item["tag"]]["type"])}</option>' for item in servers)
     checks = {item['tag']: item for item in outbound_check_states(config)['checks']}
     tracked = [tag for tag in form_value(query, 'checks').split(',') if tag in checks]
     if not tracked:
@@ -1579,15 +1690,15 @@ def render_outbounds_page(config, query, message='', kind='success'):
         rows.append(
             f'<tr{failed_class}>'
             f'<td><strong>{esc(tag)}</strong></td>'
-            f'<td>{esc(outbound["type"])}</td>'
-            f'<td>{esc(outbound.get("server", ""))}</td>'
-            f'<td>{esc(outbound.get("server_port", ""))}</td>'
+            f'<td>{esc(views[tag]["type"])}</td>'
+            f'<td>{esc(views[tag]["server"])}</td>'
+            f'<td>{esc(views[tag]["server_port"])}</td>'
             f'<td>{route_indicator}</td>'
             f'<td data-outbound-check-tag="{esc(tag)}" role="status">{esc(checks[tag]["message"])}</td>'
             f'<td data-outbound-latency>{latency_text}</td>'
             f'<td data-outbound-checked-at>{esc(format_datetime(checks[tag].get("checked_at")))}</td>'
             f'<td><div class="outbound-actions"><form method="post" action="/outbounds/route"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit"{ " disabled" if current_route == tag else ""}>Использовать</button></form>'
-            f'<form method="post" action="/outbounds/check"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit">Проверить</button></form><button class="secondary" type="button" data-outbound-edit="{esc(json.dumps(outbound, ensure_ascii=False))}">Редактировать</button>'
+            f'<form method="post" action="/outbounds/check"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="secondary" type="submit">Проверить</button></form><button class="secondary" type="button" data-outbound-edit="{esc(json.dumps(views[tag]["edit"], ensure_ascii=False))}">Редактировать</button>'
             f'<form method="post" action="/outbounds/delete" data-outbound-delete><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="tag" value="{esc(tag)}"><button class="danger" type="submit"{ " disabled" if len(servers) <= 1 else ""}>Удалить</button></form></div></td>'
             '</tr>'
         )
@@ -1597,7 +1708,7 @@ def render_outbounds_page(config, query, message='', kind='success'):
 {notice}
 <div class="panel-stack">
     <section class="panel" data-outbound-checks><h2>Настроенные серверы</h2><div class="table-wrap"><table><thead><tr><th>Tag</th><th>Тип</th><th>Сервер</th><th>Порт</th><th>Маршрут</th><th>Проверка</th><th>Пинг, мс</th><th>Проверен UTC</th><th>Действия</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div><p class="muted">Текущий маршрут: <strong>{esc(current_route)}</strong></p></section>
-    <section class="panel"><h2>Импорт JSON</h2><form method="post" action="/outbounds/import"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="import_replace_tag">Заменить один существующий сервер</label><select id="import_replace_tag" name="replace_tag"><option value="">Добавить новые auto-N</option>{server_options}</select></div><div class="field"><label for="import_tag">Tag для одного профиля</label><input id="import_tag" name="import_tag" placeholder="Для массива оставьте пустым"></div><div class="field full"><label for="outbound_json">JSON sing-box / Xray: объект или массив конфигураций</label><textarea id="outbound_json" name="outbound_json" spellcheck="false" required placeholder="Вставьте JSON VPN-профиля или массив профилей"></textarea></div></div><div class="actions"><button type="submit">Проверить и импортировать</button></div></form></section>
+    <section class="panel"><h2>Импорт JSON</h2><form method="post" action="/outbounds/import"><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><div class="form-grid"><div class="field"><label for="import_replace_tag">Заменить один существующий сервер</label><select id="import_replace_tag" name="replace_tag"><option value="">Добавить новые auto-N</option>{server_options}</select></div><div class="field"><label for="import_tag">Tag для одного профиля</label><input id="import_tag" name="import_tag" placeholder="Для массива оставьте пустым"></div><div class="field full"><label for="outbound_json">JSON sing-box / Xray / TrustTunnel: объект, массив или полный config со всеми серверами (VLESS, Hysteria2, Trojan, Shadowsocks, TrustTunnel) или ссылка tt://</label><textarea id="outbound_json" name="outbound_json" spellcheck="false" required placeholder="Вставьте JSON профиля, массив профилей, полный config или ссылку tt://"></textarea></div></div><div class="actions"><button type="submit">Проверить и импортировать</button></div></form></section>
 </div><dialog class="gateway-dialog" data-outbound-edit-dialog aria-labelledby="outbound-edit-title"><form method="post" action="/outbounds/import" data-outbound-edit-form><h2 id="outbound-edit-title">Редактировать VPN-сервер</h2><input type="hidden" name="csrf" value="{esc(CSRF_TOKEN)}"><input type="hidden" name="replace_tag" data-outbound-edit-tag><div class="field"><label for="outbound_edit_json">Конфигурация сервера</label><textarea id="outbound_edit_json" name="outbound_json" spellcheck="false" required data-outbound-edit-json></textarea></div><div class="actions"><button class="secondary" type="button" data-outbound-edit-cancel>Отмена</button><button type="submit">Сохранить</button></div></form></dialog><dialog class="gateway-dialog" data-outbound-delete-dialog><form method="dialog"><h2>Удалить VPN-сервер?</h2><p data-outbound-delete-message></p><div class="actions"><button class="secondary" value="cancel">Отмена</button><button type="button" data-outbound-delete-confirm>Удалить</button></div></form></dialog>'''
     return render_shell('VPN-серверы', body, 'outbounds', [item.get('tag', '') for item in servers], '')
 
@@ -1744,14 +1855,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def send_happ_qr(self, user_id=None):
+    def send_happ_qr(self, user_id=None, protocol=''):
         try:
             if HAPP_USERS is None:
                 self.send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
                 return
             with HAPP_LOCK:
-                subscriptions = HAPP_USERS.subscription_urls(resolve_happ_subscription_base_url())
-                link = subscriptions.get('VIP' if user_id is None else user_id)
+                if protocol:
+                    link = HAPP_USERS.protocol_links().get(user_id or '', {}).get(protocol) if protocol in ('trojan', 'hysteria2', 'trusttunnel') else None
+                else:
+                    subscriptions = HAPP_USERS.subscription_urls(resolve_happ_subscription_base_url())
+                    link = subscriptions.get('VIP' if user_id is None else user_id)
             if link is None:
                 self.send_empty(HTTPStatus.NOT_FOUND)
                 return
@@ -1980,13 +2094,18 @@ class Handler(BaseHTTPRequestHandler):
             traffic = HAPP_HISTORY.user_totals().get(user_key, {})
             subscription_state = load_happ_state()
             subscription_origin = resolve_happ_subscription_base_url(subscription_state)
-            user = {**user, 'link': vless_link_for_subscription(user['link'], subscription_origin)}
+            try:
+                extra_links = HAPP_USERS.subscription_extra_links(user)
+            except (ValueError, OSError):
+                extra_links = []
+            user = {**user, 'link': vless_link_for_subscription(user['link'], subscription_origin), 'extra_links': extra_links}
             content, headers = subscription_content(
                 user,
                 traffic,
                 subscription_origin + '/happ-info',
                 subscription_state.get('subscription_title', DEFAULT_SUBSCRIPTION_TITLE),
                 subscription_state.get('subscription_announcement', SUBSCRIPTION_ANNOUNCEMENT),
+                subscription_state.get('subscription_update_minutes', DEFAULT_UPDATE_MINUTES),
             )
         except (ValueError, OSError, sqlite3.Error):
             self.send_empty(HTTPStatus.SERVICE_UNAVAILABLE)
@@ -2052,7 +2171,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith('/happ-users/'):
             parts = parsed.path.strip('/').split('/')
             if len(parts) == 3 and parts[2] == 'qr':
-                self.send_happ_qr(parts[1])
+                self.send_happ_qr(parts[1], form_value(parse_qs(parsed.query), 'protocol'))
             else:
                 self.send_empty(HTTPStatus.NOT_FOUND)
             return
@@ -2090,7 +2209,7 @@ class Handler(BaseHTTPRequestHandler):
             except (RuntimeError, OSError, sqlite3.Error):
                 self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {'error': 'История скоростей временно недоступна.'})
             return
-        if parsed.path in ('/happ-history', '/happ-history.xls'):
+        if parsed.path in ('/happ-history', '/happ-history.xls', '/happ-history.xml'):
             try:
                 if HAPP_HISTORY is None:
                     raise RuntimeError('Хранилище статистики недоступно.')
@@ -2098,10 +2217,13 @@ class Handler(BaseHTTPRequestHandler):
                 if parsed.path.endswith('.xls'):
                     data = HAPP_HISTORY.export_xls(form_value(query, 'user'), form_value(query, 'since'), form_value(query, 'until'))
                     self.send_binary(data, 'application/vnd.ms-excel', 'attachment; filename="happ-statistics.xls"')
+                elif parsed.path.endswith('.xml'):
+                    data = HAPP_HISTORY.export_xml(form_value(query, 'user'), form_value(query, 'since'), form_value(query, 'until'))
+                    self.send_binary(data, 'application/xml; charset=utf-8', 'attachment; filename="happ-statistics.xml"')
                 else:
                     with HAPP_LOCK:
                         users = HAPP_USERS.registry()['users'] if HAPP_USERS is not None else []
-                    self.send_html(HTTPStatus.OK, render_history(HAPP_HISTORY, query, form_value(query, 'message'), form_value(query, 'kind') or 'success', users))
+                    self.send_html(HTTPStatus.OK, render_history(HAPP_HISTORY, query, form_value(query, 'message'), form_value(query, 'kind') or 'success', users, CSRF_TOKEN))
             except ValueError:
                 self.send_html(HTTPStatus.BAD_REQUEST, '<h1>Некорректные фильтры истории</h1><p>Проверьте даты и номер страницы.</p>')
             except (RuntimeError, OSError, sqlite3.Error, ImportError):
@@ -2128,11 +2250,17 @@ class Handler(BaseHTTPRequestHandler):
                 events = HAPP_USERS.events() if HAPP_USERS is not None else []
                 subscription_origin = resolve_happ_subscription_base_url()
                 subscriptions = HAPP_USERS.subscription_urls(subscription_origin) if HAPP_USERS is not None else {}
-                vip_vless_link = vless_link_for_subscription(HAPP_USERS.vip()['link'], subscription_origin) if HAPP_USERS is not None else public_vless_link()
                 users = [{**user, 'link': vless_link_for_subscription(user['link'], subscription_origin)} for user in users]
+                try:
+                    protocol_links = HAPP_USERS.protocol_links() if HAPP_USERS is not None else {}
+                except (ValueError, OSError):
+                    protocol_links = {}
+                protocol_error = HAPP_USERS.protocol_error if HAPP_USERS is not None else ''
             traffic = HAPP_HISTORY.user_totals() if HAPP_HISTORY is not None else {}
-            subscription_host = urlsplit(subscription_origin).hostname or '—'
-            self.send_html(HTTPStatus.OK, happ_server_page(users, CSRF_TOKEN, form_value(query, 'message'), form_value(query, 'kind') or 'success', events, traffic=traffic, subscriptions=subscriptions, vip_vless_link=vip_vless_link, endpoint_host=subscription_host))
+            message, kind = form_value(query, 'message'), form_value(query, 'kind') or 'success'
+            if not message and protocol_error:
+                message, kind = 'Протоколы HAPP: ' + protocol_error, 'error'
+            self.send_html(HTTPStatus.OK, happ_server_page(users, CSRF_TOKEN, message, kind, events, traffic=traffic, subscriptions=subscriptions, protocol_links=protocol_links))
             return
         if parsed.path == '/settings':
             query = parse_qs(parsed.query)
@@ -2186,6 +2314,19 @@ class Handler(BaseHTTPRequestHandler):
         if not self.require_access():
             return
         path = urlparse(self.path).path
+        if path == '/happ-history/reset':
+            try:
+                values = self.parse_form()
+                if form_value(values, 'confirm') != 'reset-all':
+                    raise ValueError('Сброс не подтверждён.')
+                if HAPP_HISTORY is None:
+                    raise RuntimeError('Хранилище статистики HAPP недоступно.')
+                removed = HAPP_HISTORY.reset_all_statistics()
+                params = {'message': f'Вся статистика HAPP сброшена. Удалено записей истории: {removed}.', 'kind': 'success'}
+            except (ValueError, RuntimeError, OSError, sqlite3.Error):
+                params = {'message': 'Статистика не сброшена. Обновите страницу, подтвердите действие и проверьте хранилище.', 'kind': 'error'}
+            self.redirect_to('/happ-history?' + urlencode(params))
+            return
         if path.startswith('/happ-users/'):
             try:
                 values = self.parse_form()
@@ -2341,8 +2482,9 @@ class Handler(BaseHTTPRequestHandler):
                         save_happ_subscription_content(
                             form_value(values, 'subscription_title'),
                             form_value(values, 'subscription_announcement'),
+                            form_value(values, 'subscription_update_minutes'),
                         )
-                    self.redirect_settings('', 'Заголовок и объявление HAPP сохранены; новые данные появятся при обновлении подписки.')
+                    self.redirect_settings('', 'Заголовок, объявление и время обновления HAPP сохранены; новые данные появятся при обновлении подписки.')
                     return
                 if path == '/settings/happ/keys':
                     if form_value(values, 'confirm_happ_keys') != 'generate':
@@ -2355,6 +2497,21 @@ class Handler(BaseHTTPRequestHandler):
                     with HAPP_LOCK:
                         apply_happ_state(form_value(values, 'happ_state_json'))
                     self.redirect_settings('', 'Public HAPP link сохранён.')
+                    return
+                if path == '/settings/happ/protocols':
+                    if HAPP_USERS is None:
+                        raise RuntimeError('Управление пользователями HAPP недоступно.')
+                    raw = {
+                        'trojan': {'enabled': form_value(values, 'trojan_enabled') == 'on', 'port': form_value(values, 'trojan_port')},
+                        'hysteria2': {'enabled': form_value(values, 'hysteria2_enabled') == 'on', 'port': form_value(values, 'hysteria2_port')},
+                        'trusttunnel': {'enabled': form_value(values, 'trusttunnel_enabled') == 'on', 'port': form_value(values, 'trusttunnel_port')},
+                        'public_host': form_value(values, 'public_host'), 'server_name': form_value(values, 'server_name'),
+                        'cert_path': form_value(values, 'cert_path'), 'key_path': form_value(values, 'key_path'),
+                        'regenerate': form_value(values, 'regenerate_cert') == 'on',
+                    }
+                    with HAPP_LOCK:
+                        HAPP_USERS.apply_protocols(raw)
+                    self.redirect_settings('', 'Протоколы HAPP применены: ссылки появились на странице HAPP Server; HAPP Server перезапущен, VIP-ссылка не изменена.')
                     return
                 if path == '/settings/happ/config':
                     with HAPP_LOCK:
@@ -2387,14 +2544,12 @@ class Handler(BaseHTTPRequestHandler):
                 with CONFIG_LOCK:
                     config = load_config()
                     if path == '/outbounds/import':
-                        imported, skipped = import_server_batch(
+                        imported, skipped, applied = import_and_apply(
                             form_value(values, 'outbound_json'),
                             config,
                             form_value(values, 'replace_tag'),
                             form_value(values, 'import_tag'),
-                            validator=check_candidate,
                         )
-                        applied = apply_configuration(config)
                         kind = 'error' if skipped else 'success'
                         queue_server_checks(config, imported)
                         message = f'Импортировано: {", ".join(imported)}. '
@@ -2406,6 +2561,7 @@ class Handler(BaseHTTPRequestHandler):
                     if path == '/outbounds/delete':
                         tag = remove_server_json(config, form_value(values, 'tag'))
                         applied = apply_configuration(config)
+                        finalize_trusttunnel(config)
                         message = f'Сервер {tag} удалён.' if applied else f'Сервер {tag} удалён из конфигурации; изменение применится в режиме VLESS.'
                         self.redirect_outbounds(message)
                         return
@@ -2541,7 +2697,7 @@ def happ_history_worker():
 
 
 def main():
-    global VLESS_MONITOR, HAPP_USERS, HAPP_HISTORY, SERVER_METRICS
+    global VLESS_MONITOR, HAPP_USERS, HAPP_HISTORY, SERVER_METRICS, HAPP_PROTOCOLS, TRUSTTUNNEL_CLIENTS
     if not AUTH_PATH.is_file():
         raise SystemExit(f'Authentication file missing: {AUTH_PATH}')
     try:
@@ -2549,8 +2705,14 @@ def main():
     except ipaddress.AddressValueError as error:
         raise SystemExit('SING_BOX_ADMIN_HOST must be an IPv4 address') from error
     server = VpnOnlyServer((HOST, PORT), Handler)
-    HAPP_USERS = HappUsers(APP_DIR, HAPP_CONFIG_PATH, HAPP_STATE_PATH, apply_happ_configuration)
+    HAPP_PROTOCOLS = HappProtocols(APP_DIR, fallback_host=happ_public_host)
+    HAPP_USERS = HappUsers(APP_DIR, HAPP_CONFIG_PATH, HAPP_STATE_PATH, apply_happ_configuration, protocols=HAPP_PROTOCOLS)
     HAPP_USERS.initialize()
+    TRUSTTUNNEL_CLIENTS = TrustTunnelClients(APP_DIR)
+    try:
+        TRUSTTUNNEL_CLIENTS.reconcile(load_config())
+    except (OSError, ValueError):
+        pass
     HAPP_HISTORY = HappHistory('/mnt/stat')
     sync_happ_history_users()
     SERVER_METRICS = ServerMetrics('/mnt/stat/server-metrics.sqlite3')

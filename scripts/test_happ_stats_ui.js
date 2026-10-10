@@ -63,8 +63,276 @@ function testUserCreationDialog() {
   console.log('PASS: HAPP user creation dialog opens, focuses, resets and cancels safely');
 }
 
+function testHistoryResetDialog() {
+  const clickHandlers = [];
+  const cancel = { focused: false, focus() { this.focused = true; } };
+  const dialog = {
+    open: false,
+    showModal() { this.open = true; },
+    close() { this.open = false; },
+    closest() { return null; },
+    getBoundingClientRect() { return { left: 100, top: 100, right: 500, bottom: 400 }; },
+    querySelector(selector) { return selector === '[data-happ-history-reset-cancel]' ? cancel : null; },
+  };
+  const sandbox = {
+    document: {
+      addEventListener(type, handler) { if (type === 'click') clickHandlers.push(handler); },
+      querySelector(selector) { return selector === '[data-happ-history-reset-dialog]' ? dialog : null; },
+    },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'server', 'panel', 'static', 'happ-actions.js'), 'utf8'), sandbox);
+  function click(selector) {
+    let prevented = false;
+    for (const handler of clickHandlers) {
+      handler({ target: { closest(candidate) { return candidate === selector ? {} : null; } }, preventDefault() { prevented = true; } });
+    }
+    return prevented;
+  }
+  assert.equal(click('[data-happ-history-reset-open]'), true);
+  assert.equal(dialog.open, true);
+  assert.equal(cancel.focused, true);
+  assert.equal(click('[data-happ-history-reset-cancel]'), true);
+  assert.equal(dialog.open, false);
+  click('[data-happ-history-reset-open]');
+  for (const handler of clickHandlers) handler({ target: dialog, clientX: 200, clientY: 200 });
+  assert.equal(dialog.open, true);
+  for (const handler of clickHandlers) handler({ target: dialog, clientX: 20, clientY: 20 });
+  assert.equal(dialog.open, false);
+  sandbox.document.querySelector = () => null;
+  click('[data-happ-history-reset-open]');
+  console.log('PASS: full history reset dialog opens focused on Cancel, closes by Cancel/backdrop and is inert without the dialog');
+}
+
+function createMotionHarness(options = {}) {
+  const canvas = element();
+  const legend = element();
+  const liveRoot = element();
+  const metrics = new Map();
+  const state = { clock: Date.parse('2026-10-10T01:00:00+00:00'), history: { sampledAt: null, users: [] }, live: null, updates: [], chart: null, refresh: null, ticker: null, change: null, intervals: [], trafficRequests: [], hidden: false };
+  class FakeChart {
+    constructor(target, config) {
+      assert.equal(target, canvas);
+      this.config = config;
+      this.data = config.data;
+      this.options = config.options;
+      state.chart = this;
+    }
+    update(mode) { state.updates.push(mode); }
+    destroy() { this.destroyed = true; }
+  }
+  const document = {
+    get hidden() { return state.hidden; },
+    addEventListener(type, callback) { if (type === 'change') state.change = callback; },
+    createElement: element,
+    querySelectorAll: () => [],
+    querySelector(selector) {
+      if (selector === '[data-happ-live]') return liveRoot;
+      if (selector === '[data-happ-traffic-chart]') return canvas;
+      if (selector === '[data-happ-chart-legend]') return legend;
+      if (['[data-happ-chart-count]', '[data-happ-chart-overflow]', '[data-happ-chart-status]'].includes(selector)) {
+        if (!metrics.has(selector)) metrics.set(selector, element());
+        return metrics.get(selector);
+      }
+      return null;
+    },
+  };
+  const sandbox = {
+    AbortController,
+    Date: class extends Date { static now() { return state.clock; } },
+    URL,
+    console,
+    document,
+    window: {
+      Chart: FakeChart,
+      matchMedia: options.reducedMotion ? () => ({ matches: true }) : undefined,
+      location: { pathname: '/happ-server', href: 'http://localhost/happ-server', origin: 'http://localhost', reload() {} },
+      addEventListener() {},
+      setInterval(callback, delay) {
+        state.intervals.push(delay);
+        if (delay === 1000) state.refresh = callback; else state.ticker = callback;
+        return delay;
+      },
+      clearInterval() {},
+      setTimeout() { return 1; },
+      clearTimeout() {},
+    },
+    fetch: async (url, requestOptions) => {
+      assert.ok(requestOptions.signal);
+      if (url.startsWith('/happ-server/traffic?')) {
+        const params = new URL(url, 'http://localhost').searchParams;
+        const minutes = Number(params.get('minutes'));
+        state.trafficRequests.push({ minutes, direction: params.get('direction') });
+        const result = { minutes, direction: params.get('direction'), since: state.clock - minutes * 60000, until: state.clock, sampled_at: state.history.sampledAt, user_count: state.history.users.length, users: state.history.users };
+        return { status: 200, ok: true, json: async () => result };
+      }
+      assert.match(url, /^\/happ-server\/live\?seconds=\d+$/);
+      return { status: 200, ok: true, json: async () => ({ sampled_at: new Date(state.clock).toISOString(), online_count: 0, users: [], connections: [], traffic_samples: [], top_users: [], activity: state.live }) };
+    },
+  };
+  return {
+    state,
+    legend,
+    async start() {
+      vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'server', 'panel', 'static', 'panel.js'), 'utf8'), sandbox);
+      await new Promise(setImmediate);
+    },
+  };
+}
+
+async function testHappChartMotion() {
+  const T0 = Date.parse('2026-10-10T01:00:00+00:00');
+  const MB = 1048576;
+  const harness = createMotionHarness();
+  const { state, legend } = harness;
+  state.clock = T0;
+  state.history = {
+    sampledAt: T0,
+    users: [
+      { user_key: 'A', user_name: 'Alice', peak_bytes_per_second: 4 * MB, points: [{ x: T0 - 120000, y: 4 }, { x: T0 - 60000, y: 1 }, { x: T0, y: 2 }] },
+      { user_key: 'B', user_name: 'Bob', peak_bytes_per_second: 6 * MB, points: [{ x: T0 - 500000, y: 6 }, { x: T0 - 30000, y: 3 }] },
+    ],
+  };
+  await harness.start();
+  const chart = state.chart;
+  const series = (key) => chart.data.datasets.find((dataset) => dataset.userKey === key);
+  const order = () => legend.children.map((item) => item.dataset.happUser);
+  const label = (key) => legend.children.find((item) => item.dataset.happUser === key).children[2].textContent;
+  const bar = (key) => legend.children.find((item) => item.dataset.happUser === key).style.backgroundSize;
+  const plain = (points) => points.map((point) => [point.x, point.y]);
+
+  assert.equal(chart.options.animation, false);
+  assert.equal(chart.options.scales.x.max, T0);
+  assert.equal(chart.options.scales.x.min, T0 - 600000);
+  assert.deepEqual(state.intervals.slice().sort((first, second) => first - second), [100, 1000]);
+  assert.equal(typeof state.ticker, 'function');
+  assert.deepEqual(order(), ['B', 'A']);
+  assert.equal(label('B'), 'Пик: 6.00 МБ/с');
+  assert.equal(label('A'), 'Пик: 4.00 МБ/с');
+  assert.equal(bar('B'), '100% 2px');
+  assert.equal(bar('A'), '66.7% 2px');
+  assert.notEqual(series('A').borderColor, series('B').borderColor);
+  assert.equal(series('A').pointBackgroundColor, series('A').borderColor);
+  assert.deepEqual(series('B').peakPoint, { x: T0 - 500000, y: 6 });
+  assert.equal(series('B').pointRadius({ raw: series('B').peakPoint, dataset: series('B') }), 5);
+  assert.equal(series('B').pointRadius({ raw: series('B').data[1], dataset: series('B') }), 0);
+  console.log('PASS: moving chart starts with per-user colors, pinned peak markers and a legend ordered by peak speed');
+
+  const before = state.updates.length;
+  state.clock = T0 + 30000;
+  state.ticker();
+  assert.equal(chart.options.scales.x.max, T0 + 30000);
+  assert.equal(chart.options.scales.x.min, T0 + 30000 - 600000);
+  assert.equal(state.updates.length, before + 1);
+  assert.equal(state.updates.at(-1), 'none');
+  assert.deepEqual(order(), ['B', 'A']);
+  state.clock = T0 + 120000;
+  state.ticker();
+  assert.equal(chart.options.scales.x.max, T0 + 120000);
+  assert.deepEqual(order(), ['A', 'B']);
+  assert.equal(label('A'), 'Пик: 4.00 МБ/с');
+  assert.equal(label('B'), 'Пик: 3.00 МБ/с');
+  assert.equal(bar('A'), '100% 2px');
+  assert.equal(bar('B'), '75% 2px');
+  assert.deepEqual(series('B').peakPoint, { x: T0 - 30000, y: 3 });
+  state.hidden = true;
+  const frozen = state.updates.length;
+  state.clock += 1000;
+  state.ticker();
+  assert.equal(state.updates.length, frozen);
+  state.hidden = false;
+  console.log('PASS: the time window keeps moving right to left, expired peaks leave the legend and hidden tabs are not redrawn');
+
+  state.live = { fresh: true, seconds: 5, sampled_at: T0 + 119000, users: [
+    { user_key: 'A', status: 'active', download_rate: 8 * MB, upload_rate: 2 * MB },
+    { user_key: 'B', status: 'offline', download_rate: 0, upload_rate: 0 },
+    { user_key: 'C', status: 'active', download_rate: 5 * MB, upload_rate: 0 },
+  ] };
+  await state.refresh();
+  await new Promise(setImmediate);
+  assert.deepEqual(plain(series('A').data.slice(-3)), [[T0, 2], [T0 + 2000, null], [T0 + 119000, 8]]);
+  assert.equal(series('B').data.at(-1).x, T0 - 30000);
+  assert.equal(chart.options.scales.y.max, Math.max(1, 8 * 1.1));
+  const length = series('A').data.length;
+  await state.refresh();
+  await new Promise(setImmediate);
+  assert.equal(series('A').data.length, length);
+  assert.deepEqual(order(), ['A', 'B']);
+  assert.equal(label('A'), 'Пик: 8.00 МБ/с');
+  state.history.sampledAt = T0 + 119000;
+  state.history.users[0].points.push({ x: T0 + 2000, y: null }, { x: T0 + 119000, y: 8 });
+  state.live = { ...state.live, sampled_at: T0 + 125000, users: [{ user_key: 'A', status: 'active', download_rate: MB, upload_rate: 0 }] };
+  state.clock = T0 + 126000;
+  await state.refresh();
+  await new Promise(setImmediate);
+  assert.deepEqual(plain(series('A').data.filter((point) => point.x >= T0 + 119000)), [[T0 + 119000, 8], [T0 + 121000, null], [T0 + 125000, 1]]);
+  console.log('PASS: live samples extend the strip, insert gaps, ignore offline users and are replaced once history covers them');
+
+  const direction = { value: 'upload', closest(selector) { return selector === '[data-happ-chart-direction]' ? this : null; } };
+  await state.change({ target: direction });
+  assert.deepEqual(state.trafficRequests.at(-1), { minutes: 10, direction: 'upload' });
+  state.clock = T0 + 130000;
+  state.live = { fresh: true, seconds: 5, sampled_at: T0 + 129000, users: [{ user_key: 'A', status: 'active', download_rate: 9 * MB, upload_rate: 3 * MB }] };
+  await state.refresh();
+  assert.equal(series('A').data.at(-1).x, T0 + 129000);
+  assert.equal(series('A').data.at(-1).y, 3);
+
+  const align = chart.options.scales.x.afterBuildTicks;
+  for (const [minutes, step] of [[10, 120000], [30, 300000], [60, 600000], [90, 900000]]) {
+    const scale = { min: T0 - minutes * 60000, max: T0 };
+    align(scale);
+    assert.ok(scale.ticks.length >= 4 && scale.ticks.length <= 7);
+    assert.ok(scale.ticks.every((tick) => tick.value % step === 0 && tick.value >= scale.min && tick.value <= scale.max));
+  }
+  const untouched = { min: 5, max: 5 };
+  align(untouched);
+  assert.equal(untouched.ticks, undefined);
+
+  const plugin = chart.config.plugins[0];
+  const calls = [];
+  const context = {
+    save() { calls.push(['save']); },
+    restore() { calls.push(['restore']); },
+    measureText(text) { return { width: text.length * 6 }; },
+    fillText(text, x, y) { calls.push(['fillText', text, x, y, this.fillStyle]); },
+  };
+  const frame = {
+    ctx: context,
+    chartArea: { left: 40, right: 400, top: 10, bottom: 200 },
+    scales: { x: { getPixelForValue: (value) => 40 + (value - (T0 - 600000)) / 600000 * 360 }, y: { getPixelForValue: (value) => 200 - value * 20 } },
+    data: { datasets: [
+      { borderColor: '#f472b6', peakPoint: { x: T0 - 1000, y: 4 } },
+      { borderColor: '#22d3ee', peakPoint: { x: T0 - 2000, y: 3.9 } },
+      { borderColor: '#a3e635', peakPoint: null },
+      { borderColor: '#fbbf24', peakPoint: { x: T0 - 300000, y: 1 } },
+    ] },
+  };
+  plugin.afterDatasetsDraw(frame);
+  const labels = calls.filter((call) => call[0] === 'fillText');
+  assert.deepEqual(labels.map((call) => call[1]), ['4.00', '1.00']);
+  assert.equal(labels[0][4], '#f472b6');
+  assert.ok(labels[0][2] <= 400 - 14);
+  assert.equal(calls[0][0], 'save');
+  assert.equal(calls.at(-1)[0], 'restore');
+  calls.length = 0;
+  plugin.afterDatasetsDraw({ ...frame, data: { datasets: [{ peakPoint: null }] } });
+  assert.equal(calls.length, 0);
+  console.log('PASS: upload live points, clock-aligned ticks and non-overlapping peak labels');
+
+  const calm = createMotionHarness({ reducedMotion: true });
+  calm.state.clock = T0;
+  calm.state.history = { sampledAt: T0, users: [{ user_key: 'A', user_name: 'Alice', peak_bytes_per_second: 2 * MB, points: [{ x: T0, y: 2 }] }] };
+  await calm.start();
+  assert.equal(calm.state.ticker, null);
+  assert.deepEqual(calm.state.intervals, [1000]);
+  assert.equal(calm.state.chart.options.scales.x.max, T0);
+  assert.equal(calm.legend.children.length, 1);
+  console.log('PASS: reduced motion keeps the chart stepwise without the continuous timer');
+}
+
 async function main() {
   testUserCreationDialog();
+  testHistoryResetDialog();
+  await testHappChartMotion();
   const connections = element();
   const users = element();
   const topUsers = element();
@@ -140,7 +408,7 @@ async function main() {
       Chart: FakeChart,
       location: { pathname: '/happ-server', href: 'http://localhost/happ-server', origin: 'http://localhost', reload() {} },
       addEventListener() {},
-      setInterval(callback) { refresh = callback; return 1; },
+      setInterval(callback, delay) { if (delay === 1000) refresh = callback; return delay; },
       clearInterval() {},
       setTimeout() { return 1; },
       clearTimeout() {},
@@ -194,7 +462,7 @@ async function main() {
   assert.equal(chart.data.datasets.length, 2);
   assert.equal(chart.data.datasets[0].data[0].y, null);
   assert.equal(legend.children[0].children[1].textContent, name);
-  assert.equal(chart.options.animation.duration, 900);
+  assert.equal(chart.options.animation, false);
   const colors = chart.data.datasets.map((series) => series.borderColor);
   payload = {
     sampled_at: '2026-10-08T00:00:02+00:00',
@@ -283,7 +551,7 @@ async function main() {
   await refresh();
   await new Promise(setImmediate);
   assert.equal(chart.data.datasets[0], series);
-  assert.equal(chart.options.animations.y.duration, 0);
+  assert.equal(chart.options.animations, undefined);
   assert.equal(chart.options.scales.y.max, 2.2);
   assert.equal(chart.options.scales.x.max, historyAt);
   assert.equal(chart.options.scales.x.min, historyAt - 90 * 60000);

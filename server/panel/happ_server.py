@@ -219,6 +219,9 @@ SUBSCRIPTION_ANNOUNCEMENT = (
 )
 MAX_SUBSCRIPTION_TITLE_LENGTH = 80
 MAX_SUBSCRIPTION_ANNOUNCEMENT_LENGTH = 2000
+DEFAULT_UPDATE_MINUTES = 60
+MIN_UPDATE_MINUTES = 10
+MAX_UPDATE_MINUTES = 600
 
 
 def load_state():
@@ -263,7 +266,26 @@ def validate_subscription_content(title, announcement):
     return title, announcement
 
 
-def subscription_content(user, traffic, information_url=None, title=DEFAULT_SUBSCRIPTION_TITLE, announcement=SUBSCRIPTION_ANNOUNCEMENT):
+def validate_update_minutes(value):
+    text = '' if isinstance(value, bool) else str(value).strip()
+    if not (text.isascii() and text.isdigit() and len(text) <= 4 and MIN_UPDATE_MINUTES <= int(text) <= MAX_UPDATE_MINUTES):
+        raise ValueError(f'Время обновления подписки HAPP: целое число минут от {MIN_UPDATE_MINUTES} до {MAX_UPDATE_MINUTES}.')
+    return int(text)
+
+
+def normalize_update_minutes(value):
+    try:
+        return validate_update_minutes(value)
+    except ValueError:
+        return DEFAULT_UPDATE_MINUTES
+
+
+def update_interval_hours(minutes):
+    # HAPP reads profile-update-interval only as whole hours, so the stored minutes are rounded to the nearest hour (at least 1).
+    return max(1, (normalize_update_minutes(minutes) + 30) // 60)
+
+
+def subscription_content(user, traffic, information_url=None, title=DEFAULT_SUBSCRIPTION_TITLE, announcement=SUBSCRIPTION_ANNOUNCEMENT, update_minutes=DEFAULT_UPDATE_MINUTES):
     download = max(0, int(traffic.get('download_bytes', 0)))
     upload = max(0, int(traffic.get('upload_bytes', 0)))
     userinfo = f'upload={upload}; download={download}; total=0'
@@ -272,14 +294,14 @@ def subscription_content(user, traffic, information_url=None, title=DEFAULT_SUBS
         userinfo += '; expire=' + str(int(expiry.timestamp()))
     title, announcement = validate_subscription_content(title, announcement)
     encoded_title = base64.b64encode((title + ' ' + user['name'])[:25].encode('utf-8')).decode('ascii')
-    headers = {'subscription-userinfo': userinfo, 'profile-update-interval': '1', 'profile-title': 'base64:' + encoded_title}
+    headers = {'subscription-userinfo': userinfo, 'profile-update-interval': str(update_interval_hours(update_minutes)), 'profile-title': 'base64:' + encoded_title}
     announcement_text = (announcement + '\n' if announcement else '') + f'DL: {format_bytes(download)} / UL: {format_bytes(upload)}'
     headers['announce'] = 'base64:' + base64.b64encode(announcement_text.encode('utf-8')).decode('ascii')
     if information_url:
         headers['profile-web-page-url'] = information_url
     routing_profile = {'Name': 'FocusVPN Direct', 'GlobalProxy': 'true', 'LastUpdated': '1791417601', 'DirectSites': list(HAPP_DIRECT_SITES)}
     routing_link = 'happ://routing/onadd/' + base64.b64encode(json.dumps(routing_profile, separators=(',', ':')).encode('utf-8')).decode('ascii')
-    body = ''.join(f'#{key}: {value}\n' for key, value in headers.items()) + routing_link + '\n' + user['link'] + '\n'
+    body = ''.join(f'#{key}: {value}\n' for key, value in headers.items()) + routing_link + '\n' + user['link'] + '\n' + ''.join(link + '\n' for link in user.get('extra_links', []))
     return body.encode('utf-8'), headers
 
 

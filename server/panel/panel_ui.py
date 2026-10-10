@@ -40,7 +40,7 @@ def load_profile_tags():
     return [
         outbound.get('tag', '')
         for outbound in config.get('outbounds', [])
-        if outbound.get('type') in ('vless', 'hysteria2', 'trojan', 'shadowsocks') and outbound.get('tag')
+        if outbound.get('type') in ('vless', 'hysteria2', 'trojan', 'shadowsocks', 'socks') and outbound.get('tag')
     ]
 
 
@@ -59,7 +59,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
 <title>{esc(service_title())}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=1">
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/panel.css?v=2.1.9-about">
+<link rel="stylesheet" href="/panel.css?v=2.2.0">
 </head>
 <body>
 <div class="app-shell">
@@ -83,7 +83,7 @@ def render_shell(title, body, active, profile_tags=None, selected_profile=''):
   <div class="app-content"><main class="main">{body}</main></div>
 </div>
 <script src="/chart.js?v=4.5.1" defer></script>
-  <script src="/panel.js?v=2.1.9-about" defer></script>
+  <script src="/panel.js?v=2.2.0" defer></script>
 <script src="/happ-actions.js?v=10" defer></script>
 </body>
 </html>'''

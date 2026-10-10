@@ -7,6 +7,7 @@ import types
 import http.client
 import threading
 import unittest
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -399,6 +400,114 @@ class HistoryTests(unittest.TestCase):
         self.assertNotIn('<script>Alice</script>', page)
         self.assertIn('/happ-history.xls?', page)
 
+    def test_xml_export_is_well_formed_escaped_and_honours_filters(self):
+        hostile = 'Al<ice> & "Bob" \'x\'\x1b\x0b'
+        self.history.ingest({'connections': [self.row(name=hostile)], 'visits': [self.row(key='visit', user='personal-b', name='Bob')]}, self.at)
+        data = self.history.export_xml()
+        self.assertTrue(data.startswith(b'<?xml version="1.0" encoding="UTF-8"?>\n'))
+        root = ElementTree.fromstring(data)
+        self.assertEqual((root.tag, root.get('timezone'), root.get('records')), ('happ-statistics', 'UTC', '2'))
+        self.assertRegex(root.get('exported-at'), r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+        for name in ('user', 'since', 'until'):
+            self.assertNotIn(name, root.attrib)
+        records = {item.get('user-key'): item for item in root.findall('connection')}
+        self.assertEqual(records['personal-a'].attrib, {
+            'started-at': self.at.isoformat(timespec='microseconds'), 'last-seen-at': self.at.isoformat(timespec='microseconds'),
+            'user-key': 'personal-a', 'user': 'Al<ice> & "Bob" \'x\'', 'source-ip': '203.0.113.1', 'source-port': '40001',
+            'destination': 'example.com:443', 'network': 'TCP', 'download-bytes': '100', 'upload-bytes': '50',
+            'status': 'active', 'accuracy': 'observed',
+        })
+        self.assertEqual((records['personal-b'].get('status'), records['personal-b'].get('accuracy')), ('closed', 'final-bytes-unknown'))
+        self.assertNotIn('download-bytes', records['personal-b'].attrib)
+        self.assertNotIn(b'\x1b', data)
+        filtered = ElementTree.fromstring(self.history.export_xml('personal-a', '2026-10-02', '2026-10-02'))
+        self.assertEqual((filtered.get('records'), filtered.get('user'), filtered.get('since'), filtered.get('until')), ('1', 'personal-a', '2026-10-02', '2026-10-02'))
+        empty = ElementTree.fromstring(self.history.export_xml(since='2026-10-03'))
+        self.assertEqual((empty.get('records'), len(empty.findall('connection'))), ('0', 0))
+        with self.assertRaises(ValueError):
+            self.history.export_xml(since='not-a-date')
+
+    def test_history_page_offers_xml_export_and_confirmed_full_reset(self):
+        self.history.ingest({'connections': [self.row()]}, self.at)
+        page = render_history(self.history, {'user': ['personal-a'], 'since': ['2026-10-02']}, csrf='test-csrf')
+        self.assertIn('href="/happ-history.xls?user=personal-a&amp;since=2026-10-02&amp;until=" download>Экспорт XLS</a>', page)
+        self.assertIn('href="/happ-history.xml?user=personal-a&amp;since=2026-10-02&amp;until=" download>Экспорт XML</a>', page)
+        self.assertIn('<button class="danger" type="button" data-happ-history-reset-open>Полный сброс статистики</button>', page)
+        self.assertEqual(page.count('data-happ-history-reset-dialog'), 1)
+        dialog = page.split('<dialog class="gateway-dialog" data-happ-history-reset-dialog', 1)[1].split('</dialog>', 1)[0]
+        self.assertIn('method="post" action="/happ-history/reset"', dialog)
+        self.assertIn('name="csrf" value="test-csrf"', dialog)
+        self.assertIn('name="confirm" value="reset-all"', dialog)
+        self.assertIn('Внимание: действие необратимо.', dialog)
+        self.assertIn('Будут безвозвратно удалены история подключений, накопительные Download/Upload всех пользователей', dialog)
+        self.assertIn('href="/happ-history.xls" download>XLS</a> · <a href="/happ-history.xml" download>XML</a>', dialog)
+        self.assertIn('data-happ-history-reset-cancel>Отмена</button>', dialog)
+        self.assertIn('type="submit">Сбросить всю статистику</button>', dialog)
+
+    def test_full_reset_clears_all_statistics_keeps_settings_and_never_recounts_live_bytes(self):
+        self.history.set_retention(90)
+        payload = self.rate_payload(180, self.at)
+        payload['connections'] = [self.row(download=180, upload=80), self.row(key='bob', user='personal-b', name='Bob', download=900, upload=90), self.row(key='vip', user='VIP', name='VIP', download=5, upload=5)]
+        payload['users'].append({'user_key': 'personal-b', 'user_name': 'Bob', 'connections': 1})
+        payload['traffic_samples'].append({'id': 'rate-b', 'user_key': 'personal-b', 'download_bytes': 900})
+        self.history.ingest(payload, self.at)
+        self.history.ingest({'connections': [self.row(download=180, upload=80), self.row(key='closed', user='personal-c', name='Carol', download=7, upload=7)]}, self.at + dt.timedelta(seconds=1))
+        self.history.ingest({'connections': [self.row(download=180, upload=80), self.row(key='bob', user='personal-b', name='Bob', download=900, upload=90)]}, self.at + dt.timedelta(seconds=2))
+        with self.history.connect() as database:
+            for table in ('connections', 'user_traffic_totals', 'download_rate_samples', 'download_rate_counters'):
+                self.assertGreater(database.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], 0, table)
+        collected = self.history.last_collected_at()
+        removed = self.history.reset_all_statistics()
+        self.assertEqual(removed, 4)
+        with self.history.connect() as database:
+            for table in ('connections', 'user_traffic_totals', 'download_rate_samples', 'download_rate_counters'):
+                self.assertEqual(database.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], 0, table)
+            self.assertEqual(database.execute('SELECT COUNT(*) FROM traffic_reset_baselines').fetchone()[0], 2)
+        self.assertEqual(self.history.query()['count'], 0)
+        self.assertEqual(self.history.user_totals(), {})
+        self.assertEqual(self.history.traffic_chart(), [])
+        self.assertEqual(self.history.download_chart(90, self.at + dt.timedelta(seconds=2))['users'], [])
+        self.assertEqual(self.history.retention_days(), 90)
+        self.assertEqual(self.history.last_collected_at(), collected)
+        self.assertEqual(self.history.reset_all_statistics(), 0)
+        later = {'connections': [self.row(download=200, upload=100), self.row(key='bob', user='personal-b', name='Bob', download=1000, upload=100)]}
+        self.history.ingest(later, self.at + dt.timedelta(seconds=3))
+        totals = self.history.user_totals()
+        self.assertEqual((totals['personal-a']['download_bytes'], totals['personal-a']['upload_bytes']), (20, 20))
+        self.assertEqual((totals['personal-b']['download_bytes'], totals['personal-b']['upload_bytes']), (100, 10))
+        self.assertEqual(self.history.query()['count'], 2)
+
+    def assert_repeated_reset_keeps_baseline(self, name, reset):
+        history = HappHistory(Path(self.directory.name) / name)
+
+        def ingest(download, upload, offset):
+            history.ingest({'connections': [self.row(download=download, upload=upload)]}, self.at + dt.timedelta(seconds=offset))
+
+        ingest(1000, 500, 0)
+        reset(history)
+        ingest(1500, 700, 1)
+        totals = history.user_totals()['personal-a']
+        self.assertEqual((totals['download_bytes'], totals['upload_bytes']), (500, 200))
+        reset(history)
+        ingest(1800, 760, 2)
+        totals = history.user_totals()['personal-a']
+        self.assertEqual((totals['download_bytes'], totals['upload_bytes']), (300, 60))
+        self.assertEqual((history.query()['download_bytes'], history.query()['upload_bytes']), (300, 60))
+
+    def test_repeated_resets_do_not_restore_bytes_counted_before_an_earlier_reset(self):
+        self.assert_repeated_reset_keeps_baseline('per-user', lambda history: history.reset_user_totals('personal-a'))
+        self.assert_repeated_reset_keeps_baseline('full', lambda history: history.reset_all_statistics())
+
+    def test_full_reset_compacts_the_database_file(self):
+        rows = [self.row(key='bulk-' + str(index), download=index, upload=index) for index in range(1500)]
+        self.history.ingest({'connections': rows}, self.at)
+        self.history.ingest({'connections': []}, self.at + dt.timedelta(seconds=1))
+        before = self.history.path.stat().st_size
+        self.assertEqual(self.history.reset_all_statistics(), 1500)
+        self.assertLess(self.history.path.stat().st_size, before)
+        if os.name == 'posix':
+            self.assertEqual(self.history.path.stat().st_mode & 0o777, 0o600)
+
     def test_collector_error_recovers(self):
         self.history.record_collection_error()
         self.assertTrue(self.history.query()['collector_error'])
@@ -495,6 +604,18 @@ class HistoryTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.getheader('Content-Type'), 'application/vnd.ms-excel')
                 self.assertEqual(response.read()[:8], bytes.fromhex('d0cf11e0a1b11ae1'))
+                connection.request('GET', '/happ-history.xml?user=personal-a&since=2026-10-02')
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.getheader('Content-Type'), 'application/xml; charset=utf-8')
+                self.assertEqual(response.getheader('Content-Disposition'), 'attachment; filename="happ-statistics.xml"')
+                exported = ElementTree.fromstring(response.read())
+                self.assertEqual((exported.get('records'), exported.get('user'), exported.get('since')), ('1', 'personal-a', '2026-10-02'))
+                self.assertEqual(exported.find('connection').get('user'), 'Alice')
+                connection.request('GET', '/happ-history.xml?since=not-a-date')
+                response = connection.getresponse()
+                self.assertEqual(response.status, 400)
+                response.read()
                 for minutes in (10, 30, 60, 90):
                     connection.request('GET', '/happ-server/traffic?minutes=' + str(minutes))
                     response = connection.getresponse()
@@ -526,11 +647,61 @@ class HistoryTests(unittest.TestCase):
                 return False
 
             with patch.object(app.Handler, 'require_access', deny):
-                for route in ('/happ-history', '/happ-history.xls', '/happ-server/traffic?minutes=90', '/happ-server/live?seconds=60'):
+                for route in ('/happ-history', '/happ-history.xls', '/happ-history.xml', '/happ-server/traffic?minutes=90', '/happ-server/live?seconds=60'):
                     connection.request('GET', route)
                     response = connection.getresponse()
                     self.assertEqual(response.status, 403)
                     response.read()
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
+    def test_full_reset_endpoint_requires_access_csrf_and_confirmation(self):
+        def seed():
+            self.history.ingest({'connections': [self.row(), self.row(key='bob', user='personal-b', name='Bob', download=900, upload=90)]}, self.at)
+
+        seed()
+        server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+
+        def post(fields):
+            connection.request('POST', '/happ-history/reset', urlencode(fields), {'Content-Type': 'application/x-www-form-urlencoded'})
+            response = connection.getresponse()
+            response.read()
+            return response.status, urlparse(response.getheader('Location') or '')
+
+        try:
+            with patch.object(app, 'HAPP_HISTORY', self.history), patch.object(app.Handler, 'require_access', return_value=True):
+                for fields in ({'csrf': 'invalid-csrf', 'confirm': 'reset-all'}, {'csrf': app.CSRF_TOKEN}, {'csrf': app.CSRF_TOKEN, 'confirm': 'yes'}):
+                    status, location = post(fields)
+                    self.assertEqual((status, location.path, parse_qs(location.query)['kind']), (303, '/happ-history', ['error']))
+                    self.assertEqual(self.history.query()['count'], 2)
+                    self.assertEqual(self.history.user_totals()['personal-b']['download_bytes'], 900)
+                status, location = post({'csrf': app.CSRF_TOKEN, 'confirm': 'reset-all'})
+                query = parse_qs(location.query)
+                self.assertEqual((status, location.path, query['kind']), (303, '/happ-history', ['success']))
+                self.assertIn('Удалено записей истории: 2', query['message'][0])
+                self.assertEqual(self.history.query()['count'], 0)
+                self.assertEqual(self.history.user_totals(), {})
+                with patch.object(app, 'HAPP_HISTORY', None):
+                    status, location = post({'csrf': app.CSRF_TOKEN, 'confirm': 'reset-all'})
+                    self.assertEqual((status, parse_qs(location.query)['kind']), (303, ['error']))
+            seed()
+
+            def deny(handler):
+                handler.send_empty(403)
+                return False
+
+            with patch.object(app, 'HAPP_HISTORY', self.history), patch.object(app.Handler, 'require_access', deny):
+                connection.request('POST', '/happ-history/reset', urlencode({'csrf': app.CSRF_TOKEN, 'confirm': 'reset-all'}), {'Content-Type': 'application/x-www-form-urlencoded'})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 403)
+                response.read()
+                self.assertEqual(self.history.query()['count'], 2)
         finally:
             connection.close()
             server.shutdown()

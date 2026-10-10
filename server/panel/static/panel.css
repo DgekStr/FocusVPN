@@ -144,6 +144,8 @@ button:disabled { cursor: default; filter: none; opacity: .72; }
 .gateway-dialog::backdrop { background: rgba(5, 8, 22, .82); }
 .gateway-dialog h2 { margin: 0 0 10px; font-size: 19px; }
 .gateway-dialog p { color: var(--muted); }
+.gateway-dialog p a { color: var(--accent-2); }
+.gateway-dialog .dialog-warning { margin: 0 0 8px; color: #fda4af; font-weight: 700; }
 .gateway-dialog .actions { justify-content: flex-end; }
 [data-happ-user-create-dialog] { max-height: calc(100dvh - 32px); overflow: auto; }
 [data-happ-user-create-dialog] .form-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
@@ -228,11 +230,12 @@ th:last-child, td:last-child { padding-right: 0; }
 @media (prefers-reduced-motion: reduce) {
   .happ-activity-segment { transition: none; }
   .happ-activity-segment.lit.edge { animation: none; }
+  .happ-chart-user { transition: none; }
 }
 .happ-chart-plot canvas { display: block; width: 100%; height: 100%; }
 .happ-chart-legend { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: repeat(2, 44px); gap: 8px; align-content: start; }
 .happ-chart-legend > p { grid-column: 1 / -1; margin: 0; font-size: 12px; }
-.happ-chart-user { display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 2px 8px; align-items: center; min-width: 0; }
+.happ-chart-user { display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 2px 8px; align-items: center; min-width: 0; background-repeat: no-repeat; background-position: 0 100%; transition: background-size .4s ease; }
 .happ-chart-swatch { width: 8px; height: 8px; border-radius: 2px; }
 .happ-chart-user strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
 .happ-chart-user small { grid-column: 2; font-size: 11px; font-variant-numeric: tabular-nums; }

@@ -28,7 +28,7 @@ def run_test(tag):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', tag):
         raise ValueError('Invalid server tag')
     config = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
-    selected = next((item for item in config['outbounds'] if item.get('tag') == tag and item.get('type') in ('vless', 'hysteria2', 'trojan', 'shadowsocks')), None)
+    selected = next((item for item in config['outbounds'] if item.get('tag') == tag and item.get('type') in ('vless', 'hysteria2', 'trojan', 'shadowsocks', 'socks')), None)
     if selected is None:
         raise ValueError('Server not found')
     fingerprint = hashlib.sha256(json.dumps(selected, sort_keys=True).encode('utf-8')).hexdigest()

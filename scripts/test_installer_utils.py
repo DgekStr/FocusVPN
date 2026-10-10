@@ -226,13 +226,14 @@ export FOCUSVPN_ADMIN_NETWORK
         self.assertEqual(complete.returncode, 0, complete.stderr)
         with tempfile.TemporaryDirectory() as directory:
             incomplete = Path(directory)
-            for source in ('VERSION', 'server/panel'):
+            for source in ('VERSION', 'server/panel', 'server/systemd/trusttunnel.service', 'server/systemd/trusttunnel-client@.service'):
                 destination = incomplete / source
+                destination.parent.mkdir(parents=True, exist_ok=True)
                 if (root / source).is_dir():
                     shutil.copytree(root / source, destination, ignore=shutil.ignore_patterns('__pycache__'))
                 else:
                     shutil.copyfile(root / source, destination)
-            for missing in ('VERSION', 'server/panel/happ_server.py', 'server/panel/static/panel.css', 'server/panel/static/happ-actions.js', 'server/panel/static/chart.js', 'server/panel/static/chart.LICENSE.txt'):
+            for missing in ('VERSION', 'server/panel/happ_server.py', 'server/panel/happ_protocols.py', 'server/panel/trusttunnel_upstream.py', 'server/systemd/trusttunnel.service', 'server/systemd/trusttunnel-client@.service', 'server/panel/static/panel.css', 'server/panel/static/happ-actions.js', 'server/panel/static/chart.js', 'server/panel/static/chart.LICENSE.txt'):
                 with self.subTest(missing=missing):
                     path = incomplete / missing
                     original = path.read_bytes()
@@ -263,8 +264,8 @@ export FOCUSVPN_ADMIN_NETWORK
                     self.assertEqual((installed / name).stat().st_mode & 0o777, 0o644)
             self.assertEqual((installed / 'VERSION').read_bytes(), (root / 'VERSION').read_bytes())
             shell = (installed / 'panel_ui.py').read_text(encoding='utf-8')
-            self.assertIn('/panel.css?v=2.1.9', shell)
-            self.assertIn('/panel.js?v=2.1.9', shell)
+            self.assertIn('/panel.css?v=2.2.0', shell)
+            self.assertIn('/panel.js?v=2.2.0', shell)
             self.assertIn('repeat(25, minmax(0, 1fr))', (installed / 'static/panel.css').read_text(encoding='utf-8'))
             self.assertIn('index < 25', (installed / 'static/panel.js').read_text(encoding='utf-8'))
 
@@ -305,6 +306,39 @@ export FOCUSVPN_ADMIN_NETWORK
         ):
             with self.subTest(release=release), self.assertRaises(ValueError):
                 release_asset_sha256(release, asset_name)
+
+    def test_installer_pins_and_verifies_trusttunnel_without_making_it_mandatory(self):
+        installer = (Path(__file__).resolve().parents[1] / 'scripts' / 'install.sh').read_text(encoding='utf-8')
+        function = 'install_trusttunnel() {' + installer.split('install_trusttunnel() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('readonly TRUSTTUNNEL_VERSION="1.1.0"', installer)
+        self.assertIn('trusttunnel-v${TRUSTTUNNEL_VERSION}-linux-${machine}.tar.gz', function)
+        self.assertIn('releases/tags/v${TRUSTTUNNEL_VERSION}', function)
+        self.assertIn('installer_utils.py" "$release_metadata" "$asset"', function)
+        self.assertIn('sha256sum --check --status', function)
+        self.assertNotIn(' fail "', function)
+        main = installer.split('\nmain() {', 1)[1]
+        self.assertIn('install_trusttunnel || log "warning:', main)
+        self.assertLess(main.index('install_sing_box'), main.index('install_trusttunnel'))
+        unit = (Path(__file__).resolve().parents[1] / 'server' / 'systemd' / 'trusttunnel.service').read_text(encoding='utf-8')
+        for line in ('User=sing-box', 'ProtectSystem=strict', 'NoNewPrivileges=yes', 'CapabilityBoundingSet=', 'ExecStart=/opt/trusttunnel/trusttunnel_endpoint /etc/sing-box-happ-server/trusttunnel/vpn.toml /etc/sing-box-happ-server/trusttunnel/hosts.toml'):
+            self.assertIn(line, unit)
+
+    def test_installer_pins_and_verifies_the_trusttunnel_client_without_making_it_mandatory(self):
+        installer = (Path(__file__).resolve().parents[1] / 'scripts' / 'install.sh').read_text(encoding='utf-8')
+        function = 'install_trusttunnel_client() {' + installer.split('install_trusttunnel_client() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('readonly TRUSTTUNNEL_CLIENT_VERSION="1.1.11"', installer)
+        self.assertIn('trusttunnel_client-v${TRUSTTUNNEL_CLIENT_VERSION}-linux-${machine}.tar.gz', function)
+        self.assertIn('TrustTunnel/TrustTunnelClient/releases/download/v${TRUSTTUNNEL_CLIENT_VERSION}', function)
+        self.assertIn('releases/tags/v${TRUSTTUNNEL_CLIENT_VERSION}', function)
+        self.assertIn('installer_utils.py" "$release_metadata" "$asset"', function)
+        self.assertIn('sha256sum --check --status', function)
+        self.assertIn('trusttunnel_client" --version', function)
+        self.assertNotIn(' fail "', function)
+        main = installer.split('\nmain() {', 1)[1]
+        self.assertIn('install_trusttunnel_client || log "warning:', main)
+        self.assertLess(main.index('install_trusttunnel ||'), main.index('install_trusttunnel_client ||'))
+        self.assertIn('server/panel/trusttunnel_upstream.py server/systemd/trusttunnel-client@.service', installer)
+        self.assertIn('TrustTunnel endpoint and client (/opt/trusttunnel)', installer)
 
 
 if __name__ == '__main__':

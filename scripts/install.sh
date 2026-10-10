@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 
 readonly SING_BOX_VERSION="1.14.2"
+readonly TRUSTTUNNEL_VERSION="1.1.0"
+readonly TRUSTTUNNEL_CLIENT_VERSION="1.1.11"
+readonly TRUSTTUNNEL_ROOT="/opt/trusttunnel"
 readonly WG_EASY_IMAGE="ghcr.io/wg-easy/wg-easy:15.4.0"
 readonly INSTALL_ROOT="/opt/focusvpn-installer"
 readonly APP_ROOT="/opt/sing-box-admin"
@@ -79,8 +82,8 @@ confirm_install_plan() {
   [[ "${FOCUSVPN_INSTALL_PLAN_CONFIRMED:-}" == "1" ]] && return 0
   cat <<'EOF'
 [focusvpn] WARNING: installation will make system-level changes.
-Packages: ca-certificates, curl, Docker, kmod, nftables, Nginx, OpenSSL, Python 3, python3-xlwt, qrencode, tar, wireguard-tools, sing-box.
-Services/container to enable: docker, nginx, sing-box-admin, wg-easy-private-ui, wg-easy.
+Packages: ca-certificates, curl, Docker, kmod, nftables, Nginx, OpenSSL, Python 3, python3-xlwt, qrencode, tar, wireguard-tools, sing-box, TrustTunnel endpoint and client (/opt/trusttunnel).
+Services/container to enable: docker, nginx, sing-box-admin, wg-easy-private-ui, wg-easy (trusttunnel and trusttunnel-client@<server> are started by the panel only when used).
 Admin panel: https://<server-ip>:7445 (self-signed certificate; browser warning expected).
 Panel HTTPS accepts all IPv4 sources by default and requires authentication; an explicit admin CIDR is preserved.
 wg-easy administrator/API setup is automatic; private credentials are stored with mode 0600.
@@ -220,6 +223,85 @@ install_sing_box() {
   rm -rf "$temporary"
 }
 
+install_trusttunnel() {
+  local current="" machine temporary archive release_metadata asset base expected_checksum
+  if [[ -x "$TRUSTTUNNEL_ROOT/trusttunnel_endpoint" ]]; then
+    current="$("$TRUSTTUNNEL_ROOT/trusttunnel_endpoint" --version 2>/dev/null | awk 'NR == 1 { print $NF }')"
+  fi
+  if [[ "$current" == "$TRUSTTUNNEL_VERSION" ]]; then
+    log "TrustTunnel endpoint $TRUSTTUNNEL_VERSION already installed"
+    return 0
+  fi
+  case "$ARCH" in
+    amd64) machine="x86_64" ;;
+    arm64) machine="aarch64" ;;
+    *) return 1 ;;
+  esac
+
+  temporary="$(mktemp -d)"
+  asset="trusttunnel-v${TRUSTTUNNEL_VERSION}-linux-${machine}.tar.gz"
+  base="https://github.com/TrustTunnel/TrustTunnel/releases/download/v${TRUSTTUNNEL_VERSION}"
+  archive="$temporary/$asset"
+  release_metadata="$temporary/release.json"
+
+  log "downloading TrustTunnel endpoint $TRUSTTUNNEL_VERSION for $machine"
+  if ! curl --fail --location --retry 3 --output "$archive" "$base/$asset" \
+    || ! curl --fail --location --retry 3 --header 'Accept: application/vnd.github+json' --header 'User-Agent: FocusVPN-installer' --output "$release_metadata" "https://api.github.com/repos/TrustTunnel/TrustTunnel/releases/tags/v${TRUSTTUNNEL_VERSION}"; then
+    rm -rf "$temporary"
+    return 1
+  fi
+  expected_checksum="$(python3 "$REPO_ROOT/scripts/installer_utils.py" "$release_metadata" "$asset")" || { rm -rf "$temporary"; return 1; }
+  if ! printf '%s  %s\n' "$expected_checksum" "$archive" | sha256sum --check --status; then
+    rm -rf "$temporary"
+    return 1
+  fi
+  tar --extract --gzip --file "$archive" --directory "$temporary"
+  install -d -m 0755 "$TRUSTTUNNEL_ROOT"
+  install -m 0755 "$(find "$temporary" -type f -name trusttunnel_endpoint -print -quit)" "$TRUSTTUNNEL_ROOT/trusttunnel_endpoint"
+  install -m 0644 "$(find "$temporary" -type f -name LICENSE -print -quit)" "$TRUSTTUNNEL_ROOT/LICENSE"
+  rm -rf "$temporary"
+  [[ "$("$TRUSTTUNNEL_ROOT/trusttunnel_endpoint" --version | awk 'NR == 1 { print $NF }')" == "$TRUSTTUNNEL_VERSION" ]]
+}
+
+install_trusttunnel_client() {
+  local current="" machine temporary archive release_metadata asset base expected_checksum
+  if [[ -x "$TRUSTTUNNEL_ROOT/trusttunnel_client" ]]; then
+    current="$("$TRUSTTUNNEL_ROOT/trusttunnel_client" --version 2>/dev/null | awk 'NR == 1 { print $NF }')"
+  fi
+  if [[ "$current" == "$TRUSTTUNNEL_CLIENT_VERSION" ]]; then
+    log "TrustTunnel client $TRUSTTUNNEL_CLIENT_VERSION already installed"
+    return 0
+  fi
+  case "$ARCH" in
+    amd64) machine="x86_64" ;;
+    arm64) machine="aarch64" ;;
+    *) return 1 ;;
+  esac
+
+  temporary="$(mktemp -d)"
+  asset="trusttunnel_client-v${TRUSTTUNNEL_CLIENT_VERSION}-linux-${machine}.tar.gz"
+  base="https://github.com/TrustTunnel/TrustTunnelClient/releases/download/v${TRUSTTUNNEL_CLIENT_VERSION}"
+  archive="$temporary/$asset"
+  release_metadata="$temporary/release.json"
+
+  log "downloading TrustTunnel client $TRUSTTUNNEL_CLIENT_VERSION for $machine"
+  if ! curl --fail --location --retry 3 --output "$archive" "$base/$asset" \
+    || ! curl --fail --location --retry 3 --header 'Accept: application/vnd.github+json' --header 'User-Agent: FocusVPN-installer' --output "$release_metadata" "https://api.github.com/repos/TrustTunnel/TrustTunnelClient/releases/tags/v${TRUSTTUNNEL_CLIENT_VERSION}"; then
+    rm -rf "$temporary"
+    return 1
+  fi
+  expected_checksum="$(python3 "$REPO_ROOT/scripts/installer_utils.py" "$release_metadata" "$asset")" || { rm -rf "$temporary"; return 1; }
+  if ! printf '%s  %s\n' "$expected_checksum" "$archive" | sha256sum --check --status; then
+    rm -rf "$temporary"
+    return 1
+  fi
+  tar --extract --gzip --file "$archive" --directory "$temporary"
+  install -d -m 0755 "$TRUSTTUNNEL_ROOT"
+  install -m 0755 "$(find "$temporary" -type f -name trusttunnel_client -print -quit)" "$TRUSTTUNNEL_ROOT/trusttunnel_client"
+  rm -rf "$temporary"
+  [[ "$("$TRUSTTUNNEL_ROOT/trusttunnel_client" --version | awk 'NR == 1 { print $NF }')" == "$TRUSTTUNNEL_CLIENT_VERSION" ]]
+}
+
 ensure_sing_box_account() {
   getent group sing-box >/dev/null || groupadd --system sing-box
   id -u sing-box >/dev/null 2>&1 || useradd --system --gid sing-box --home-dir /var/lib/sing-box --shell /usr/sbin/nologin sing-box
@@ -232,6 +314,8 @@ validate_runtime_bundle() {
     server/panel/app.py server/panel/panel_ui.py server/panel/crm_bridge.py \
     server/panel/happ_server.py server/panel/happ_server_ui.py server/panel/happ_users.py \
     server/panel/happ_stats.py server/panel/happ_history.py server/panel/happ_history_ui.py \
+    server/panel/happ_protocols.py server/panel/happ_protocols_ui.py server/systemd/trusttunnel.service \
+    server/panel/trusttunnel_upstream.py server/systemd/trusttunnel-client@.service \
     server/panel/server_metrics.py server/panel/vless_monitor.py \
     server/panel/wg_admin.py server/panel/wg_easy_api.py \
     server/panel/static/panel.css server/panel/static/panel.js server/panel/static/happ-actions.js \
@@ -479,6 +563,8 @@ main() {
   check_legacy_wireguard
   install_packages
   install_sing_box
+  install_trusttunnel || log "warning: TrustTunnel endpoint was not installed (download, checksum or architecture problem); the panel keeps TrustTunnel unavailable until /opt/trusttunnel/trusttunnel_endpoint exists"
+  install_trusttunnel_client || log "warning: TrustTunnel client was not installed (download, checksum or architecture problem); importing TrustTunnel servers stays unavailable until /opt/trusttunnel/trusttunnel_client exists"
   ensure_sing_box_account
   install_tree
   initialize_runtime_files

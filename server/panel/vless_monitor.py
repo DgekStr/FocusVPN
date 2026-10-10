@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 
-SERVER_TYPES = ('vless', 'hysteria2', 'trojan', 'shadowsocks')
+SERVER_TYPES = ('vless', 'hysteria2', 'trojan', 'shadowsocks', 'socks')
 MESSAGE_FIELDS = ('date', 'time', 'old', 'new', 'source', 'latency')
 MAX_TEMPLATE_LENGTH = 1000
 FAILOVER_STRIKES = 3

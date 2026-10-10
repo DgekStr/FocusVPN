@@ -18,6 +18,24 @@
     }
   });
 
+  document.addEventListener('click', (event) => {
+    const dialog = document.querySelector('[data-happ-history-reset-dialog]');
+    if (!dialog) return;
+    if (event.target.closest('[data-happ-history-reset-open]')) {
+      event.preventDefault();
+      dialog.showModal();
+      dialog.querySelector('[data-happ-history-reset-cancel]')?.focus();
+    } else if (event.target.closest('[data-happ-history-reset-cancel]')) {
+      event.preventDefault();
+      dialog.close();
+    } else if (event.target === dialog) {
+      const bounds = dialog.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+        dialog.close();
+      }
+    }
+  });
+
   function copyLink(link, button, successText = 'Скопировано') {
     const originalText = button.textContent;
     const done = () => {
@@ -93,8 +111,8 @@
       const qrUrl = new URL(opener.dataset.qrUrl || `${document.body?.dataset?.vpnBase || ''}/happ-qr`, window.location.href);
       qrUrl.searchParams.set('v', '4');
       image.src = qrUrl.href;
-      image.alt = `QR подписки HAPP: ${label}`;
-      if (caption) caption.textContent = `Мобильная подписка HAPP: ${label}`;
+      image.alt = opener.dataset.qrAlt || `QR подписки HAPP: ${label}`;
+      if (caption) caption.textContent = opener.dataset.qrNote || `Мобильная подписка HAPP: ${label}`;
       modal.hidden = false;
       modal.setAttribute('aria-hidden', 'false');
       document.body.style.overflow = 'hidden';

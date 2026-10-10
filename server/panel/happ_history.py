@@ -3,15 +3,23 @@ import io
 import json
 import math
 import os
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
 from happ_stats import format_bytes, format_datetime
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
+
+XML_INVALID_CHARACTERS = re.compile('[^\t\n\r\u0020-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]')
 
 
 def utc_text(value=None):
     return (value or dt.datetime.now(dt.timezone.utc)).astimezone(dt.timezone.utc).isoformat(timespec='microseconds')
+
+
+def xml_attributes(items):
+    return ''.join(' ' + name + '=' + quoteattr(XML_INVALID_CHARACTERS.sub('', str(value))) for name, value in items if value is not None and value != '')
 
 
 class HappHistory:
@@ -468,27 +476,53 @@ class HappHistory:
             result.append(item)
         return result
 
+    @staticmethod
+    def clear_statistics(database, user_key=None):
+        scope = '' if user_key is None else ' WHERE user_key=?'
+        values = () if user_key is None else (user_key,)
+        live_rows = database.execute('SELECT connection_key,live_id,user_key,download_bytes,upload_bytes FROM connections WHERE active=1' + ('' if user_key is None else ' AND user_key=?'), values).fetchall()
+        baselines = []
+        for row in live_rows:
+            if not row['connection_key']:
+                continue
+            # Raw sing-box counters = stored bytes + the baseline of an earlier reset, so repeated resets never re-count old bytes.
+            prior = database.execute('SELECT download_bytes,upload_bytes FROM traffic_reset_baselines WHERE connection_key=?', (row['connection_key'],)).fetchone()
+            if prior is None and row['live_id']:
+                prior = database.execute('SELECT download_bytes,upload_bytes FROM traffic_reset_baselines WHERE live_id=? ORDER BY connection_key LIMIT 1', (row['live_id'],)).fetchone()
+            baselines.append((row['connection_key'], row['live_id'], row['user_key'], (row['download_bytes'] or 0) + (prior['download_bytes'] if prior else 0), (row['upload_bytes'] or 0) + (prior['upload_bytes'] if prior else 0), utc_text()))
+        database.executemany('INSERT OR REPLACE INTO traffic_reset_baselines (connection_key,live_id,user_key,download_bytes,upload_bytes,updated_at) VALUES (?,?,?,?,?,?)', baselines)
+        history_rows = removed = 0
+        for table in ('connections', 'user_traffic_totals', 'download_rate_samples', 'download_rate_counters'):
+            count = database.execute('DELETE FROM ' + table + scope, values).rowcount
+            removed += count
+            if table == 'connections':
+                history_rows = count
+        return history_rows, removed
+
     def reset_user_totals(self, user_key):
         if not isinstance(user_key, str) or not user_key or len(user_key) > 128:
             raise ValueError('Пользователь статистики указан некорректно.')
         with self.lock, self.connect() as database:
-            active_rows = database.execute('''
-                SELECT connection_key,live_id,download_bytes,upload_bytes
-                FROM connections WHERE user_key=? AND active=1
-            ''', (user_key,)).fetchall()
-            database.execute('DELETE FROM traffic_reset_baselines WHERE user_key=?', (user_key,))
-            for row in active_rows:
-                if row['connection_key']:
-                    database.execute('''
-                        INSERT OR REPLACE INTO traffic_reset_baselines
-                        (connection_key,live_id,user_key,download_bytes,upload_bytes,updated_at)
-                        VALUES (?,?,?,?,?,?)
-                    ''', (row['connection_key'], row['live_id'], user_key, row['download_bytes'] or 0, row['upload_bytes'] or 0, utc_text()))
-            removed = 0
-            for table in ('connections', 'user_traffic_totals', 'download_rate_samples', 'download_rate_counters'):
-                removed += database.execute('DELETE FROM ' + table + ' WHERE user_key=?', (user_key,)).rowcount
+            _, removed = self.clear_statistics(database, user_key)
         self.secure_files()
         return removed > 0
+
+    def reset_all_statistics(self):
+        with self.lock, self.connect() as database:
+            history_rows, _ = self.clear_statistics(database)
+        self.secure_files()
+        self.compact()
+        return history_rows
+
+    def compact(self):
+        with self.lock:
+            try:
+                with self.connect() as database:
+                    database.execute('VACUUM')
+            except sqlite3.OperationalError:
+                return False
+        self.secure_files()
+        return True
 
     def user_options(self):
         with self.connect() as database:
@@ -533,3 +567,23 @@ class HappHistory:
         output = io.BytesIO()
         workbook.save(output)
         return output.getvalue()
+
+    def export_xml(self, user_key='', since='', until=''):
+        where, values = self.filters(user_key, since, until)
+        records = []
+        with self.connect() as database:
+            for row in database.execute('SELECT * FROM connections' + where + ' ORDER BY started_at,connection_key', values):
+                records.append('  <connection' + xml_attributes((
+                    ('started-at', row['started_at']), ('last-seen-at', row['last_seen_at']),
+                    ('user-key', row['user_key']), ('user', row['user_name']),
+                    ('source-ip', row['source_ip']), ('source-port', row['source_port']),
+                    ('destination', row['destination']), ('network', row['network']),
+                    ('download-bytes', row['download_bytes']), ('upload-bytes', row['upload_bytes']),
+                    ('status', 'active' if row['active'] else 'closed'),
+                    ('accuracy', 'observed' if row['download_bytes'] is not None else 'final-bytes-unknown'),
+                )) + '/>\n')
+        root = '<happ-statistics' + xml_attributes((
+            ('exported-at', dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')), ('timezone', 'UTC'),
+            ('records', len(records)), ('user', user_key), ('since', since), ('until', until),
+        )) + '>\n'
+        return ('<?xml version="1.0" encoding="UTF-8"?>\n' + root + ''.join(records) + '</happ-statistics>\n').encode('utf-8')

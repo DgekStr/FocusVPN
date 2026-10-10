@@ -40,7 +40,7 @@ def render_pages():
     subscriptions = {user['id']: 'http://127.0.0.1:8788/happ-subscription/demo-only-' + user['id'] for user in users}
     subscriptions['VIP'] = 'http://127.0.0.1:8788/happ-subscription/demo-only-vip'
     config = {'outbounds': [{'tag': 'demo-vless', 'type': 'vless', 'server': 'vpn.example.com', 'server_port': 443}, {'tag': 'demo-hy2', 'type': 'hysteria2', 'server': 'hy2.example.com', 'server_port': 443}], 'route': {'final': 'demo-vless'}}
-    with patch.object(panel_ui, 'load_profile_tags', return_value=['demo-vless', 'demo-hy2']), patch.object(happ_server_ui, 'load_state', return_value={'server': 'vpn.example.com', 'port': 9445, 'sni': 'example.org'}), patch.object(happ_server_ui, 'public_vless_link', return_value='vless://<demo-only-vip>@vpn.example.com:9445#VIP'), patch.object(app, 'CSRF_TOKEN', 'demo-only-csrf'), patch.object(app, 'service_state', return_value='active'), patch.object(app, 'outbound_check_states', return_value=CHECKS):
+    with patch.object(panel_ui, 'load_profile_tags', return_value=['demo-vless', 'demo-hy2']), patch.object(app, 'CSRF_TOKEN', 'demo-only-csrf'), patch.object(app, 'service_state', return_value='active'), patch.object(app, 'outbound_check_states', return_value=CHECKS):
         happ = happ_server_ui.page(users, 'demo-only-csrf', traffic=LIVE['account_traffic'], subscriptions=subscriptions)
         outbounds = app.render_outbounds_page(config, {})
         with tempfile.TemporaryDirectory(prefix='focusvpn-preview-') as directory:

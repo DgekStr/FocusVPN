@@ -58,7 +58,9 @@ class RemovedExternalClientTests(unittest.TestCase):
         try:
             with patch.object(app.Handler, 'require_access', return_value=True), patch.object(app, 'command') as command:
                 for method, path in (('GET', '/settings/gateway/client/live'), ('POST', '/settings/gateway/client'), ('POST', '/settings/gateway/config')):
-                    connection.request(method, path, urlencode({'csrf': app.CSRF_TOKEN, 'operation': 'connect'}), {'Content-Type': 'application/x-www-form-urlencoded'})
+                    # A GET body would stay unread and the server's close could reset the socket before the 404 is read.
+                    body = urlencode({'csrf': app.CSRF_TOKEN, 'operation': 'connect'}) if method == 'POST' else None
+                    connection.request(method, path, body, {'Content-Type': 'application/x-www-form-urlencoded'} if body else {})
                     response = connection.getresponse()
                     self.assertEqual(response.status, 404)
                     response.read()

@@ -1,0 +1,29 @@
+[Unit]
+Description=TrustTunnel upstream client bridge %i (FocusVPN)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=sing-box
+Group=sing-box
+ExecStart=/opt/trusttunnel/trusttunnel_client --config /etc/sing-box/trusttunnel-clients/%i.toml
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=1048576
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

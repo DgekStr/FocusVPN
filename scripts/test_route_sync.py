@@ -214,7 +214,7 @@ class RouteSyncTests(unittest.TestCase):
         self.assertEqual(page.count('target="_blank"'), 6)
         self.assertEqual(page.count('rel="noopener noreferrer"'), 6)
         self.assertIn('class="nav-link nav-about active"', page)
-        self.assertIn('/panel.css?v=2.1.9', page)
+        self.assertIn('/panel.css?v=2.2.0', page)
 
     def test_about_route_requires_login_and_renders_for_signed_in_admin(self):
         server = app.VpnOnlyServer(('127.0.0.1', 0), app.Handler)
@@ -308,6 +308,17 @@ class RouteSyncTests(unittest.TestCase):
         self.assertIn('{date}, {time}, {old}, {new}, {source}, {latency}', page)
         self.assertIn('name="utc_offset" value="+03:00"', page)
         self.assertIn('data-monitor-status>', page)
+        self.assertIn('<input id="happ_subscription_update_minutes" name="subscription_update_minutes" type="number" min="10" max="600" step="1" value="60" required>', page)
+        self.assertLess(page.index('id="happ_subscription_announcement"'), page.index('id="happ_subscription_update_minutes"'))
+        self.assertLess(page.index('id="happ_subscription_update_minutes"'), page.index('Сохранить блок HAPP'))
+        self.assertIn('сейчас клиентам отдаётся 1 ч', page)
+        self.patch('load_happ_state', return_value={'server': 'vpn.example.com', 'subscription_update_minutes': 150})
+        page = app.render_settings_page({}, {})
+        self.assertIn('step="1" value="150" required>', page)
+        self.assertIn('сейчас клиентам отдаётся 3 ч', page)
+        self.patch('load_happ_state', return_value={'server': 'vpn.example.com', 'subscription_update_minutes': 'broken'})
+        self.assertIn('step="1" value="60" required>', app.render_settings_page({}, {}))
+        self.patch('load_happ_state', return_value={'server': 'vpn.example.com'})
 
         self.patch('load_monitor_settings', return_value={**DEFAULT_SETTINGS, 'failover_enabled': True, 'message_template': '</textarea><script>alert(1)</script> "{old}"'})
         self.patch('VLESS_MONITOR', types.SimpleNamespace(status=lambda: {'last_checked_at': None, 'candidate': None, 'streak': 0, 'gateway_text': 'Шлюз по умолчанию auto-10: доступен. Проверено 10.10.2026 19:41:05 UTC.'}))

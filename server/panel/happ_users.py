@@ -3,10 +3,12 @@ import hashlib
 import hmac
 import json
 import secrets
+import subprocess
 import uuid
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 
+from happ_protocols import ensure_credentials, new_credentials, normalize_settings
 from vless_monitor import write_private_json
 
 
@@ -55,7 +57,7 @@ def user_link(vip_link, user):
     return urlunsplit(('vless', f'{uuid.UUID(user["uuid"])}@{host}:{parsed.port}', parsed.path, parsed.query, quote(user['name'], safe='')))
 
 
-def build_user_config(config, registry, vip, at=None):
+def build_user_config(config, registry, vip, at=None, protocols=None):
     candidate = json.loads(json.dumps(config))
     inbound = next((item for item in candidate.get('inbounds', []) if item.get('tag') == vip['inbound_tag'] and item.get('type') == 'vless'), None)
     if inbound is None:
@@ -64,6 +66,7 @@ def build_user_config(config, registry, vip, at=None):
     flow = next((item.get('flow', '') for item in protected), '')
     credentials = list(protected)
     existing = {str(item.get('uuid')).lower() for item in protected}
+    active = []
     for user in registry['users']:
         credential = str(uuid.UUID(user['uuid']))
         if credential in existing:
@@ -74,16 +77,21 @@ def build_user_config(config, registry, vip, at=None):
             if flow:
                 record['flow'] = flow
             credentials.append(record)
+            active.append(user)
     inbound['users'] = credentials
+    if protocols is not None:
+        protocols.apply_to_config(candidate, active)
     return candidate
 
 
 class HappUsers:
-    def __init__(self, directory, config_path, public_state_path, apply_config):
+    def __init__(self, directory, config_path, public_state_path, apply_config, protocols=None):
         self.directory = Path(directory)
         self.config_path = Path(config_path)
         self.public_state_path = Path(public_state_path)
         self.apply_config = apply_config
+        self.protocols = protocols
+        self.protocol_error = ''
         self.registry_path = self.directory / 'happ-users.json'
         self.vip_path = self.directory / 'happ-vip.json'
         self.subscription_key_path = self.directory / 'happ-subscription-key.json'
@@ -105,6 +113,9 @@ class HappUsers:
             write_private_json(self.vip_path, {'link': link, 'inbound_tag': inbound['tag'], 'users': inbound['users'], 'inbound_fields': invariant_fields})
         if not self.registry_path.exists():
             write_private_json(self.registry_path, {'users': []})
+        registry = self.registry()
+        if ensure_credentials(registry):
+            write_private_json(self.registry_path, registry)
         if not self.subscription_key_path.exists():
             write_private_json(self.subscription_key_path, {'key': secrets.token_hex(32)})
         self.subscription_key = bytes.fromhex(json.loads(self.subscription_key_path.read_text(encoding='utf-8'))['key'])
@@ -174,7 +185,7 @@ class HappUsers:
     def commit(self, registry):
         original = self.registry()
         config = json.loads(self.config_path.read_text(encoding='utf-8'))
-        candidate = build_user_config(config, registry, self.vip())
+        candidate = build_user_config(config, registry, self.vip(), protocols=self.protocols)
         self.require_vip(candidate)
         write_private_json(self.registry_path, registry)
         try:
@@ -182,6 +193,56 @@ class HappUsers:
         except Exception:
             write_private_json(self.registry_path, original)
             raise
+        self.sync_protocols()
+
+    def active_users(self, at=None):
+        return [user for user in self.registry()['users'] if user_status(user, at) == 'enabled']
+
+    def sync_protocols(self, restart=False):
+        if self.protocols is None:
+            return
+        try:
+            self.protocols.sync_trusttunnel(self.protocols.settings(), self.active_users(), restart=restart)
+            self.protocol_error = ''
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            self.protocol_error = str(error)
+
+    def apply_protocols(self, raw):
+        if self.protocols is None:
+            raise RuntimeError('Управление протоколами HAPP недоступно.')
+        previous = self.protocols.settings()
+        vip_port = self.vip().get('inbound_fields', {}).get('listen_port')
+        settings = normalize_settings({**raw, 'generated_for': previous['generated_for']}, reserved=(vip_port,) if isinstance(vip_port, int) else ())
+        original = self.config_path.read_text(encoding='utf-8')
+        try:
+            settings = self.protocols.prepare_tls(settings, force=bool(raw.get('regenerate')))
+            self.protocols.save(settings)
+            config = json.loads(original)
+            candidate = build_user_config(config, self.registry(), self.vip(), protocols=self.protocols)
+            self.require_vip(candidate)
+            if candidate != config:
+                self.apply_config(json.dumps(candidate, ensure_ascii=False))
+            self.protocols.sync_trusttunnel(settings, self.active_users(), restart=True)
+            self.protocol_error = ''
+        except Exception:
+            self.protocols.save(previous)
+            try:
+                if json.loads(self.config_path.read_text(encoding='utf-8')) != json.loads(original):
+                    self.apply_config(original)
+                self.protocols.sync_trusttunnel(previous, self.active_users(), restart=True)
+            except Exception:
+                pass
+            raise
+
+    def protocol_links(self):
+        if self.protocols is None:
+            return {}
+        return self.protocols.links(self.active_users())
+
+    def subscription_extra_links(self, user):
+        if self.protocols is None or user.get('id') == 'VIP':
+            return []
+        return self.protocols.subscription_links(user)
 
     def validate_name_and_expiry(self, name, expires_at):
         name = str(name).strip()
@@ -199,7 +260,7 @@ class HappUsers:
             raise ValueError('Достигнут предел 200 персональных пользователей.')
         if any(item['name'].casefold() == name.casefold() for item in registry['users']):
             raise ValueError('Пользователь с таким именем уже существует.')
-        user = {'id': str(uuid.uuid4()), 'uuid': str(uuid.uuid4()), 'name': name, 'enabled': True, 'expires_at': expiry, 'created_at': now_utc().isoformat()}
+        user = {'id': str(uuid.uuid4()), 'uuid': str(uuid.uuid4()), 'name': name, 'enabled': True, 'expires_at': expiry, 'created_at': now_utc().isoformat(), **new_credentials()}
         registry['users'].append(user)
         self.commit(registry)
         self.audit('create', user)
@@ -230,15 +291,16 @@ class HappUsers:
 
     def reconcile_expired(self):
         config = json.loads(self.config_path.read_text(encoding='utf-8'))
-        candidate = build_user_config(config, self.registry(), self.vip())
-        if candidate != config:
+        candidate = build_user_config(config, self.registry(), self.vip(), protocols=self.protocols)
+        changed = candidate != config
+        if changed:
             self.apply_config(json.dumps(candidate, ensure_ascii=False))
             active = {str(user.get('uuid')).lower() for inbound in config.get('inbounds', []) if inbound.get('tag') == self.vip()['inbound_tag'] for user in inbound.get('users', [])}
             for user in self.registry()['users']:
                 if user_status(user) == 'expired' and user['uuid'] in active:
                     self.audit('expired', user)
-            return True
-        return False
+        self.sync_protocols()
+        return changed
 
     def users(self):
         vip_link = self.vip()['link']

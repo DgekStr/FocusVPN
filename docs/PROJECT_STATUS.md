@@ -1,6 +1,6 @@
 # Project status
 
-Версия: **v2.1.9**. Дата фиксации: **2026-10-10**.
+Версия: **v2.2.0** (развёрнута на `.39`, исходники отправлены в `master`; тег не создан, последний опубликованный релиз — v2.1.9). Дата фиксации: **2026-10-10**.
 
 ## Вехи
 
@@ -16,13 +16,13 @@
 | M8. HAPP Server | Done | VLESS Reality inbound `9445`, отдельный provider outbound без внешнего WG-клиента |
 | M9. UI consistency | Done | Основной раздел VPN-серверы, пункт VLESS скрыт; live статусы, ping, Settings, журнал, public HAPP QR |
 | M10. Publication package | Done | Код, units, документация и обезличенные fixtures; runtime-секреты не входят в пакет |
-| M11. JSON server manager | Done | Объект/массив sing-box/Xray, flat VLESS settings, VLESS TCP/gRPC, Hysteria2, Trojan и Shadowsocks; import/replace/delete синхронизируют selector и HAPP |
+| M11. JSON server manager | Done | Объект/массив/полный config со всеми серверами sing-box/Xray, flat VLESS settings, VLESS TCP/gRPC, Hysteria2, Trojan, Shadowsocks и TrustTunnel (через локальный клиент-мост с killswitch); import/replace/delete синхронизируют selector и HAPP |
 | M12. Background checks | Done | POST не ждёт сеть; последовательная очередь, fingerprint-bound результаты, timeout/retry polling, стартовый баннер заменяется итогом |
 | M13. VLESS automation | Done, opt-in | Интервал 1-60 минут, HTTPS задержка, 3 последовательные победы, journal, фоновые Mattermost уведомления с редактируемым шаблоном и смещением UTC |
-| M14. Regression coverage | Done | 210 Python-тестов и оба Node VM UI набора; регрессии удаления клиента, HTTP404, сохранения WG-сервера, failover-гистерезиса и сброса статистики HAPP |
+| M14. Regression coverage | Done | 246 Python-тестов и оба Node VM UI набора; регрессии удаления клиента, HTTP404, сохранения WG-сервера, failover-гистерезиса и сброса статистики HAPP |
 | M15. Персональные HAPP аккаунты | Done | UUID/QR, включение, отзыв, удаление, срок UTC; VIP сохраняется |
-| M16. Статистика и история | Done | Lifetime totals отдельно от 60-дневной SQLite history, TOP-5, per-user reset (итог, история и скорости, без возврата старых байтов), `/happ-history` chart, XLS |
-| M17. Подписки HAPP | Done server-side | Секретный токен аккаунта, трафик / безлимит, часовое обновление, название с emoji и короткое announce |
+| M16. Статистика и история | Done | Lifetime totals отдельно от 60-дневной SQLite history, TOP-5, per-user reset (итог, история и скорости, без возврата старых байтов), `/happ-history` chart, XLS/XML, полный сброс с подтверждением, движущийся график скоростей |
+| M17. Подписки HAPP | Done server-side | Секретный токен аккаунта, трафик / безлимит, настраиваемое время обновления (10–600 мин, клиенту — целые часы), название с emoji и короткое announce |
 | M18. Сетевой доступ | Done, explicit opt-in | `FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0` поддерживается конфигурацией; auth/token checks и защита 51821 сохранены |
 | M19. Версия и публикация | v2.1.9 published | VERSION и документация обновлены; тег `v2.1.9`, GitHub Release и `master` опубликованы |
 | M20. Default gateway mode | Done, opt-in | Прямой egress через основной gateway для WG-клиентов; route/FORWARD/NAT preflight, LAN deny сохранён |
@@ -34,6 +34,8 @@
 | M26. Panel favicon | Done | Зелёная Canvas-анимация; сохраняется PNG fallback |
 | M27. Gateway failover | Done, opt-in | Проверка шлюза по умолчанию любого типа; 3 неудачные проверки подряд (повтор 60 с), только свежие результаты, переход на самый быстрый сервер, общая gateway/HAPP-транзакция с откатом |
 | M28. Mattermost template | Done | Редактируемый шаблон `{date} {time} {old} {new} {source} {latency}`, смещение от UTC, безопасная подстановка по белому списку; доставка подтверждена тестовой кнопкой на тестовом сервере |
+| M29. Протоколы HAPP | Done, opt-in | Trojan и Hysteria2 (inbound-ы в HAPP sing-box, ссылки в подписке HAPP) и TrustTunnel v1.1.0 (отдельный unit, loopback SOCKS-мост, ссылка `tt://` и QR; HAPP его не поддерживает); пароли на пользователя, самоподписанный ECDSA-сертификат с закреплением или собственный, транзакция с откатом; Hysteria2 проверен официальным клиентом, в клиенте HAPP — проверяется вручную |
+| M30. Версия 2.2.0 | Deployed, pushed, not tagged | `VERSION`, cache-bust CSS/JS и документация — `2.2.0`; развёрнута на `.39` и отправлена в `master`; тег `v2.2.0` и GitHub Release не создавались |
 
 ## Проверенные runtime-факты
 
@@ -59,6 +61,8 @@
 ## Ограничения
 
 - XHTTP не конвертируется в TCP/gRPC: пакетный импорт выводит явный пропуск.
+- TrustTunnel: HAPP протокол не поддерживает (ссылка `tt://` открывается в приложении TrustTunnel); его трафик идёт через анонимный loopback SOCKS-мост и не попадает в статистику пользователей.
+- TrustTunnel-серверы в списке VPN-серверов требуют клиента `/opt/trusttunnel/trusttunnel_client` (установщик ставит v1.1.11) и локальных портов `19500-19599`; нельзя импортировать профиль, который указывает на собственный HAPP TrustTunnel endpoint (петля маршрута). Самоподписанный сертификат Trojan может не приниматься клиентами, игнорирующими закрепление отпечатка.
 - WireGuard outbound из Xray не поддерживается; отдельный внешний WG-client раздел удалён.
 - Метрика ping - время до первого HTTPS-байта через туннель, а не ICMP. Внешний endpoint, TLS, auth и upstream connectivity могут быть причиной провала.
 - Автовыбор действует только для VLESS и только в режиме VLESS. Перезапуск, ручная смена, ошибка цикла или изменение профилей/настроек сбрасывают серию побед.

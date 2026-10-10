@@ -95,7 +95,7 @@ Server JSON import queues `focusvpn-outbound-test@<tag>.service` checks after sa
 5. `systemctl restart sing-box-admin`.
 6. Check panel HTTP status and service status.
 
-Runtime version is `2.2.0` (not tagged yet; the last published tag is `v2.1.9`); published tags are not moved. `scripts/install.sh` validates the required panel modules, static assets and `VERSION` before package/service changes, copies the complete runtime, and compiles its Python files before starting the panel. HAPP routing is bundled in `happ_server.py`, not installed by overwriting live user/configuration files. Run the updated installer only in a maintenance window: its apt/Docker/Nginx workflow is broader than a focused panel-file deployment. Test full privileged installation separately in a disposable VM.
+Runtime version `2.2.0` is published as tag `v2.2.0` and a GitHub Release; older published tags are immutable. `scripts/install.sh` validates the required panel modules, static assets and `VERSION` before package/service changes, copies the complete runtime, and compiles its Python files before starting the panel. HAPP routing is bundled in `happ_server.py`, not installed by overwriting live user/configuration files. Run the updated installer only in a maintenance window: its apt/Docker/Nginx workflow is broader than a focused panel-file deployment. Test full privileged installation separately in a disposable VM.
 
 ## Server JSON Import And TrustTunnel Upstreams
 

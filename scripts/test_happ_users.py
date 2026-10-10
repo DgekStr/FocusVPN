@@ -464,7 +464,8 @@ class HappUserTests(unittest.TestCase):
         self.assertIn('href="/happ-history">История HAPP', live_panel)
         self.assertLess(live_panel.index('data-happ-chart-legend'), live_panel.index('href="/happ-history"'))
         self.assertIn('data-happ-activity-users', live_panel)
-        self.assertIn('data-happ-chart-direction', live_panel)
+        self.assertIn('Download + Upload', live_panel)
+        self.assertNotIn('data-happ-chart-direction', live_panel)
         self.assertIn('data-happ-peak-seconds type="number" min="1" max="60"', live_panel)
         self.assertIn('data-happ-lifetime-download', live_panel)
         self.assertIn('data-happ-lifetime-upload', live_panel)
@@ -489,7 +490,7 @@ class HappUserTests(unittest.TestCase):
         self.assertIn('type="button" data-happ-user-create-cancel>Отмена', modal)
         self.assertIn('type="submit">Создать пользователя', modal)
         self.assertEqual(page.count('action="/happ-users/create"'), 1)
-        self.assertIn('/panel.css?v=2.2.0-happ-settings', page)
+        self.assertIn('/panel.css?v=2.2.0-happ-dual-ul-dl', page)
         self.assertIn('/panel.js?v=2.2.0', page)
         self.assertIn('/happ-actions.js?v=10', page)
 

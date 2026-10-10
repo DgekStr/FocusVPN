@@ -1,15 +1,15 @@
 # FocusVPN v2.2.0
 
-Единый VPN-шлюз и административная панель для WireGuard-сервера, sing-box и HAPP: управление клиентами WireGuard, серверами VLESS/Hysteria2/Trojan/Shadowsocks, HAPP-аккаунтами и подписками, статистикой, проверками доступности и уведомлениями Mattermost. Текущая версия — `2.2.0`; сервер `wg-easy` и его пользователи сохраняются. Предыдущие опубликованные теги и релизы не изменяются. Базовый релиз `v1.0` закреплён коммитом `3f48b16`, история Git не переписывается.
+Единый VPN-шлюз и административная панель для WireGuard-сервера, sing-box и HAPP: управление клиентами WireGuard, серверами VLESS/Hysteria2/Trojan/Shadowsocks, HAPP-аккаунтами и подписками, статистикой, проверками доступности и уведомлениями Mattermost. Текущий релиз — `2.2.0`; сервер `wg-easy` и его пользователи сохраняются. Предыдущие опубликованные теги и релизы не изменяются. Базовый релиз `v1.0` закреплён коммитом `3f48b16`, история Git не переписывается.
 
-**Изменения v2.2.0:** [полный список в CHANGELOG](docs/CHANGELOG.md#v220---2026-10-10). Исходники версии `v2.2.0` отправлены в `master`; тег и GitHub Release пока не опубликованы. Последний опубликованный релиз — [v2.1.9](https://github.com/DgekStr/FocusVPN/releases/tag/v2.1.9) ([изменения](docs/CHANGELOG.md#v219---2026-10-10), [сравнение v2.1.8…v2.1.9](https://github.com/DgekStr/FocusVPN/compare/v2.1.8...v2.1.9)).
+**Изменения v2.2.0:** [полный список в CHANGELOG](docs/CHANGELOG.md#v220---2026-10-10). Релиз опубликован: [v2.2.0](https://github.com/DgekStr/FocusVPN/releases/tag/v2.2.0) ([сравнение с v2.1.9](https://github.com/DgekStr/FocusVPN/compare/v2.1.9...v2.2.0)).
 
 ## v2.2.0 - 2026-10-10
 
 - **HAPP: Hysteria2.** В Настройках → «Протоколы HAPP» включается Hysteria2 (QUIC, UDP, по умолчанию `9448`): отдельный inbound `happ-hysteria2-in`, свой пароль у каждого пользователя, ссылка `hysteria2://` входит в подписку HAPP (после VLESS и Trojan) и доступна кнопками «Hysteria2» и «Hysteria2 QR». Для самоподписанного сертификата ссылка содержит `insecure=1` и `pinSHA256`; формат проверен официальным клиентом Hysteria2. UDP-порт нужно пробросить на роутере.
 - **TrustTunnel в списке HAPP невозможен:** HAPP поддерживает только VLESS, VMess, Socks5, Trojan, Shadowsocks и Hysteria2, поэтому ссылка `tt://` остаётся только в панели (копирование и QR) для приложения TrustTunnel.
 - **Время обновления подписки** (Настройки → «Заголовок и объявление HAPP»): 10–600 минут, по умолчанию 60. HAPP принимает `profile-update-interval` только целыми часами, поэтому клиентам передаётся ближайшее целое число часов (минимум 1 ч); фактическое значение показано под полем.
-- **Версия 2.2.0** (`VERSION`, cache-bust CSS/JS) развёрнута на `.39` и отправлена в `master`; тег и GitHub Release не создавались. В версию входят также Trojan и TrustTunnel для HAPP, импорт JSON всех серверов (VLESS, Hysteria2, Trojan, Shadowsocks, TrustTunnel), меню «О программе», полный сброс и экспорт XML в «Истории HAPP» и движущийся график скоростей (подробности — в CHANGELOG).
+- **Версия 2.2.0** опубликована тегом и GitHub Release. В выпуск входят SPKI SHA-256 pin при импорте TLS-серверов, одновременные Download/Upload линии графика HAPP и название «HAPP история», а также Trojan и TrustTunnel для HAPP, импорт JSON всех серверов, меню «О программе», экспорт XML и другие изменения из CHANGELOG.
 
 ## v2.1.9 - 2026-10-10
 
@@ -24,7 +24,7 @@
 
 Подробные описания изменений и инструкции конкретных версий — в GitHub Releases и в [`docs/CHANGELOG.md`](docs/CHANGELOG.md):
 
-- [v2.2.0 — текущая версия в master, тег не опубликован](docs/CHANGELOG.md#v220---2026-10-10)
+- [v2.2.0 — текущий релиз](https://github.com/DgekStr/FocusVPN/releases/tag/v2.2.0) · [изменения](docs/CHANGELOG.md#v220---2026-10-10) · [сравнение с v2.1.9](https://github.com/DgekStr/FocusVPN/compare/v2.1.9...v2.2.0)
 - [v2.1.9 — последний опубликованный релиз](https://github.com/DgekStr/FocusVPN/releases/tag/v2.1.9) · [изменения](docs/CHANGELOG.md#v219---2026-10-10) · [сравнение с v2.1.8](https://github.com/DgekStr/FocusVPN/compare/v2.1.8...v2.1.9)
 - [v2.1.8](https://github.com/DgekStr/FocusVPN/releases/tag/v2.1.8)
 - [v2.1.7](https://github.com/DgekStr/FocusVPN/releases/tag/v2.1.7)

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FocusVPN v2.1.7 | Статус проекта</title>
+  <title>FocusVPN v2.2.0 | Статус проекта</title>
   <style>
     :root { --bg:#050816; --surface:#111b34e8; --text:#f5f7ff; --muted:#8ea0be; --line:#ffffff1f; --cyan:#22d3ee; --violet:#7c3aed; --ok:#5eead4; }
     * { box-sizing:border-box; }
@@ -33,20 +33,20 @@
 <body>
   <main class="shell">
     <section class="hero">
-      <div class="eyebrow">FocusVPN / 2026-10-06</div>
-      <h1>FocusVPN v2.1.7</h1>
-      <p class="lead">Единый VPN-шлюз: управление серверами, внешним WireGuard, персональными HAPP аккаунтами, подписками и сохранённой историей трафика.</p>
+      <div class="eyebrow">FocusVPN / 2026-10-10</div>
+      <h1>FocusVPN v2.2.0</h1>
+      <p class="lead">Единый VPN-шлюз: управление WireGuard, VLESS и HAPP с персональными подписками, учётом трафика и историей скорости Download/Upload.</p>
       <div class="links"><a href="README.md">README</a><a href="docs/PROJECT_STATUS.md">Статус проекта</a><a href="docs/ROADMAP.md">Roadmap</a><a href="docs/OPERATIONS.md">Operations</a><a href="docs/CHANGELOG.md">Изменения</a></div>
     </section>
     <section class="grid">
-      <article class="card"><small>Версия</small><strong>v2.1.7</strong><span class="muted">база v1.0: 3f48b16</span></article>
+      <article class="card"><small>Версия</small><strong>v2.2.0</strong><span class="muted">база v1.0: 3f48b16</span></article>
           <article class="card"><small>Административная панель</small><strong>HTTPS :7445</strong><span class="muted">IP-адрес сервера после установки; сертификат самоподписанный</span></article>
       <article class="card"><small>HAPP inbound</small><strong>9445</strong><span class="muted">VLESS Reality</span></article>
-      <article class="card"><small>Python-тесты</small><strong class="status">130</strong><span class="muted">и 2 Node.js UI-проверки</span></article>
-      <article class="card wide"><small>Новое в v2.1.7</small><ul><li>Действия VPN-сервера собраны в одну строку на desktop/mobile.</li><li>Мастер HAPP генерирует ключи и запускает сервер после подтверждения.</li><li>UUID VIP уникален; персональные пользователи сохраняются при обновлении.</li><li>Git-обновление тестового сервера проверено без изменения рабочих ключей.</li></ul></article>
+      <article class="card"><small>Python-тесты</small><strong class="status">295</strong><span class="muted">и 2 Node.js UI-набора</span></article>
+      <article class="card wide"><small>Новое в v2.2.0</small><ul><li>HAPP показывает Download и Upload одновременно: отдельные цветные линии по клиентам.</li><li>Импорт TLS-профилей поддерживает SPKI SHA-256 pin без отключения проверки сертификата.</li><li>История HAPP получила экспорт XML, полный сброс и обновлённую страницу.</li><li>HAPP Server: Trojan, Hysteria2 и TrustTunnel для персональных пользователей.</li></ul></article>
       <article class="card wide"><small>Publication boundary</small><p class="muted">Секреты, runtime базы, UUID и Reality keys не включены. В репозитории находятся рабочие скрипты и placeholders для controlled deployment.</p></article>
     </section>
-    <section class="section"><h2>Интерфейс</h2><p class="muted">Скриншоты v2.0 собраны с renderer и синтетических данных. Production credentials и пользовательская история не публикуются.</p><img class="screenshot" src="docs/screenshots/wireguard-and-happ-preview.png" alt="Персональные пользователи HAPP и статистика"><img class="screenshot" src="docs/screenshots/happ-history.png" alt="История HAPP с фильтрами и экспортом XLS"></section>
+    <section class="section"><h2>Интерфейс</h2><p class="muted">Скриншоты v2.2.0 собраны с renderer и обезличенными fixtures. Production credentials и пользовательская история не публикуются.</p><img class="screenshot" src="docs/screenshots/wireguard-and-happ-preview.png" alt="Персональные пользователи HAPP и график Download/Upload"><img class="screenshot" src="docs/screenshots/happ-history.png" alt="HAPP история с фильтрами, графиком и экспортом"></section>
     <section class="section"><h2>Границы проверки</h2><p class="muted">Наблюдаемые счётчики не являются точным биллингом. Импорт внутри Windows HAPP, доставка Mattermost и внешний WireGuard egress требуют отдельной клиентской или сетевой проверки. Панель доступна по HTTPS на адресе IP установленного сервера и порту 7445; для IP используется самоподписанный сертификат. Backend HTTP 9443 слушает только loopback за Nginx; setup API wg-easy 51821 извне закрыт.</p></section>
   </main>
 </body>

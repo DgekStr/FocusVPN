@@ -11,6 +11,26 @@ from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'server' / 'panel'))
+CHART_AT = int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
+MB = 1024 * 1024
+
+
+def chart_points(values):
+    offsets = (570000, 510000, 420000, 330000, 240000, 150000, 60000, 0)
+    return [{'x': CHART_AT - offset, 'y': value} for offset, value in zip(offsets, values)]
+
+
+TRAFFIC_HISTORY = {
+    'download': [
+        {'user_key': 'personal-demo-a', 'user_name': 'demo-dev-01', 'peak_bytes_per_second': 7.4 * MB, 'points': chart_points((2.8, 3.6, 3.1, 5.2, 7.4, 4.1, 5.6, 3.2))},
+        {'user_key': 'personal-demo-b', 'user_name': 'demo-dev-02', 'peak_bytes_per_second': 4.5 * MB, 'points': chart_points((1.1, 1.4, 2.5, 1.8, 4.5, 2.1, 3.2, 1.4))},
+    ],
+    'upload': [
+        {'user_key': 'personal-demo-a', 'user_name': 'demo-dev-01', 'peak_bytes_per_second': 2.8 * MB, 'points': chart_points((0.7, 1.1, 0.9, 2.1, 1.4, 2.8, 1.7, 0.9))},
+        {'user_key': 'personal-demo-b', 'user_name': 'demo-dev-02', 'peak_bytes_per_second': 1.7 * MB, 'points': chart_points((0.3, 0.6, 0.5, 1.2, 0.8, 1.7, 1.0, 0.5))},
+    ],
+}
+
 if sys.platform == 'win32':
     import types
     sys.modules.setdefault('grp', types.ModuleType('grp'))
@@ -21,10 +41,16 @@ from happ_history import HappHistory
 from happ_history_ui import render_history
 
 LIVE = {
+    'sampled_at': dt.datetime.fromtimestamp(CHART_AT / 1000, tz=dt.timezone.utc).isoformat(),
     'online_count': 1, 'download': '3.0 MB', 'upload': '192.0 KB',
     'connections': [{'user_name': 'demo-dev-01', 'ip': '203.0.113.24', 'duration': '18 мин.', 'download': '3.0 MB', 'upload': '192.0 KB', 'network': 'TCP', 'destination': 'example.com:443'}],
-    'users': [{'user_name': 'demo-dev-01', 'connections': 1, 'download': '3.0 MB', 'upload': '192.0 KB'}],
+    'traffic_samples': [{'id': 'demo-live-a', 'user_key': 'personal-demo-a', 'download_bytes': 67108864, 'upload_bytes': 8388608}],
+    'users': [{'user_key': 'personal-demo-a', 'user_name': 'demo-dev-01', 'connections': 1, 'download': '3.0 MB', 'upload': '192.0 KB'}],
     'account_traffic': {'personal-demo-a': {'download': '64.0 MB', 'upload': '8.0 MB'}, 'personal-demo-b': {'download': '12.0 MB', 'upload': '1.0 MB'}},
+    'activity': {'fresh': True, 'seconds': 5, 'sampled_at': CHART_AT, 'users': [
+        {'user_key': 'personal-demo-a', 'user_name': 'demo-dev-01', 'status': 'active', 'connections': 1, 'ips': ['203.0.113.24'], 'download_bytes': 67108864, 'upload_bytes': 8388608, 'download_rate': 3.2 * MB, 'upload_rate': 0.9 * MB, 'download_peak': 7.4 * MB, 'upload_peak': 2.8 * MB},
+        {'user_key': 'personal-demo-b', 'user_name': 'demo-dev-02', 'status': 'active', 'connections': 1, 'ips': ['203.0.113.25'], 'download_bytes': 12582912, 'upload_bytes': 1048576, 'download_rate': 1.4 * MB, 'upload_rate': 0.5 * MB, 'download_peak': 4.5 * MB, 'upload_peak': 1.7 * MB},
+    ]},
 }
 CHECKS = {'checks': [
     {'tag': 'demo-vless', 'state': 'success', 'message': 'Внешний IP: 203.0.113.10', 'latency_ms': 83.4, 'checked_at': '2026-10-03T09:15:23+00:00'},
@@ -65,14 +91,15 @@ def main():
     pages = render_pages()
     if arguments.crm_embed:
         pages = {route: app.crm_embed(content) for route, content in pages.items()}
-    preview = pages['/happ-server'].replace('/panel.css?v=26', '../server/panel/static/panel.css').replace('/favicon.svg?v=1', '../server/panel/static/favicon.svg').replace('/favicon.png', '../server/panel/static/favicon.png').replace('/panel.js?v=20', '../server/panel/static/panel.js').replace('/happ-actions.js?v=9', '../server/panel/static/happ-actions.js')
+    preview = pages['/happ-server'].replace('/panel.css?v=2.2.0-happ-dual-ul-dl', '../server/panel/static/panel.css').replace('/favicon.svg?v=1', '../server/panel/static/favicon.svg').replace('/favicon.png', '../server/panel/static/favicon.png').replace('/panel.js?v=2.2.0-happ-dual-ul-dl', '../server/panel/static/panel.js').replace('/happ-actions.js?v=10', '../server/panel/static/happ-actions.js')
     if arguments.output_dir:
         arguments.output_dir.mkdir(parents=True, exist_ok=True)
         for route, content in pages.items():
             (arguments.output_dir / (route.strip('/') + '.html')).write_text(content, encoding='utf-8')
     else:
         (ROOT / 'docs' / 'ui-preview.html').write_text(preview, encoding='utf-8')
-    assert 'v2.1' in preview and 'data-happ-account="personal-demo-a"' in preview
+    assert 'v2.2.0' in preview and 'data-happ-account="personal-demo-a"' in preview
+    assert 'HAPP история' in pages['/happ-history']
     assert '03.10.2026 09:15:23' in pages['/happ-history']
     print('safe renderer previews generated', flush=True)
     if not arguments.serve:
@@ -156,8 +183,17 @@ def main():
                     content, kind = pages[path].encode('utf-8'), 'text/html; charset=utf-8'
                 elif path in ('/happ-server/live', '/outbounds/checks'):
                     content, kind = json.dumps(LIVE if path == '/happ-server/live' else CHECKS, ensure_ascii=False).encode('utf-8'), 'application/json; charset=utf-8'
+                elif path == '/happ-server/traffic':
+                    query = parse_qs(parsed.query)
+                    direction = query.get('direction', ['download'])[0]
+                    minutes = int(query.get('minutes', ['10'])[0])
+                    if direction not in TRAFFIC_HISTORY or minutes not in (10, 30, 60, 90):
+                        self.send_error(400)
+                        return
+                    payload = {'minutes': minutes, 'direction': direction, 'since': CHART_AT - minutes * 60000, 'until': CHART_AT, 'sampled_at': CHART_AT, 'user_count': 2, 'users': TRAFFIC_HISTORY[direction]}
+                    content, kind = json.dumps(payload, ensure_ascii=False).encode('utf-8'), 'application/json; charset=utf-8'
                 else:
-                    assets = {'/panel.css': ('server/panel/static/panel.css', 'text/css'), '/panel.js': ('server/panel/static/panel.js', 'text/javascript'), '/happ-actions.js': ('server/panel/static/happ-actions.js', 'text/javascript'), '/favicon.png': ('server/panel/static/favicon.png', 'image/png'), '/': ('index.html', 'text/html; charset=utf-8')}
+                    assets = {'/panel.css': ('server/panel/static/panel.css', 'text/css'), '/panel.js': ('server/panel/static/panel.js', 'text/javascript'), '/chart.js': ('server/panel/static/chart.js', 'text/javascript'), '/happ-actions.js': ('server/panel/static/happ-actions.js', 'text/javascript'), '/favicon.svg': ('server/panel/static/favicon.svg', 'image/svg+xml'), '/favicon.png': ('server/panel/static/favicon.png', 'image/png'), '/': ('index.html', 'text/html; charset=utf-8')}
                     if arguments.crm_embed:
                         assets['/happ-qr'] = ('server/panel/static/favicon.png', 'image/png')
                     if path in assets:

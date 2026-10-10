@@ -89,7 +89,7 @@ def main():
             return value.value if value else 'architect'
 
         def do_POST(self):
-            allowed = {'project-overview.png', 'wireguard-and-happ-preview.png', 'vpn-servers.png', 'happ-history.png', 'happ-mobile.png'}
+            allowed = {'project-overview.png', 'wireguard-and-happ-preview.png', 'vpn-servers.png', 'happ-history.png'}
             filename = self.path.removeprefix('/capture/')
             if not arguments.capture or not self.path.startswith('/capture/') or filename not in allowed or self.headers.get('X-Preview-Capture') != 'renderer-fixture-only':
                 self.send_error(403)

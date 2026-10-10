@@ -24,7 +24,7 @@
 | M16. Статистика и история | Done | Lifetime totals отдельно от 60-дневной SQLite history, TOP-5, per-user reset (итог, история и скорости, без возврата старых байтов), `/happ-history` chart, XLS |
 | M17. Подписки HAPP | Done server-side | Секретный токен аккаунта, трафик / безлимит, часовое обновление, название с emoji и короткое announce |
 | M18. Сетевой доступ | Done, explicit opt-in | `FOCUSVPN_ADMIN_NETWORK=0.0.0.0/0` поддерживается конфигурацией; auth/token checks и защита 51821 сохранены |
-| M19. Версия и публикация | v2.1.9 published | VERSION и документация обновлены; тег `v2.1.9` и `master` опубликованы; страница GitHub Release не создавалась |
+| M19. Версия и публикация | v2.1.9 published | VERSION и документация обновлены; тег `v2.1.9`, GitHub Release и `master` опубликованы |
 | M20. Default gateway mode | Done, opt-in | Прямой egress через основной gateway для WG-клиентов; route/FORWARD/NAT preflight, LAN deny сохранён |
 | M21. Standalone bootstrap | Done | Git-clone bootstrap, checksum-verified sing-box, интерактивный scrypt auth, все systemd units |
 | M22. HTTPS panel entry | Done | `vpn.focuslens.dev` Nginx proxy, trusted-proxy IP/session binding, Secure cookie, subscription origin |
